@@ -1,12 +1,8 @@
 # Templates
 
-Runtime template PNGs are generated from local training captures and are not
-committed to the public source repo.
+Runtime template PNGs used by the detector are committed here so live detection
+works from a fresh checkout.
 
-To populate this folder in a private working copy, add captures under
+To refresh them in a private working copy, add captures under
 `training_data/current_ui/`, update `tools/build_templates.py` if needed, then
-run:
-
-```powershell
-python main.py build-templates
-```
+run `python main.py build-templates`.

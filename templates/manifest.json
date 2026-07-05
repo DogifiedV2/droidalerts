@@ -1,0 +1,508 @@
+{
+  "built_at": "2026-07-05 21:36:16",
+  "reference_row_height_px": 44,
+  "reference_screen_height": 1440,
+  "rarity_roi_x": [
+    180,
+    410
+  ],
+  "note": "All templates are at reference scale; normalize inputs before matching.",
+  "known_gaps": [
+    "Beskar Mythic has no real full-row capture yet (template from synthetic stack only)."
+  ],
+  "templates": [
+    {
+      "kind": "rarity_word",
+      "file": "Common__01.png",
+      "source": "beskarcommon.png",
+      "box": [
+        180,
+        20,
+        410,
+        64
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Common__02.png",
+      "source": "beskarcommonepicmythic.png",
+      "box": [
+        180,
+        40,
+        410,
+        84
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Common__03.png",
+      "source": "diamondcommon.png",
+      "box": [
+        180,
+        18,
+        410,
+        62
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Common__04.png",
+      "source": "diamondcommon2.png",
+      "box": [
+        180,
+        38,
+        410,
+        82
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Common__05.png",
+      "source": "rainbowcommon.png",
+      "box": [
+        180,
+        13,
+        410,
+        57
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Common__06.png",
+      "source": "rainbowepic1.png",
+      "box": [
+        180,
+        55,
+        410,
+        99
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Common__07.png",
+      "source": "IMG_6605.png",
+      "box": [
+        180,
+        93,
+        410,
+        137
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Common__08.png",
+      "source": "IMG_6605.png",
+      "box": [
+        180,
+        127,
+        410,
+        171
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Common__09.png",
+      "source": "IMG_6608.png",
+      "box": [
+        180,
+        189,
+        410,
+        233
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Rare__10.png",
+      "source": "beskarrare1.png",
+      "box": [
+        180,
+        23,
+        410,
+        67
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Rare__11.png",
+      "source": "beskarrare2.png",
+      "box": [
+        180,
+        43,
+        410,
+        87
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Rare__12.png",
+      "source": "beskarrare3.png",
+      "box": [
+        180,
+        22,
+        410,
+        66
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Rare__13.png",
+      "source": "beskarrare_live_222501.png",
+      "box": [
+        180,
+        98,
+        410,
+        142
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Rare__14.png",
+      "source": "diamond_rare_20260702.png",
+      "box": [
+        180,
+        65,
+        410,
+        109
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Rare__15.png",
+      "source": "IMG_6607.png",
+      "box": [
+        180,
+        156,
+        410,
+        200
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Epic__16.png",
+      "source": "beskarcommonepicmythic.png",
+      "box": [
+        180,
+        72,
+        410,
+        116
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Epic__17.png",
+      "source": "diamondepic.png",
+      "box": [
+        180,
+        48,
+        410,
+        92
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Epic__18.png",
+      "source": "rainbowepic.png",
+      "box": [
+        180,
+        43,
+        410,
+        87
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Epic__19.png",
+      "source": "rainbowepic1.png",
+      "box": [
+        180,
+        24,
+        410,
+        68
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Epic__20.png",
+      "source": "rainbowlegendaries.png",
+      "box": [
+        180,
+        107,
+        410,
+        151
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Legendary__21.png",
+      "source": "rainbowlegendary.png",
+      "box": [
+        180,
+        7,
+        430,
+        51
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Legendary__22.png",
+      "source": "rainbowlegendaries.png",
+      "box": [
+        180,
+        43,
+        430,
+        87
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Legendary__23.png",
+      "source": "rainbowlegendaries.png",
+      "box": [
+        180,
+        75,
+        430,
+        119
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Legendary__24.png",
+      "source": "IMG_6605.png",
+      "box": [
+        180,
+        156,
+        430,
+        200
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Legendary__25.png",
+      "source": "IMG_6606.png",
+      "box": [
+        180,
+        156,
+        430,
+        200
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Mythic__26.png",
+      "source": "beskarcommonepicmythic.png",
+      "box": [
+        180,
+        104,
+        410,
+        148
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Mythic__27.png",
+      "source": "IMG_6604.png",
+      "box": [
+        180,
+        93,
+        410,
+        137
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Mythic__28.png",
+      "source": "IMG_6607.png",
+      "box": [
+        180,
+        189,
+        410,
+        233
+      ]
+    },
+    {
+      "kind": "rarity_word",
+      "file": "Mythic__29.png",
+      "source": "IMG_6608.png",
+      "box": [
+        180,
+        157,
+        410,
+        201
+      ]
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Beskar__Common__BC_beskarcommon.png",
+      "source": "beskarcommon.png",
+      "row_y": 20
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Beskar__Common__BC_stack.png",
+      "source": "beskarcommonepicmythic.png",
+      "row_y": 40
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Beskar__Common__BC_img6605.png",
+      "source": "IMG_6605.png",
+      "row_y": 127
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Beskar__Rare__BR_1.png",
+      "source": "beskarrare1.png",
+      "row_y": 23
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Beskar__Rare__BR_2.png",
+      "source": "beskarrare2.png",
+      "row_y": 43
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Beskar__Rare__BR_3.png",
+      "source": "beskarrare3.png",
+      "row_y": 22
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Beskar__Rare__BR_live_222501.png",
+      "source": "beskarrare_live_222501.png",
+      "row_y": 98
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Beskar__Epic__BE_stack.png",
+      "source": "beskarcommonepicmythic.png",
+      "row_y": 72
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Beskar__Legendary__BL_img6605.png",
+      "source": "IMG_6605.png",
+      "row_y": 156
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Beskar__Legendary__BL_img6606.png",
+      "source": "IMG_6606.png",
+      "row_y": 156
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Beskar__Mythic__BM_stack.png",
+      "source": "beskarcommonepicmythic.png",
+      "row_y": 104
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Diamond__Common__DC_1.png",
+      "source": "diamondcommon.png",
+      "row_y": 18
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Diamond__Common__DC_2.png",
+      "source": "diamondcommon2.png",
+      "row_y": 38
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Diamond__Common__DC_rainbowepic1.png",
+      "source": "rainbowepic1.png",
+      "row_y": 55
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Diamond__Rare__DR_1.png",
+      "source": "diamond_rare_20260702.png",
+      "row_y": 65
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Diamond__Rare__DR_img6607.png",
+      "source": "IMG_6607.png",
+      "row_y": 156
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Diamond__Epic__DE_1.png",
+      "source": "diamondepic.png",
+      "row_y": 48
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Diamond__Mythic__DM_img6607.png",
+      "source": "IMG_6607.png",
+      "row_y": 189
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Rainbow__Common__RC_1.png",
+      "source": "rainbowcommon.png",
+      "row_y": 13
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Rainbow__Common__RC_img6605.png",
+      "source": "IMG_6605.png",
+      "row_y": 93
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Rainbow__Common__RC_img6608.png",
+      "source": "IMG_6608.png",
+      "row_y": 189
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Rainbow__Epic__RE_1.png",
+      "source": "rainbowepic.png",
+      "row_y": 43
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Rainbow__Epic__RE_2.png",
+      "source": "rainbowepic1.png",
+      "row_y": 24
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Rainbow__Epic__RE_legendaries.png",
+      "source": "rainbowlegendaries.png",
+      "row_y": 107
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Rainbow__Legendary__RL_standalone.png",
+      "source": "rainbowlegendary.png",
+      "row_y": 7
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Rainbow__Legendary__RL_1.png",
+      "source": "rainbowlegendaries.png",
+      "row_y": 43
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Rainbow__Legendary__RL_2.png",
+      "source": "rainbowlegendaries.png",
+      "row_y": 75
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Rainbow__Mythic__RM_img6604.png",
+      "source": "IMG_6604.png",
+      "row_y": 93
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Rainbow__Mythic__RM_img6608.png",
+      "source": "IMG_6608.png",
+      "row_y": 157
+    }
+  ]
+}
