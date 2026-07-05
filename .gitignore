@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+.env
+.venv/
+venv/
+
+data/
+training_data/
+tests/fixtures/
+tests/results/
+assets/sounds/
+config/calibration.json
+
+templates/*
+!templates/README.md

@@ -1,0 +1,38 @@
+{
+  "monitor_index": 1,
+  "capture_interval_seconds": 1.0,
+  "dedupe_seconds": 12.0,
+  "alert_cooldown_seconds": 10.0,
+  "sound_enabled": true,
+  "save_alert_samples": true,
+  "save_debug_screenshots": false,
+  "validation_failures_before_calibration_prompt": 30,
+  "thresholds": {
+    "rarity_threshold": 0.35,
+    "droid_threshold": 0.15,
+    "scale_min": 0.4,
+    "scale_max": 2.5
+  },
+  "alert_targets": [
+    [
+      "Diamond",
+      "Mythic"
+    ],
+    [
+      "Rainbow",
+      "Mythic"
+    ],
+    [
+      "Beskar",
+      "Mythic"
+    ],
+    [
+      "Beskar",
+      "Legendary"
+    ],
+    [
+      "Beskar",
+      "Epic"
+    ]
+  ]
+}

@@ -1,0 +1,5 @@
+opencv-python>=4.8
+numpy>=1.26
+mss>=9.0
+# optional, faster capture backend; falls back to mss automatically
+# dxcam
