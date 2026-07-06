@@ -1,8 +1,8 @@
 # ToolV2 — Cross-PC Droid Tycoon Alert Detector
 
 Watches the game's droid-spawn chat alerts and plays a sound on the five
-priority combos: **Diamond Mythic, Rainbow Mythic, Beskar Mythic,
-Beskar Legendary, Beskar Epic**.
+priority combos: **Beskar Epic, Beskar Legendary, Diamond Mythic,
+Rainbow Mythic, Beskar Mythic**.
 
 Works on any PC/monitor/resolution: the capture region is found as a
 percent-of-screen band (no manual pixel dragging needed), and every frame is
@@ -16,6 +16,7 @@ captures, logs, generated screenshots, and training data.
 ## Usage
 
 ```
+python main.py gui              # open the interactive GUI
 python main.py watch            # run the live watcher
 python main.py watch --debug    # verbose + numpad + saves the current chat box/candidate check
 python main.py calibrate        # optional: drag the alert region manually
@@ -51,7 +52,12 @@ live detection after installing dependencies.
 
 Live watch prints each unique non-alert spawn once as `[DETECTED]`. Priority
 detections that pass the alert policy print as `[ALERT]` and play the alert
-sound. Debug mode additionally prints non-alert detections as `[SEEN]`.
+sound. When enabled in the GUI, priority alerts can also show the on-screen
+popup, send ntfy phone alerts, send Discord webhook messages, and send
+Pushover phone alerts. ntfy is the recommended phone option: install the ntfy
+app, subscribe to a private topic, then enter the server URL and topic in the
+GUI.
+Debug mode additionally prints non-alert detections as `[SEEN]`.
 
 Debug mode does not save automatic screenshots. Press numpad `+` while
 `watch --debug` is running to save the current chat-box region and a

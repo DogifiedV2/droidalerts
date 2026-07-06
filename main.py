@@ -15,6 +15,8 @@ def main() -> None:
     watch = sub.add_parser("watch", help="Run the live watcher.")
     watch.add_argument("--debug", action="store_true", help="Verbose output + ROI/overlay dumps.")
 
+    sub.add_parser("gui", help="Open the interactive GUI.")
+
     calibrate = sub.add_parser("calibrate", help="Drag-select the alert region (saved as percent ratios).")
     calibrate.add_argument("--capture-delay", type=float, default=0.0)
     calibrate.add_argument("--reset", action="store_true", help="Revert to automatic region detection.")
@@ -31,6 +33,10 @@ def main() -> None:
         from toolv2.watcher import run_watch
 
         run_watch(debug=args.debug)
+    elif args.command == "gui":
+        from toolv2.gui import run_gui
+
+        run_gui()
     elif args.command == "calibrate":
         from toolv2.calibrate_cli import run_calibrate
 

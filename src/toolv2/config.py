@@ -28,6 +28,10 @@ def sounds_dir() -> Path:
     return project_root() / "assets" / "sounds"
 
 
+def assets_dir() -> Path:
+    return project_root() / "assets"
+
+
 CONFIG_FILE = "config.json"
 CALIBRATION_FILE = "calibration.json"
 
@@ -53,17 +57,41 @@ class AppConfig:
     dedupe_seconds: float = 12.0
     alert_cooldown_seconds: float = 10.0
     sound_enabled: bool = True
+    popup_enabled: bool = True
+    popup_seconds: float = 8.0
+    popup_icon_file: str = "signals_icon.png"
     save_alert_samples: bool = True
     save_debug_screenshots: bool = False
+    discord_enabled: bool = False
+    discord_webhook_file: str = "discord_webhook.txt"
+    discord_env_var: str = "DROID_DISCORD_WEBHOOK_URL"
+    ntfy_enabled: bool = False
+    ntfy_server_url: str = "https://ntfy.sh"
+    ntfy_topic: str = ""
+    ntfy_token_file: str = "ntfy_token.txt"
+    ntfy_env_token: str = "DROIDALERTS_NTFY_TOKEN"
+    ntfy_priority: str = "5"
+    ntfy_tags: str = "rotating_light"
+    ntfy_cache: str = "no"
+    ntfy_include_attachment: bool = False
+    notification_setup_prompted: bool = False
+    phone_alerts_enabled: bool = False
+    phone_credentials_file: str = "phone_alerts.json"
+    phone_env_token: str = "DROIDWATCHER_PHONE_ALERTS_TOKEN"
+    phone_env_user: str = "DROIDWATCHER_PHONE_ALERTS_USER"
+    phone_sound: str = "siren"
+    phone_include_attachment: bool = True
+    update_check_enabled: bool = True
+    update_repo: str = "DogifiedV2/droidalerts"
     validation_failures_before_calibration_prompt: int = 30
     thresholds: Thresholds = field(default_factory=Thresholds)
     alert_targets: list[list[str]] = field(
         default_factory=lambda: [
+            ["Beskar", "Epic"],
+            ["Beskar", "Legendary"],
             ["Diamond", "Mythic"],
             ["Rainbow", "Mythic"],
             ["Beskar", "Mythic"],
-            ["Beskar", "Legendary"],
-            ["Beskar", "Epic"],
         ]
     )
 
@@ -76,8 +104,32 @@ class AppConfig:
             dedupe_seconds=float(data.get("dedupe_seconds", 12.0)),
             alert_cooldown_seconds=float(data.get("alert_cooldown_seconds", 10.0)),
             sound_enabled=bool(data.get("sound_enabled", True)),
+            popup_enabled=bool(data.get("popup_enabled", True)),
+            popup_seconds=float(data.get("popup_seconds", 8.0)),
+            popup_icon_file=str(data.get("popup_icon_file", "signals_icon.png")),
             save_alert_samples=bool(data.get("save_alert_samples", True)),
             save_debug_screenshots=bool(data.get("save_debug_screenshots", False)),
+            discord_enabled=bool(data.get("discord_enabled", False)),
+            discord_webhook_file=str(data.get("discord_webhook_file", "discord_webhook.txt")),
+            discord_env_var=str(data.get("discord_env_var", "DROID_DISCORD_WEBHOOK_URL")),
+            ntfy_enabled=bool(data.get("ntfy_enabled", False)),
+            ntfy_server_url=str(data.get("ntfy_server_url", "https://ntfy.sh")),
+            ntfy_topic=str(data.get("ntfy_topic", "")),
+            ntfy_token_file=str(data.get("ntfy_token_file", "ntfy_token.txt")),
+            ntfy_env_token=str(data.get("ntfy_env_token", "DROIDALERTS_NTFY_TOKEN")),
+            ntfy_priority=str(data.get("ntfy_priority", "5")),
+            ntfy_tags=str(data.get("ntfy_tags", "rotating_light")),
+            ntfy_cache=str(data.get("ntfy_cache", "no")),
+            ntfy_include_attachment=bool(data.get("ntfy_include_attachment", False)),
+            notification_setup_prompted=bool(data.get("notification_setup_prompted", False)),
+            phone_alerts_enabled=bool(data.get("phone_alerts_enabled", False)),
+            phone_credentials_file=str(data.get("phone_credentials_file", "phone_alerts.json")),
+            phone_env_token=str(data.get("phone_env_token", "DROIDWATCHER_PHONE_ALERTS_TOKEN")),
+            phone_env_user=str(data.get("phone_env_user", "DROIDWATCHER_PHONE_ALERTS_USER")),
+            phone_sound=str(data.get("phone_sound", "siren")),
+            phone_include_attachment=bool(data.get("phone_include_attachment", True)),
+            update_check_enabled=bool(data.get("update_check_enabled", True)),
+            update_repo=str(data.get("update_repo", "DogifiedV2/droidalerts")),
             validation_failures_before_calibration_prompt=int(
                 data.get("validation_failures_before_calibration_prompt", 30)
             ),
@@ -99,8 +151,32 @@ class AppConfig:
             "dedupe_seconds": self.dedupe_seconds,
             "alert_cooldown_seconds": self.alert_cooldown_seconds,
             "sound_enabled": self.sound_enabled,
+            "popup_enabled": self.popup_enabled,
+            "popup_seconds": self.popup_seconds,
+            "popup_icon_file": self.popup_icon_file,
             "save_alert_samples": self.save_alert_samples,
             "save_debug_screenshots": self.save_debug_screenshots,
+            "discord_enabled": self.discord_enabled,
+            "discord_webhook_file": self.discord_webhook_file,
+            "discord_env_var": self.discord_env_var,
+            "ntfy_enabled": self.ntfy_enabled,
+            "ntfy_server_url": self.ntfy_server_url,
+            "ntfy_topic": self.ntfy_topic,
+            "ntfy_token_file": self.ntfy_token_file,
+            "ntfy_env_token": self.ntfy_env_token,
+            "ntfy_priority": self.ntfy_priority,
+            "ntfy_tags": self.ntfy_tags,
+            "ntfy_cache": self.ntfy_cache,
+            "ntfy_include_attachment": self.ntfy_include_attachment,
+            "notification_setup_prompted": self.notification_setup_prompted,
+            "phone_alerts_enabled": self.phone_alerts_enabled,
+            "phone_credentials_file": self.phone_credentials_file,
+            "phone_env_token": self.phone_env_token,
+            "phone_env_user": self.phone_env_user,
+            "phone_sound": self.phone_sound,
+            "phone_include_attachment": self.phone_include_attachment,
+            "update_check_enabled": self.update_check_enabled,
+            "update_repo": self.update_repo,
             "validation_failures_before_calibration_prompt": self.validation_failures_before_calibration_prompt,
             "thresholds": {
                 "rarity_threshold": self.thresholds.rarity_threshold,
