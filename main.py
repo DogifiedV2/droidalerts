@@ -10,7 +10,7 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="droid-alerts", description="Cross-PC Droid Tycoon alert detector.")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
 
     watch = sub.add_parser("watch", help="Run the live watcher.")
     watch.add_argument("--debug", action="store_true", help="Verbose output + ROI/overlay dumps.")
@@ -33,8 +33,9 @@ def main() -> None:
     test.add_argument("--dump-unlabeled", action="store_true", help="Dump per-candidate crops for review.")
 
     args = parser.parse_args()
+    command = args.command or "gui"
 
-    if args.command == "watch":
+    if command == "watch":
         from droid_alerts.config import load_config
         from droid_alerts.watcher import run_watch
 
@@ -42,22 +43,22 @@ def main() -> None:
         if args.extra_checks:
             config.extra_checks = True
         run_watch(debug=args.debug, config=config)
-    elif args.command == "gui":
+    elif command == "gui":
         from droid_alerts.gui import run_gui
 
         run_gui()
-    elif args.command == "calibrate":
+    elif command == "calibrate":
         from droid_alerts.calibrate_cli import run_calibrate
 
         run_calibrate(capture_delay=max(0.0, args.capture_delay), reset=args.reset)
-    elif args.command == "build-templates":
+    elif command == "build-templates":
         sys.path.insert(0, str(BASE_DIR / "tools"))
         import build_templates
 
         build_templates.build_templates(
             BASE_DIR / "training_data" / "current_ui", BASE_DIR / "templates"
         )
-    elif args.command == "test":
+    elif command == "test":
         sys.path.insert(0, str(BASE_DIR / "tests"))
         import run_eval
 

@@ -19,20 +19,20 @@ of the chat corner never leave your PC.
 
 ## How to install (Windows)
 
-1. **Install Python** (a free program Droid Alerts runs on). Get it from
-   [python.org/downloads](https://www.python.org/downloads/) and click the big
-   yellow download button. When the installer opens, **tick the box that says
-   "Add python.exe to PATH"** at the bottom, then click Install.
-2. **Download Droid Alerts.** On this page, click the green **Code** button,
-   choose **Download ZIP**, then unzip it anywhere you like (your Desktop is
-   fine).
-3. **Double-click `Start Droid Alerts.bat`** inside the folder. The first
-   start takes a minute while it downloads what it needs. After that it opens
-   right away.
+1. Download the latest `DroidAlerts-Windows.zip` from the GitHub Releases page.
+2. Unzip it anywhere you like. Your Desktop is fine.
+3. Open the `Droid Alerts` folder and double-click `Droid Alerts.exe`.
 
 That's it. Click **Start** in the app, go play, and it will ping you when
 something good spawns. Use the **Test Alert** button any time to hear and see
 what an alert looks like.
+
+If there is no release zip yet, use the source version instead:
+
+1. Install Python from [python.org/downloads](https://www.python.org/downloads/).
+   Tick **Add python.exe to PATH** in the installer.
+2. Download this repository as a ZIP and unzip it.
+3. Double-click `Start Droid Alerts.bat`.
 
 ## Get alerts on your phone
 

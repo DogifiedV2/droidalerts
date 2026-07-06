@@ -53,13 +53,17 @@ def _apply_win32_color_key(window: "tk.Misc", color_hex: str) -> bool:
         hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
         gwl_exstyle = -20
         ws_ex_layered = 0x00080000
+        ws_ex_transparent = 0x00000020
+        ws_ex_noactivate = 0x08000000
         lwa_colorkey = 0x00000001
         r = int(color_hex[1:3], 16)
         g = int(color_hex[3:5], 16)
         b = int(color_hex[5:7], 16)
         colorref = r | (g << 8) | (b << 16)
         style = user32.GetWindowLongW(hwnd, gwl_exstyle)
-        user32.SetWindowLongW(hwnd, gwl_exstyle, style | ws_ex_layered)
+        user32.SetWindowLongW(
+            hwnd, gwl_exstyle, style | ws_ex_layered | ws_ex_transparent | ws_ex_noactivate
+        )
         return bool(user32.SetLayeredWindowAttributes(hwnd, colorref, 0, lwa_colorkey))
     except Exception:
         return False
@@ -111,17 +115,16 @@ def popup_icon_path(config: AppConfig) -> Path:
 def bring_popup_to_front(root: "tk.Tk", x: int, y: int, width: int, height: int) -> None:
     root.lift()
     root.attributes("-topmost", True)
-    try:
-        root.focus_force()
-    except Exception:
-        pass
     if sys.platform != "win32":
         return
     try:
         hwnd = root.winfo_id()
         hwnd_topmost = -1
         swp_showwindow = 0x0040
-        ctypes.windll.user32.SetWindowPos(hwnd, hwnd_topmost, x, y, width, height, swp_showwindow)
+        swp_noactivate = 0x0010
+        ctypes.windll.user32.SetWindowPos(
+            hwnd, hwnd_topmost, x, y, width, height, swp_showwindow | swp_noactivate
+        )
     except Exception:
         pass
 
@@ -164,7 +167,11 @@ def show_popup(
         has_icon = bool(icon_path and icon_path.exists())
         if has_icon:
             try:
-                icon = tk.PhotoImage(file=str(icon_path))
+                # master= binds the image to THIS window's interpreter; the
+                # process default root may belong to another overlay's Tk
+                # (e.g. Droid Timers), which breaks with "pyimageN doesn't
+                # exist".
+                icon = tk.PhotoImage(master=window, file=str(icon_path))
             except Exception as exc:
                 print(f"[POPUP] Failed to load icon: {exc}")
                 icon = None
@@ -185,7 +192,9 @@ def show_popup(
             height = panel_height
 
         x = max(0, (screen_w - width) // 2)
-        y = max(20, min(120, screen_h - height - 20))
+        # Keep the alert card below the Droid Timers strip (top-center,
+        # y=8 + 72px tall), never overlapping it.
+        y = max(92, min(130, screen_h - height - 20))
         window.geometry(f"{width}x{height}+{x}+{y}")
 
         canvas = tk.Canvas(window, width=width, height=height, bg=canvas_bg, highlightthickness=0)
@@ -206,8 +215,8 @@ def show_popup(
         canvas.create_rectangle(6, 40, panel_width - 7, 56, fill=CARD_BG_SOFT, outline="")
 
         center_x = panel_width // 2
-        caption_font = tkfont.Font(family="Segoe UI", size=13, weight="bold")
-        title_font = tkfont.Font(family="Segoe UI Black", size=32)
+        caption_font = tkfont.Font(root=window, family="Segoe UI", size=13, weight="bold")
+        title_font = tkfont.Font(root=window, family="Segoe UI Black", size=32)
 
         caption = "PRIORITY SPAWN" if detection.is_priority else "DROID SPAWN"
         canvas.create_text(

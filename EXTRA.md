@@ -28,6 +28,20 @@ under its own folder. It never writes to OS user-data directories. The public
 repo intentionally excludes local captures, logs, screenshots, and training
 data.
 
+## Building the Windows exe
+
+For a release build, double-click `Build EXE.bat`.
+
+It installs the build tools, runs PyInstaller, and creates:
+
+```text
+dist\Droid Alerts\Droid Alerts.exe
+dist\DroidAlerts-Windows.zip
+```
+
+Share the zip with normal users. They only need to unzip it and double-click
+`Droid Alerts.exe`; Python is not required on their PC.
+
 ## How detection works
 
 1. **Region** (`src/droid_alerts/region.py`): the chat-alert area is found as a
@@ -65,20 +79,13 @@ overlay.
 ## Testing
 
 `python main.py test` runs every fixture in `tests/fixtures/` and writes a
-scored report to `tests/results/`. Current private baseline: **41/41 labeled
+scored report to `tests/results/`. Current private baseline: **51/51 labeled
 fixtures pass with zero false positives and zero false negatives**, including
 synthetic 1920x1080 / 2560x1440 / 3440x1440 stress renders and real 4:3
 (1440x1040) captures.
 
 `python tests/test_paths_guard.py` asserts the tool never references OS
 user-data paths.
-
-### Known gap
-
-No real (non-template-source) **Beskar Mythic** full-row capture exists yet.
-When one appears, drop it in `training_data/current_ui/` and
-`tests/fixtures/real_captures/`, add its crops to `tools/build_templates.py`,
-label it in `tests/fixtures/manifest.json`, rebuild and re-run the eval.
 
 ## Adding new training captures
 

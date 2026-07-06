@@ -53,6 +53,17 @@ def run_watch(
     print(f"Targets: {sorted(config.targets)}")
     print(f"Extra checks (washed-out colors/HDR): {'ENABLED' if config.extra_checks else 'DISABLED'}")
     print(f"Popup alerts: {'ENABLED' if config.popup_enabled else 'DISABLED'}")
+    # The GUI manages the Droid Timers overlay itself; the CLI watcher spawns
+    # a standalone one so `python main.py watch` gets it too.
+    if config.droid_timers_enabled and popup_parent is None:
+        from .timers import start_droid_timers_thread
+
+        start_droid_timers_thread(stop_event)
+        print("Droid Timers overlay: ENABLED")
+    elif config.droid_timers_enabled:
+        print("Droid Timers overlay: ENABLED (GUI-managed)")
+    else:
+        print("Droid Timers overlay: DISABLED")
     if config.discord_enabled:
         try:
             webhook_url, webhook_source = load_discord_webhook(config)
@@ -144,6 +155,8 @@ def run_watch(
                 )
                 event = {
                     "ts": timestamp(),
+                    "event_type": "alert" if fire else ("seen" if debug else "detected"),
+                    "debug": debug,
                     "frame": frame_index,
                     "scale": round(result.scale, 4),
                     "scale_method": result.scale_method,
@@ -215,19 +228,38 @@ def run_watch(
                     if _recently_logged(logged_spawn_keys, rej_key, now, log_dedupe_seconds):
                         continue
                     logged_spawn_keys[rej_key] = now
+                    rejected_event = {
+                        "ts": timestamp(),
+                        "event_type": "rejected",
+                        "debug": True,
+                        "frame": frame_index,
+                        "scale": round(result.scale, 4),
+                        "scale_method": result.scale_method,
+                        "y": rejection["y"],
+                        "droid": rejection["droid"],
+                        "rarity": "",
+                        "reason": rejection["reason"],
+                        "detail": rejection.get("detail", ""),
+                        "alerted": False,
+                        "is_priority": False,
+                        "score": None,
+                    }
+                    append_event(rejected_event)
                     detail = f" {rejection['detail']}" if rejection.get("detail") else ""
                     print(
-                        f"[REJECTED] {timestamp()} y={rejection['y']} "
+                        f"[REJECTED] {rejected_event['ts']} y={rejection['y']} "
                         f"droid={rejection['droid']} reason={rejection['reason']}{detail}"
                     )
 
             if debug and debug_hotkey is not None and debug_hotkey():
                 saved = _save_debug(band, result, reason="manual")
+                append_event(_debug_snapshot_event(frame_index, result, saved, reason="manual"))
                 print("[debug] saved manual chat-box snapshot:")
                 for path in saved:
                     print(f"        {path}")
             if debug and next_debug_snapshot_at is not None and time.monotonic() >= next_debug_snapshot_at:
                 saved = _save_debug(band, result, reason="macos_interval")
+                append_event(_debug_snapshot_event(frame_index, result, saved, reason="macos_interval"))
                 print("[debug] saved timed macOS chat-box snapshot:")
                 for path in saved:
                     print(f"        {path}")
@@ -302,6 +334,24 @@ def _save_debug(band, result, *, reason: str) -> list[str]:
         cv2.imwrite(overlay_path, overlay)
         paths.append(overlay_path)
     return paths
+
+
+def _debug_snapshot_event(frame_index: int, result, paths: list[str], *, reason: str) -> dict[str, object]:
+    return {
+        "ts": timestamp(),
+        "event_type": "debug_snapshot",
+        "debug": True,
+        "frame": frame_index,
+        "scale": round(result.scale, 4),
+        "scale_method": result.scale_method,
+        "droid": "",
+        "rarity": "",
+        "reason": reason,
+        "detail": "; ".join(paths),
+        "alerted": False,
+        "is_priority": False,
+        "score": None,
+    }
 
 
 def _draw_debug_overlay(image, result):

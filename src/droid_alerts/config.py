@@ -1,15 +1,36 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 
+def app_root() -> Path:
+    """Writable app folder.
+
+    In source runs this is the repository root. In a PyInstaller build this is
+    the folder containing Droid Alerts.exe, so config and logs stay beside the
+    app and survive updates.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+def bundled_root() -> Path:
+    """Read-only bundled files folder for PyInstaller builds."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass)
+    return app_root()
+
+
 def project_root() -> Path:
     """Droid Alerts project root. Everything lives under here, so the tool is fully
     self-contained and never writes to OS user-data directories."""
-    return Path(__file__).resolve().parents[2]
+    return app_root()
 
 
 def config_dir() -> Path:
@@ -21,15 +42,17 @@ def data_dir() -> Path:
 
 
 def templates_dir() -> Path:
-    return project_root() / "templates"
+    bundled = bundled_root() / "templates"
+    return bundled if bundled.exists() else project_root() / "templates"
 
 
 def sounds_dir() -> Path:
-    return project_root() / "assets" / "sounds"
+    return assets_dir() / "sounds"
 
 
 def assets_dir() -> Path:
-    return project_root() / "assets"
+    bundled = bundled_root() / "assets"
+    return bundled if bundled.exists() else project_root() / "assets"
 
 
 CONFIG_FILE = "config.json"
@@ -58,6 +81,7 @@ class AppConfig:
     alert_cooldown_seconds: float = 10.0
     sound_enabled: bool = True
     popup_enabled: bool = True
+    droid_timers_enabled: bool = False
     popup_seconds: float = 8.0
     popup_icon_file: str = "signals_icon.png"
     save_alert_samples: bool = True
@@ -107,6 +131,7 @@ class AppConfig:
             alert_cooldown_seconds=float(data.get("alert_cooldown_seconds", 10.0)),
             sound_enabled=bool(data.get("sound_enabled", True)),
             popup_enabled=bool(data.get("popup_enabled", True)),
+            droid_timers_enabled=bool(data.get("droid_timers_enabled", False)),
             popup_seconds=float(data.get("popup_seconds", 8.0)),
             popup_icon_file=str(data.get("popup_icon_file", "signals_icon.png")),
             save_alert_samples=bool(data.get("save_alert_samples", True)),
@@ -156,6 +181,7 @@ class AppConfig:
             "alert_cooldown_seconds": self.alert_cooldown_seconds,
             "sound_enabled": self.sound_enabled,
             "popup_enabled": self.popup_enabled,
+            "droid_timers_enabled": self.droid_timers_enabled,
             "popup_seconds": self.popup_seconds,
             "popup_icon_file": self.popup_icon_file,
             "save_alert_samples": self.save_alert_samples,

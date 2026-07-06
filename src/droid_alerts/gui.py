@@ -85,6 +85,7 @@ class DroidAlertsApp:
         self.stop_event: threading.Event | None = None
         self.region_overlay: tk.Toplevel | None = None
         self.region_overlay_windows: list[tk.Toplevel] = []
+        self.droid_timers = None
         self.region_box: PixelBox | None = None
         self.region_source: str = ""
         self.region_screen_size: tuple[int, int] | None = None
@@ -106,6 +107,8 @@ class DroidAlertsApp:
         self._build_ui()
         self.load_settings()
         self._wire_auto_save()
+        if self.config.droid_timers_enabled:
+            self.show_droid_timers()
         self.refresh_logs()
         self._schedule_log_refresh()
         self.root.after(700, self.prompt_notification_setup_if_needed)
@@ -227,6 +230,7 @@ class DroidAlertsApp:
         simple_rows = (
             ("popup_enabled", "Popup alerts", None),
             ("sound_enabled", "Sound alerts", None),
+            ("droid_timers_enabled", "Droid Timers overlay", self.on_droid_timers_toggle),
             ("phone_alerts_enabled", "Pushover phone alerts", self.on_phone_alert_toggle),
             ("ntfy_enabled", "ntfy phone alerts", self.on_ntfy_alert_toggle),
             ("discord_enabled", "Discord webhook alerts", self.on_discord_alert_toggle),
@@ -252,9 +256,9 @@ class DroidAlertsApp:
                 self.advanced_widgets.append(check)
 
         setup_buttons = (
-            (2, "Set Up Pushover", self.setup_phone_alerts_and_enable, "warning-outline"),
-            (3, "Set Up ntfy", self.setup_ntfy_alerts_and_enable, "success-outline"),
-            (4, "Set Up Discord", self.setup_discord_alerts_and_enable, "info-outline"),
+            (3, "Set Up Pushover", self.setup_phone_alerts_and_enable, "warning-outline"),
+            (4, "Set Up ntfy", self.setup_ntfy_alerts_and_enable, "success-outline"),
+            (5, "Set Up Discord", self.setup_discord_alerts_and_enable, "info-outline"),
         )
         for row, label, command, style in setup_buttons:
             ttk.Button(
@@ -321,24 +325,37 @@ class DroidAlertsApp:
     def _build_logs_tab(self) -> None:
         self.logs_tab.rowconfigure(0, weight=1)
         self.logs_tab.columnconfigure(0, weight=1)
-        columns = ("time", "droid", "rarity", "priority", "alerted", "score")
+        columns = ("time", "type", "droid", "rarity", "priority", "alerted", "score", "info")
         self.logs_tree = ttk.Treeview(self.logs_tab, columns=columns, show="headings", height=18)
         headings = {
             "time": "Time",
+            "type": "Type",
             "droid": "Droid",
             "rarity": "Rarity",
             "priority": "Priority",
             "alerted": "Alerted",
             "score": "Score",
+            "info": "Info",
         }
-        widths = {"time": 180, "droid": 120, "rarity": 110, "priority": 90, "alerted": 90, "score": 90}
+        widths = {
+            "time": 175,
+            "type": 105,
+            "droid": 105,
+            "rarity": 100,
+            "priority": 80,
+            "alerted": 80,
+            "score": 80,
+            "info": 260,
+        }
         anchors = {
             "time": "w",
+            "type": "center",
             "droid": "w",
             "rarity": "w",
             "priority": "center",
             "alerted": "center",
             "score": "center",
+            "info": "w",
         }
         for column in columns:
             self.logs_tree.heading(column, text=headings[column], anchor=anchors[column])
@@ -404,6 +421,28 @@ class DroidAlertsApp:
                 row=row, column=0, sticky="w", pady=4
             )
 
+    def on_droid_timers_toggle(self) -> None:
+        if bool(self._value("droid_timers_enabled")):
+            self.show_droid_timers()
+        else:
+            self.hide_droid_timers()
+
+    def show_droid_timers(self) -> None:
+        if self.droid_timers is not None and self.droid_timers.alive:
+            return
+        from .timers import DroidTimersOverlay
+
+        try:
+            self.droid_timers = DroidTimersOverlay(self.root)
+        except Exception as exc:
+            print(f"[TIMERS] Failed to show Droid Timers overlay: {exc}")
+            self.droid_timers = None
+
+    def hide_droid_timers(self) -> None:
+        if self.droid_timers is not None:
+            self.droid_timers.close()
+            self.droid_timers = None
+
     def on_advanced_toggle(self) -> None:
         advanced = bool(self._value("advanced_mode"))
         self._apply_advanced_visibility(advanced)
@@ -433,6 +472,7 @@ class DroidAlertsApp:
             for key in (
                 "popup_enabled",
                 "sound_enabled",
+                "droid_timers_enabled",
                 "save_alert_samples",
                 "ntfy_enabled",
                 "discord_enabled",
@@ -557,6 +597,7 @@ class DroidAlertsApp:
 
         config.sound_enabled = bool(self._value("sound_enabled"))
         config.popup_enabled = bool(self._value("popup_enabled"))
+        config.droid_timers_enabled = bool(self._value("droid_timers_enabled"))
         config.save_alert_samples = bool(self._value("save_alert_samples"))
         config.save_debug_screenshots = bool(self._value("save_debug_screenshots"))
         config.ntfy_enabled = bool(self._value("ntfy_enabled"))
@@ -1079,6 +1120,7 @@ class DroidAlertsApp:
 
         rows: list[dict[str, object]] = []
         seen_rows: set[str] = set()
+        show_debug_rows = bool(self._value("save_debug_screenshots"))
         for line in reversed(raw_lines):
             line = line.strip()
             if not line:
@@ -1087,27 +1129,53 @@ class DroidAlertsApp:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            key = self._log_row_key(row)
-            if key in seen_rows:
+            is_debug_row = self._log_row_is_debug(row)
+            if is_debug_row and not show_debug_rows:
                 continue
-            seen_rows.add(key)
+            if not is_debug_row:
+                key = self._log_row_key(row)
+                if key in seen_rows:
+                    continue
+                seen_rows.add(key)
             rows.append(row)
             if len(rows) >= 200:
                 break
 
         for row in rows:
+            score = row.get("score")
             self.logs_tree.insert(
                 "",
                 "end",
                 values=(
                     row.get("ts", ""),
+                    self._log_row_type(row),
                     row.get("droid", ""),
                     row.get("rarity", ""),
                     "yes" if row.get("is_priority") else "no",
                     "yes" if row.get("alerted") else "no",
-                    f"{float(row.get('score', 0.0)):.2f}" if row.get("score") is not None else "",
+                    f"{float(score):.2f}" if score is not None else "",
+                    self._log_row_info(row),
                 ),
             )
+
+    def _log_row_is_debug(self, row: dict[str, object]) -> bool:
+        if bool(row.get("debug")):
+            return True
+        return str(row.get("event_type", "")) in {"seen", "rejected", "debug_snapshot"}
+
+    def _log_row_type(self, row: dict[str, object]) -> str:
+        event_type = str(row.get("event_type", "")).strip()
+        if event_type:
+            return event_type.replace("_", " ")
+        return "alert" if row.get("alerted") else "detected"
+
+    def _log_row_info(self, row: dict[str, object]) -> str:
+        reason = str(row.get("reason", "") or "")
+        detail = str(row.get("detail", "") or "")
+        if reason and detail:
+            return f"{reason}: {detail}"
+        return reason or detail or str(row.get("scale_method", "") or "")
+
     def _log_row_key(self, row: dict[str, object]) -> str:
         row_box = row.get("row_box")
         y_bucket = ""
@@ -1354,6 +1422,7 @@ class DroidAlertsApp:
                 pass
         if self.stop_event is not None:
             self.stop_event.set()
+        self.hide_droid_timers()
         self.destroy_region_overlay_windows()
         self.root.destroy()
 
