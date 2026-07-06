@@ -20,7 +20,7 @@ except Exception:
     BOOTSTRAP = False
 
 from .alerts import AlertPolicy
-from .capture import create_capture, set_dpi_awareness
+from .capture import PixelBox, create_capture, set_dpi_awareness
 from .classifier import Detection
 from .config import AppConfig, config_dir, load_config, project_root, save_config
 from .logging_io import alert_samples_dir, debug_dir, logs_dir
@@ -46,7 +46,7 @@ from .notifications import (
     valid_discord_webhook_url,
 )
 from .popup import popup_icon_path, show_popup
-from .region import RegionResolver
+from .region import Calibration, RegionResolver
 from .watcher import run_watch
 
 
@@ -84,6 +84,10 @@ class DroidAlertsApp:
         self.watch_thread: threading.Thread | None = None
         self.stop_event: threading.Event | None = None
         self.region_overlay: tk.Toplevel | None = None
+        self.region_box: PixelBox | None = None
+        self.region_source: str = ""
+        self.region_screen_size: tuple[int, int] | None = None
+        self.region_monitor_offset: tuple[int, int] = (0, 0)
         self.update_check_running = False
         self._log_file_signature: tuple[int, int] | None = None
         self._log_refresh_after_id: str | None = None
@@ -93,6 +97,7 @@ class DroidAlertsApp:
 
         self.status_var = StringVar(value="Stopped")
         self.detail_var = StringVar(value=f"Config: {config_dir() / 'config.json'}")
+        self.region_status_var = StringVar(value="")
         self.setting_vars: dict[str, object] = {}
         self.alert_vars: dict[tuple[str, str], BooleanVar] = {}
         self.advanced_widgets: list[object] = []
@@ -356,8 +361,36 @@ class DroidAlertsApp:
         paths_outer.grid(row=0, column=0, sticky="nsew")
         paths_frame.columnconfigure(0, weight=1)
 
+        region_actions = ttk.Frame(paths_frame)
+        region_actions.grid(row=0, column=0, sticky="w", pady=4)
+        self.region_button = ttk.Button(
+            region_actions, text="Show Region", command=self.toggle_region_overlay, width=16
+        )
+        self.region_button.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Button(
+            region_actions, text="Auto Detect Region", command=self.auto_detect_region, width=20
+        ).grid(row=0, column=1, sticky="w")
+
+        self.region_adjust_frame = ttk.Frame(paths_frame)
+        self.region_adjust_frame.grid(row=1, column=0, sticky="w", pady=(0, 8))
+        ttk.Button(
+            self.region_adjust_frame,
+            text="Move Up 10px",
+            command=lambda: self.nudge_region(-10),
+            width=13,
+        ).grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Button(
+            self.region_adjust_frame,
+            text="Move Down 10px",
+            command=lambda: self.nudge_region(10),
+            width=15,
+        ).grid(row=0, column=1, sticky="w")
+        ttk.Label(self.region_adjust_frame, textvariable=self.region_status_var).grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(4, 0)
+        )
+        self.region_adjust_frame.grid_remove()
+
         buttons = (
-            ("View Region", self.toggle_region_overlay),
             ("Open Config", lambda: self.open_path(config_dir() / "config.json")),
             ("Open Logs Folder", lambda: self.open_path(logs_dir())),
             ("Open Alert Samples Folder", lambda: self.open_path(alert_samples_dir())),
@@ -365,7 +398,7 @@ class DroidAlertsApp:
             ("Open Source Folder", lambda: self.open_path(project_root())),
             ("Check For Updates", lambda: self.check_updates(manual=True)),
         )
-        for row, (label, command) in enumerate(buttons):
+        for row, (label, command) in enumerate(buttons, start=2):
             ttk.Button(paths_frame, text=label, command=command, width=28).grid(
                 row=row, column=0, sticky="w", pady=4
             )
@@ -1101,8 +1134,7 @@ class DroidAlertsApp:
 
     def toggle_region_overlay(self) -> None:
         if self.region_overlay is not None and self.region_overlay.winfo_exists():
-            self.region_overlay.destroy()
-            self.region_overlay = None
+            self.close_region_overlay()
             return
         set_dpi_awareness()
         capture = create_capture(monitor_index=self.config.monitor_index)
@@ -1116,6 +1148,10 @@ class DroidAlertsApp:
             monitor = getattr(capture, "monitor", None)
             left_offset = int(getattr(monitor, "left", 0))
             top_offset = int(getattr(monitor, "top", 0))
+            self.region_box = box
+            self.region_source = source
+            self.region_screen_size = (screen_w, screen_h)
+            self.region_monitor_offset = (left_offset, top_offset)
             self.show_region_overlay(
                 left_offset + box.left,
                 top_offset + box.top,
@@ -1123,8 +1159,85 @@ class DroidAlertsApp:
                 box.height,
                 source,
             )
+            self.set_region_controls_visible(True)
         finally:
             capture.close()
+
+    def close_region_overlay(self) -> None:
+        if self.region_overlay is not None and self.region_overlay.winfo_exists():
+            self.region_overlay.destroy()
+        self.region_overlay = None
+        self.region_box = None
+        self.region_source = ""
+        self.region_screen_size = None
+        self.set_region_controls_visible(False)
+
+    def set_region_controls_visible(self, visible: bool) -> None:
+        if hasattr(self, "region_adjust_frame"):
+            if visible:
+                self.region_adjust_frame.grid()
+            else:
+                self.region_adjust_frame.grid_remove()
+                self.region_status_var.set("")
+        if hasattr(self, "region_button"):
+            self.region_button.configure(text="Hide Region" if visible else "Show Region")
+
+    def nudge_region(self, delta_y: int) -> None:
+        if self.region_box is None or self.region_screen_size is None:
+            return
+        screen_w, screen_h = self.region_screen_size
+        max_top = max(0, screen_h - self.region_box.height)
+        top = max(0, min(max_top, self.region_box.top + delta_y))
+        self.region_box = PixelBox(
+            left=self.region_box.left,
+            top=top,
+            width=self.region_box.width,
+            height=self.region_box.height,
+        )
+        self.region_source = "manual(nudged)"
+        Calibration(
+            mode="manual",
+            ratios={
+                "left": self.region_box.left / max(1, screen_w),
+                "top": self.region_box.top / max(1, screen_h),
+                "width": self.region_box.width / max(1, screen_w),
+                "height": self.region_box.height / max(1, screen_h),
+            },
+            monitor_signature={"width": screen_w, "height": screen_h},
+        ).save()
+        if self.region_overlay is not None and self.region_overlay.winfo_exists():
+            self.region_overlay.destroy()
+            self.region_overlay = None
+        left_offset, top_offset = self.region_monitor_offset
+        self.show_region_overlay(
+            left_offset + self.region_box.left,
+            top_offset + self.region_box.top,
+            self.region_box.width,
+            self.region_box.height,
+            self.region_source,
+        )
+        self.set_region_controls_visible(True)
+        note = "Restart watcher to apply" if self.watch_thread is not None and self.watch_thread.is_alive() else "Saved"
+        self.region_status_var.set(f"{note}. Top: {self.region_box.top}px")
+
+    def auto_detect_region(self) -> None:
+        Calibration().save()
+        note = (
+            "Auto region saved. Restart watcher to apply"
+            if self.watch_thread is not None and self.watch_thread.is_alive()
+            else "Auto region saved"
+        )
+        overlay_was_open = self.region_overlay is not None and self.region_overlay.winfo_exists()
+        if overlay_was_open:
+            self.region_overlay.destroy()
+            self.region_overlay = None
+            self.region_box = None
+            self.region_source = ""
+            self.region_screen_size = None
+            self.toggle_region_overlay()
+            self.region_status_var.set(note)
+        else:
+            self.detail_var.set(note)
 
     def show_region_overlay(self, left: int, top: int, width: int, height: int, source: str) -> None:
         overlay = tk.Toplevel(self.root)
