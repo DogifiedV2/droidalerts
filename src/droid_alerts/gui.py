@@ -376,22 +376,24 @@ class DroidAlertsApp:
 
     def _build_files_tab(self) -> None:
         self.files_tab.columnconfigure(0, weight=1)
-        paths_outer, paths_frame = self._labeled_section(self.files_tab, "Files")
-        paths_outer.grid(row=0, column=0, sticky="nsew")
-        paths_frame.columnconfigure(0, weight=1)
+        self.files_tab.columnconfigure(1, weight=1)
+        self.files_tab.rowconfigure(0, weight=1)
 
-        region_actions = ttk.Frame(paths_frame)
-        region_actions.grid(row=0, column=0, sticky="w", pady=4)
+        # Left: chat region tools + app-level actions.
+        setup_outer, setup_frame = self._labeled_section(self.files_tab, "Chat Region & App")
+        setup_outer.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        setup_frame.columnconfigure(0, weight=1)
+
         self.region_button = ttk.Button(
-            region_actions, text="Show Chat Region", command=self.toggle_region_overlay, width=18
+            setup_frame, text="Show Chat Region", command=self.toggle_region_overlay, width=28
         )
-        self.region_button.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.region_button.grid(row=0, column=0, sticky="w", pady=4)
         ttk.Button(
-            region_actions, text="Auto Detect Region", command=self.auto_detect_region, width=20
-        ).grid(row=0, column=1, sticky="w")
+            setup_frame, text="Auto Detect Region", command=self.auto_detect_region, width=28
+        ).grid(row=1, column=0, sticky="w", pady=4)
 
-        self.region_adjust_frame = ttk.Frame(paths_frame)
-        self.region_adjust_frame.grid(row=1, column=0, sticky="w", pady=(0, 8))
+        self.region_adjust_frame = ttk.Frame(setup_frame)
+        self.region_adjust_frame.grid(row=2, column=0, sticky="w", pady=(0, 4))
         ttk.Button(
             self.region_adjust_frame,
             text="Move Up 10px",
@@ -409,16 +411,31 @@ class DroidAlertsApp:
         )
         self.region_adjust_frame.grid_remove()
 
-        buttons = (
-            ("Open Config", lambda: self.open_path(config_dir() / "config.json")),
+        ttk.Button(
+            setup_frame,
+            text="Check For Updates",
+            command=lambda: self.check_updates(manual=True),
+            width=28,
+        ).grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Button(
+            setup_frame,
+            text="Open Config",
+            command=lambda: self.open_path(config_dir() / "config.json"),
+            width=28,
+        ).grid(row=4, column=0, sticky="w", pady=4)
+
+        # Right: the folder shortcuts.
+        folders_outer, folders_frame = self._labeled_section(self.files_tab, "Folders")
+        folders_outer.grid(row=0, column=1, sticky="nsew")
+        folders_frame.columnconfigure(0, weight=1)
+        folder_buttons = (
             ("Open Logs Folder", lambda: self.open_path(logs_dir())),
             ("Open Alert Samples Folder", lambda: self.open_path(alert_samples_dir())),
             ("Open Debug Screenshots Folder", lambda: self.open_path(debug_dir())),
             ("Open Source Folder", lambda: self.open_path(project_root())),
-            ("Check For Updates", lambda: self.check_updates(manual=True)),
         )
-        for row, (label, command) in enumerate(buttons, start=2):
-            ttk.Button(paths_frame, text=label, command=command, width=28).grid(
+        for row, (label, command) in enumerate(folder_buttons):
+            ttk.Button(folders_frame, text=label, command=command, width=28).grid(
                 row=row, column=0, sticky="w", pady=4
             )
 
