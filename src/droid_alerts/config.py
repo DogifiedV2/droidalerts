@@ -99,6 +99,7 @@ class AppConfig:
     ntfy_cache: str = "no"
     ntfy_include_attachment: bool = False
     notification_setup_prompted: bool = False
+    intro_shown: bool = False
     phone_alerts_enabled: bool = True
     phone_credentials_file: str = "phone_alerts.json"
     phone_env_token: str = "DROIDWATCHER_PHONE_ALERTS_TOKEN"
@@ -149,6 +150,7 @@ class AppConfig:
             ntfy_cache=str(data.get("ntfy_cache", "no")),
             ntfy_include_attachment=bool(data.get("ntfy_include_attachment", False)),
             notification_setup_prompted=bool(data.get("notification_setup_prompted", False)),
+            intro_shown=bool(data.get("intro_shown", False)),
             phone_alerts_enabled=bool(data.get("phone_alerts_enabled", True)),
             phone_credentials_file=str(data.get("phone_credentials_file", "phone_alerts.json")),
             phone_env_token=str(data.get("phone_env_token", "DROIDWATCHER_PHONE_ALERTS_TOKEN")),
@@ -199,6 +201,7 @@ class AppConfig:
             "ntfy_cache": self.ntfy_cache,
             "ntfy_include_attachment": self.ntfy_include_attachment,
             "notification_setup_prompted": self.notification_setup_prompted,
+            "intro_shown": self.intro_shown,
             "phone_alerts_enabled": self.phone_alerts_enabled,
             "phone_credentials_file": self.phone_credentials_file,
             "phone_env_token": self.phone_env_token,

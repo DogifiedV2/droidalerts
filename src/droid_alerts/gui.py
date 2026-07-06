@@ -111,7 +111,7 @@ class DroidAlertsApp:
             self.show_droid_timers()
         self.refresh_logs()
         self._schedule_log_refresh()
-        self.root.after(700, self.prompt_notification_setup_if_needed)
+        self.root.after(700, self.run_first_time_intro)
         self.root.after(1500, lambda: self.check_updates(manual=False))
 
     def _load_app_icon(self) -> None:
@@ -382,7 +382,7 @@ class DroidAlertsApp:
         region_actions = ttk.Frame(paths_frame)
         region_actions.grid(row=0, column=0, sticky="w", pady=4)
         self.region_button = ttk.Button(
-            region_actions, text="Show Region", command=self.toggle_region_overlay, width=16
+            region_actions, text="Show Chat Region", command=self.toggle_region_overlay, width=18
         )
         self.region_button.grid(row=0, column=0, sticky="w", padx=(0, 8))
         ttk.Button(
@@ -537,6 +537,63 @@ class DroidAlertsApp:
         self._autosave_after_id = None
         self.save_settings(interactive=False, update_detail=False)
 
+    def run_first_time_intro(self) -> None:
+        """First-launch walkthrough: region check on the Files tab, then the
+        Droid Timers question, then phone alerts. One time only."""
+        config = load_config()
+        # Existing installs (already past the phone prompt) skip the intro.
+        if config.intro_shown or config.notification_setup_prompted:
+            if not config.intro_shown:
+                config.intro_shown = True
+                save_config(config)
+                self.config = config
+            self.prompt_notification_setup_if_needed()
+            return
+
+        try:
+            self.notebook.select(self.files_tab)
+        except Exception:
+            pass
+
+        self._setup_dialog(
+            "Before You Start",
+            intro="Droid Alerts guesses where your Fortnite chat alerts appear. "
+            "Quickly check the region box before you start farming:",
+            steps=(
+                "Open Fortnite and stand somewhere in-game where droid spawn messages appear.",
+                'Click "Show Chat Region" on this Files tab. A red outline will appear on your screen.',
+                "That outline should cover the chat alerts, not the middle of the screen or the HUD.",
+                'If it is too high or too low, use "Move Up 10px" or "Move Down 10px" until it lines up.',
+            ),
+            ok_text="Got It",
+            cancel_text="Skip For Now",
+            modal=False,
+        )
+
+        timers_choice = self._setup_dialog(
+            "Droid Timers",
+            intro="Do you want a small Droid Timers bar at the top of your screen?\n\n"
+            "It counts down "
+            "to the next Beskar, Mythic and Rainbow spawns. You can turn it on "
+            "or off any time in Settings.",
+            ok_text="Show Timers",
+            cancel_text="No Thanks",
+        )
+        enable_timers = timers_choice is not None
+        self._set_var("droid_timers_enabled", enable_timers)
+        if enable_timers:
+            self.show_droid_timers()
+        else:
+            self.hide_droid_timers()
+
+        config = load_config()
+        config.droid_timers_enabled = enable_timers
+        config.intro_shown = True
+        save_config(config)
+        self.config = config
+
+        self.prompt_notification_setup_if_needed()
+
     def prompt_notification_setup_if_needed(self) -> None:
         config = load_config()
         if config.notification_setup_prompted:
@@ -657,8 +714,9 @@ class DroidAlertsApp:
         link: tuple[str, str] | None = None,
         ok_text: str = "Continue",
         cancel_text: str = "Cancel",
+        modal: bool = True,
     ) -> dict[str, str] | None:
-        """Styled modal dialog for setup flows.
+        """Styled dialog for setup flows.
 
         Replaces messagebox/simpledialog so tutorials read as plain steps
         instead of a chain of bare OS prompts with generic icons. Returns the
@@ -761,7 +819,8 @@ class DroidAlertsApp:
         x = self.root.winfo_rootx() + (self.root.winfo_width() - dialog.winfo_width()) // 2
         y = self.root.winfo_rooty() + (self.root.winfo_height() - dialog.winfo_height()) // 3
         dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
-        dialog.grab_set()
+        if modal:
+            dialog.grab_set()
         dialog.wait_window()
         return result
 
@@ -1263,7 +1322,7 @@ class DroidAlertsApp:
                 self.region_adjust_frame.grid_remove()
                 self.region_status_var.set("")
         if hasattr(self, "region_button"):
-            self.region_button.configure(text="Hide Region" if visible else "Show Region")
+            self.region_button.configure(text="Hide Chat Region" if visible else "Show Chat Region")
 
     def nudge_region(self, delta_y: int) -> None:
         if self.region_box is None or self.region_screen_size is None:
