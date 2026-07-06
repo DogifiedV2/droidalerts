@@ -10,7 +10,14 @@ import cv2
 
 from .alerts import AlertPolicy, row_hash
 from .capture import create_capture, set_dpi_awareness
-from .config import AppConfig, load_config, templates_dir
+from .config import (
+    CALIBRATION_FILE,
+    CONFIG_FILE,
+    AppConfig,
+    config_dir,
+    load_config,
+    templates_dir,
+)
 from .logging_io import alert_samples_dir, append_event, debug_dir, timestamp
 from .notifications import (
     load_discord_webhook,
@@ -115,10 +122,72 @@ def run_watch(
     calibration_hint_shown = False
     logged_spawn_keys: dict[str, float] = {}
     log_dedupe_seconds = max(12.0, config.dedupe_seconds)
+
+    # Live settings: the GUI autosaves config.json (and region nudges save
+    # calibration.json); watching the file mtimes lets changes apply on the
+    # next frame instead of requiring a watcher restart.
+    def _settings_signature() -> tuple[int, int]:
+        def mtime(path) -> int:
+            try:
+                return path.stat().st_mtime_ns
+            except OSError:
+                return 0
+
+        return (
+            mtime(config_dir() / CONFIG_FILE),
+            mtime(config_dir() / CALIBRATION_FILE),
+        )
+
+    settings_signature = _settings_signature()
     try:
         while not _stop_requested(stop_event):
             started = time.monotonic()
             frame_index += 1
+
+            new_signature = _settings_signature()
+            if new_signature != settings_signature:
+                try:
+                    new_config = load_config()
+                except Exception as exc:
+                    # Mid-write race with the GUI's save; retry next frame.
+                    print(f"[CONFIG] reload failed, will retry: {exc}")
+                else:
+                    settings_signature = new_signature
+                    monitor_changed = new_config.monitor_index != config.monitor_index
+                    config = new_config
+                    policy.apply_config(config)
+                    pipeline.detector.extra_checks = config.extra_checks
+                    log_dedupe_seconds = max(12.0, config.dedupe_seconds)
+                    webhook_url = None
+                    if config.discord_enabled:
+                        try:
+                            webhook_url, _source = load_discord_webhook(config)
+                        except Exception:
+                            webhook_url = None
+                    phone_credentials = None
+                    if config.phone_alerts_enabled:
+                        try:
+                            phone_credentials, _source = load_phone_alert_credentials(config)
+                        except Exception:
+                            phone_credentials = None
+                    if monitor_changed:
+                        try:
+                            capture.close()
+                        except Exception:
+                            pass
+                        capture = create_capture(monitor_index=config.monitor_index)
+                        screen_w, screen_h = capture.screen_size()
+                    resolver = RegionResolver(
+                        screen_w,
+                        screen_h,
+                        max_failures=config.validation_failures_before_calibration_prompt,
+                    )
+                    box, region_source = resolver.resolve()
+                    print(
+                        f"[CONFIG] Settings reloaded: region [{region_source}] "
+                        f"targets {sorted(config.targets)}"
+                    )
+
             try:
                 band = capture.grab(box)
             except Exception as exc:

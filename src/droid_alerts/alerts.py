@@ -26,12 +26,17 @@ class AlertPolicy:
     re-alert every capture."""
 
     def __init__(self, config: AppConfig) -> None:
+        self._last_combo_alert: dict[tuple[str, str], float] = {}
+        self._recent_hashes: dict[str, float] = {}
+        self.apply_config(config)
+
+    def apply_config(self, config: AppConfig) -> None:
+        """Adopt new settings without losing cooldown/dedupe state, so the
+        watcher can hot-reload config changes mid-run."""
         self.targets = config.targets
         self.cooldown_seconds = config.alert_cooldown_seconds
         self.dedupe_seconds = config.dedupe_seconds
         self.sound_enabled = config.sound_enabled
-        self._last_combo_alert: dict[tuple[str, str], float] = {}
-        self._recent_hashes: dict[str, float] = {}
 
     def should_alert(self, detection: Detection, row_digest: str) -> bool:
         if (detection.droid, detection.rarity) not in self.targets:
