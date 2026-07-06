@@ -455,10 +455,27 @@ def latest_release_info(repo: str) -> dict[str, str] | None:
     tag = str(payload.get("tag_name", "")).strip()
     if not tag:
         return None
+    package_zip_url = ""
+    # Accept both the published asset name and Build EXE.bat's raw output
+    # name, so a forgotten rename doesn't silently break packaged updates.
+    package_asset_names = {"droidalerts.zip", "droidalerts-windows.zip"}
+    for asset in payload.get("assets") or []:
+        if not isinstance(asset, dict):
+            continue
+        if str(asset.get("name", "")).lower() in package_asset_names:
+            package_zip_url = str(asset.get("browser_download_url", "") or "")
+            break
+    source_zip_url = str(
+        payload.get("zipball_url", "")
+        or f"https://github.com/{repo}/archive/refs/tags/{tag}.zip"
+    )
     return {
         "tag": tag,
         "name": str(payload.get("name", "") or tag),
         "url": str(payload.get("html_url", "") or f"https://github.com/{repo}/releases/latest"),
+        "zip_url": package_zip_url or source_zip_url,
+        "package_zip_url": package_zip_url,
+        "source_zip_url": source_zip_url,
     }
 
 

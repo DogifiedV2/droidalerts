@@ -1489,11 +1489,73 @@ class DroidAlertsApp:
             if manual:
                 self.detail_var.set("No newer GitHub release found")
             return
-        if messagebox.askyesno(
+        choice = self._setup_dialog(
             "Update Available",
-            f"{release['name']} is available.\n\nOpen the GitHub release page?",
-        ):
+            intro=f"{release['name']} is available.\n\n"
+            "Do you want to install it? The new files will be downloaded and "
+            "Droid Alerts will restart itself. Your settings, alerts and "
+            "captures are kept.",
+            link=("View What's New", release["url"]),
+            ok_text="Install & Restart",
+            cancel_text="Not Now",
+        )
+        if choice is not None:
+            self._install_update(release)
+
+    def _install_update(self, release: dict[str, str]) -> None:
+        from .updater import download_and_install_update, preferred_update_url
+
+        self.detail_var.set(f"Downloading update {release['tag']}...")
+
+        def progress(text: str) -> None:
+            self.root.after(0, lambda: self.detail_var.set(text))
+
+        def worker() -> None:
+            try:
+                result = download_and_install_update(
+                    preferred_update_url(release),
+                    release["tag"],
+                    progress=progress,
+                )
+            except Exception as exc:
+                self.root.after(0, lambda exc=exc: self._install_update_failed(release, exc))
+                return
+            self.root.after(0, lambda: self._restart_after_update(result.external_restart))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _install_update_failed(self, release: dict[str, str], exc: Exception) -> None:
+        self.detail_var.set(f"Update failed: {exc}")
+        choice = self._setup_dialog(
+            "Update Failed",
+            intro="The update couldn't be installed automatically:\n\n"
+            f"{exc}\n\n"
+            "Nothing was changed. You can download it manually from the "
+            "GitHub release page instead.",
+            ok_text="Open Release Page",
+            cancel_text="Close",
+        )
+        if choice is not None:
             webbrowser.open(release["url"])
+
+    def _restart_after_update(self, external_restart: bool = False) -> None:
+        from .updater import exit_for_external_update, restart_program
+
+        self.detail_var.set("Update installed, restarting...")
+        if self.stop_event is not None:
+            self.stop_event.set()
+        self.hide_droid_timers()
+        self.destroy_region_overlay_windows()
+        try:
+            self.root.update_idletasks()
+        except Exception:
+            pass
+        # Give the watcher thread a moment to notice the stop event, then
+        # hand off to the freshly installed code.
+        if external_restart:
+            self.root.after(700, exit_for_external_update)
+        else:
+            self.root.after(700, restart_program)
 
     def on_close(self) -> None:
         if self._autosave_after_id is not None:
