@@ -9,9 +9,9 @@ percent-of-screen band (no manual pixel dragging needed), and every frame is
 scale-normalized to a 44px-row reference before the classifier runs, so the
 proven fixed-column detection logic stays valid everywhere.
 
-The tool writes runtime data only under this project folder. The public source
-repo intentionally excludes local captures, logs, generated screenshots,
-training data, and generated template PNGs.
+The tool writes runtime data only under this project folder. The public repo
+includes the generated runtime templates, but intentionally excludes local
+captures, logs, generated screenshots, and training data.
 
 ## Usage
 
@@ -27,9 +27,8 @@ python main.py test --dump-unlabeled  # also dump review crops for unlabeled fix
 
 Install deps: `pip install -r requirements.txt`
 
-Source-only checkouts need runtime templates before live detection can run.
-Populate `templates/` from private training captures with
-`python main.py build-templates`.
+Runtime templates are committed under `templates/`, so a fresh checkout can run
+live detection after installing dependencies.
 
 ## How it works
 

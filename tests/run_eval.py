@@ -61,6 +61,7 @@ def evaluate_fixture(pipeline: Pipeline, path: Path, spec: dict) -> dict:
         region = None
 
     detected = [(d.droid, d.rarity) for d in result.detections]
+    alerted = [(d.droid, d.rarity) for d in result.detections if d.should_alert]
     record: dict = {
         "mode": mode,
         "scale": result.scale,
@@ -69,9 +70,22 @@ def evaluate_fixture(pipeline: Pipeline, path: Path, spec: dict) -> dict:
         "region": region,
         "detections": [d.to_dict() for d in result.detections],
         "detected_combos": detected,
+        "alerted_combos": alerted,
     }
 
+    # Alert-level assertions: FP fixtures must stay silent; TP fixtures must fire.
+    alert_failures: list[str] = []
+    if spec.get("expect_no_alerts") and alerted:
+        alert_failures.append(f"expected NO alerts, got {alerted}")
+    for pair in spec.get("expect_alerts") or []:
+        if tuple(pair) not in alerted:
+            alert_failures.append(f"expected alert {tuple(pair)} did not fire")
+    record["alert_failures"] = alert_failures
+
     expected = spec.get("rows")
+    if expected is None and (spec.get("expect_no_alerts") or spec.get("expect_alerts")):
+        record.update({"labeled": True, "tp": {}, "fp": {}, "fn": {}, "pass": not alert_failures})
+        return record
     if expected is not None:
         expected_pairs = [tuple(row) for row in expected]
         exp_counter = Counter(expected_pairs)
@@ -85,7 +99,7 @@ def evaluate_fixture(pipeline: Pipeline, path: Path, spec: dict) -> dict:
                 "tp": {f"{d} {r}": n for (d, r), n in tp.items()},
                 "fp": {f"{d} {r}": n for (d, r), n in fp.items()},
                 "fn": {f"{d} {r}": n for (d, r), n in fn.items()},
-                "pass": not fp and not fn,
+                "pass": not fp and not fn and not alert_failures,
             }
         )
     else:
@@ -125,7 +139,12 @@ def main(*, verbose: bool = False, dump_unlabeled: bool = False) -> int:
             for bucket in ("tp", "fp", "fn"):
                 for combo, n in record[bucket].items():
                     per_combo[bucket][combo] += n
-            print(f"[{status}] {rel_path}: detected={record['detected_combos']} expected={spec['rows']}")
+            expected_desc = spec.get("rows")
+            if expected_desc is None:
+                expected_desc = f"alerts={spec.get('expect_alerts') or 'none'}"
+            print(f"[{status}] {rel_path}: detected={record['detected_combos']} expected={expected_desc}")
+            for failure in record.get("alert_failures", []):
+                print(f"        ALERT-CHECK: {failure}")
             if status == "FAIL" and normalized is not None:
                 fail_dir = RESULTS_DIR / "failures"
                 fail_dir.mkdir(parents=True, exist_ok=True)

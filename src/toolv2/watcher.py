@@ -11,7 +11,7 @@ from .capture import create_capture, set_dpi_awareness
 from .config import AppConfig, load_config, templates_dir
 from .logging_io import alert_samples_dir, append_event, debug_dir, timestamp
 from .pipeline import Pipeline
-from .region import NeedsCalibration, RegionResolver, validate_region
+from .region import RegionResolver
 
 
 def run_watch(*, debug: bool = False, config: AppConfig | None = None) -> None:
@@ -41,6 +41,9 @@ def run_watch(*, debug: bool = False, config: AppConfig | None = None) -> None:
             print("Debug hotkey unavailable on this platform; no keyboard snapshots will be saved.")
 
     frame_index = 0
+    misfire_count = 0
+    calibration_hint_shown = False
+    seen_prints: dict[str, float] = {}
     try:
         while True:
             started = time.monotonic()
@@ -54,13 +57,20 @@ def run_watch(*, debug: bool = False, config: AppConfig | None = None) -> None:
 
             result = pipeline.detect(band, screen_height=screen_h, keep_normalized=True)
 
-            if result.candidate_rows > 0:
-                try:
-                    validation = validate_region(band, pipeline.detector.templates, screen_height=screen_h)
-                    resolver.record_validation(validation.ok)
-                except NeedsCalibration as exc:
-                    print(f"\n[!] {exc}\n    Continuing with current region; recalibrate when possible.")
-                    resolver.consecutive_failures = 0
+            # Region-health tracking: alert-free stretches are normal (spawns
+            # are random), so only frames with phrase-like rows that still
+            # classify to nothing count as misses — and the hint prints once.
+            if result.detections:
+                misfire_count = 0
+            elif result.phrase_row_boxes:
+                misfire_count += 1
+                if misfire_count >= config.validation_failures_before_calibration_prompt and not calibration_hint_shown:
+                    calibration_hint_shown = True
+                    print(
+                        f"\n[!] {misfire_count} frames had alert-like rows that never classified. "
+                        "If real alerts are being missed, run: python main.py calibrate\n"
+                        "    (Continuing to watch; this message won't repeat this session.)"
+                    )
 
             for detection in result.detections:
                 _x1, y1, _x2, y2 = detection.row_box
@@ -85,11 +95,16 @@ def run_watch(*, debug: bool = False, config: AppConfig | None = None) -> None:
                     if config.save_alert_samples and norm is not None:
                         _save_sample(norm, detection, label)
                 else:
-                    print(
-                        f"[SEEN] {event['ts']} {label} "
-                        f"score={detection.score:.2f} rarity={detection.rarity_score:.2f} "
-                        f"margin={detection.rarity_margin:.2f} priority={detection.is_priority}"
-                    )
+                    # At 4 fps a persisting row would spam the console; every
+                    # event still lands in events.jsonl regardless.
+                    last_print = seen_prints.get(digest)
+                    if last_print is None or time.monotonic() - last_print >= 5.0:
+                        seen_prints[digest] = time.monotonic()
+                        print(
+                            f"[SEEN] {event['ts']} {label} "
+                            f"score={detection.score:.2f} rarity={detection.rarity_score:.2f} "
+                            f"margin={detection.rarity_margin:.2f} priority={detection.is_priority}"
+                        )
 
             if debug and debug_hotkey is not None and debug_hotkey():
                 saved = _save_debug(band, result, reason="manual")

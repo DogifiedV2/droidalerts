@@ -89,6 +89,33 @@ def phrase_row_seeds(image_bgr: np.ndarray) -> list[int]:
     return seeds
 
 
+def band_has_phrase_evidence(image_bgr: np.ndarray, *, min_window_pixels: int = 600) -> bool:
+    """Cheap whole-band pre-gate (~2ms): does any 44px-tall window in the
+    spawn-phrase columns hold enough white outlined text to possibly be an
+    alert row? Frames without alerts skip the expensive template pipeline.
+
+    Deliberately laxer than the per-row gate (600 vs 700) — this must never
+    veto a real alert, only skip obviously empty frames.
+    """
+    h, w = image_bgr.shape[:2]
+    if w <= 340 or h < 20:
+        return False
+    strip = image_bgr[:, 330 : min(w, 720)]
+    b, g, r = cv2.split(strip)
+    maxc = np.maximum.reduce([r, g, b])
+    minc = np.minimum.reduce([r, g, b])
+    white = (r > 165) & (g > 165) & (b > 165) & ((maxc - minc) < 90)
+    gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY)
+    dark_near = cv2.dilate((gray < 115).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    profile = (white & dark_near).sum(axis=1)
+    if int(profile.sum()) < min_window_pixels:
+        return False
+    window = min(44, h)
+    cumulative = np.concatenate([[0], np.cumsum(profile)])
+    windowed = cumulative[window:] - cumulative[:-window]
+    return bool(windowed.size == 0 or windowed.max() >= min_window_pixels)
+
+
 def measured_row_heights(candidates: list[RowCandidate]) -> list[int]:
     """Heights of confident candidates only — used for scale estimation."""
     return [c.height for c in candidates if c.score >= 0.45 and 8 <= c.height <= 80]

@@ -9,7 +9,7 @@ import numpy as np
 from .classifier import Detection, DroidVisualDetector, column_drift_report
 from .config import Thresholds
 from .normalize import estimate_scale, normalize_band
-from .row_finder import find_candidate_rows, phrase_row_seeds
+from .row_finder import band_has_phrase_evidence, find_candidate_rows, phrase_row_seeds
 
 
 @dataclass
@@ -58,6 +58,20 @@ class Pipeline:
                 scale_max=self.thresholds.scale_max,
             )
         normalized = normalize_band(image_bgr, scale)
+        # Fast path: most live frames have no alerts at all. Every accepted
+        # row must pass the spawn-phrase gate anyway, so a band without any
+        # phrase-like white text can skip the expensive template pipeline.
+        if not band_has_phrase_evidence(normalized.image):
+            h, w = normalized.image.shape[:2]
+            return PipelineResult(
+                detections=[],
+                scale=scale,
+                scale_method=method,
+                candidate_rows=len(candidates),
+                normalized_shape=(h, w),
+                meta={"skipped": "no-phrase-evidence"},
+                normalized_image=normalized.image if keep_normalized else None,
+            )
         extra_ys = phrase_row_seeds(normalized.image)
         detections = self.detector.detect(normalized.image, extra_row_ys=extra_ys)
         h, w = normalized.image.shape[:2]

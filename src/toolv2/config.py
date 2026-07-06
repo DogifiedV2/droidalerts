@@ -48,7 +48,7 @@ class Thresholds:
 @dataclass
 class AppConfig:
     monitor_index: int = 1
-    capture_interval_seconds: float = 1.0
+    capture_interval_seconds: float = 0.25
     dedupe_seconds: float = 12.0
     alert_cooldown_seconds: float = 10.0
     sound_enabled: bool = True
@@ -71,7 +71,7 @@ class AppConfig:
         thresholds = data.get("thresholds") or {}
         config = cls(
             monitor_index=int(data.get("monitor_index", 1)),
-            capture_interval_seconds=float(data.get("capture_interval_seconds", 1.0)),
+            capture_interval_seconds=float(data.get("capture_interval_seconds", 0.25)),
             dedupe_seconds=float(data.get("dedupe_seconds", 12.0)),
             alert_cooldown_seconds=float(data.get("alert_cooldown_seconds", 10.0)),
             sound_enabled=bool(data.get("sound_enabled", True)),

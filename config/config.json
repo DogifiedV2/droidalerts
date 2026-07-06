@@ -1,6 +1,6 @@
 {
   "monitor_index": 1,
-  "capture_interval_seconds": 1.0,
+  "capture_interval_seconds": 0.25,
   "dedupe_seconds": 12.0,
   "alert_cooldown_seconds": 10.0,
   "sound_enabled": true,

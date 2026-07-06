@@ -50,6 +50,9 @@ class Detection:
     rarity_margin: float
     score: float
     source: str
+    # Word-shape template score for the *detected* rarity (not the argmax).
+    # Only gates Mythic alerts; defaults to 1.0 so non-Mythic paths are unaffected.
+    shape_score: float = 1.0
 
     @property
     def is_priority(self) -> bool:
@@ -60,10 +63,17 @@ class Detection:
         if not self.is_priority:
             return False
         if self.rarity == "Mythic":
+            # Real Mythic rows score 0.49-0.59 on the Mythic word shape;
+            # measured background fakes (billboard, HUD coins) stay <=0.29.
+            if self.shape_score < 0.40:
+                return False
             if self.droid == "Diamond":
                 return self.droid_score >= 0.55 and self.rarity_score >= 0.62 and self.rarity_margin >= 0.08
             if self.droid == "Rainbow":
-                return self.droid_score >= 0.85 and self.rarity_score >= 0.55 and self.rarity_margin >= 0.08
+                # 0.70 (was 0.85): the shape gate is the FP defense now — the
+                # billboard fake scored droid 1.00, while a real Mythic capture
+                # (IMG_6604) scores 0.75 and must alert.
+                return self.droid_score >= 0.70 and self.rarity_score >= 0.55 and self.rarity_margin >= 0.08
             if self.droid == "Beskar":
                 return self.droid_score >= 0.10 and self.rarity_score >= 0.66 and self.rarity_margin >= 0.08
             return self.droid_score >= 0.70 and self.rarity_score >= 0.66 and self.rarity_margin >= 0.08
@@ -366,13 +376,17 @@ def rarity_color_counts(image: np.ndarray, y: int, droid: str, *, row_height: in
     hue, sat, val = cv2.split(hsv)
     edges = cv2.Canny(gray, 35, 125)
     edge_near = cv2.dilate(edges, np.ones((5, 5), np.uint8), iterations=1) > 0
+    # Real rarity words are stroked with a dark outline (measured: 100% of
+    # their colored pixels are dark-adjacent; background color floods ~70%).
+    dark_near = cv2.dilate((gray < 95).astype(np.uint8), np.ones((5, 5), np.uint8), iterations=1) > 0
+    colored_gate = edge_near & dark_near
 
     return {
         "Common": int(((sat < 35) & (val >= 145) & (val <= 235) & edge_near).sum()),
-        "Rare": int(((hue >= 86) & (hue <= 102) & (sat >= 160) & (val >= 170) & edge_near).sum()),
-        "Epic": int(((hue >= 123) & (hue <= 139) & (sat >= 160) & (val >= 170) & edge_near).sum()),
-        "Legendary": int(((hue >= 10) & (hue <= 23) & (sat >= 160) & (val >= 170) & edge_near).sum()),
-        "Mythic": int(((hue >= 154) & (hue <= 174) & (sat >= 160) & (val >= 170) & edge_near).sum()),
+        "Rare": int(((hue >= 86) & (hue <= 102) & (sat >= 160) & (val >= 170) & colored_gate).sum()),
+        "Epic": int(((hue >= 123) & (hue <= 139) & (sat >= 160) & (val >= 170) & colored_gate).sum()),
+        "Legendary": int(((hue >= 10) & (hue <= 23) & (sat >= 160) & (val >= 170) & colored_gate).sum()),
+        "Mythic": int(((hue >= 154) & (hue <= 174) & (sat >= 160) & (val >= 170) & colored_gate).sum()),
     }
 
 
@@ -391,12 +405,14 @@ def rarity_text_color_counts(image: np.ndarray, y: int, droid: str, *, row_heigh
     hue, sat, val = cv2.split(hsv)
     edges = cv2.Canny(gray, 35, 125)
     edge_near = cv2.dilate(edges, np.ones((5, 5), np.uint8), iterations=1) > 0
+    dark_near = cv2.dilate((gray < 95).astype(np.uint8), np.ones((5, 5), np.uint8), iterations=1) > 0
+    colored_gate = edge_near & dark_near
     masks = {
         "Common": (sat < 35) & (val >= 145) & (val <= 235) & edge_near,
-        "Rare": (hue >= 86) & (hue <= 102) & (sat >= 160) & (val >= 170) & edge_near,
-        "Epic": (hue >= 123) & (hue <= 139) & (sat >= 160) & (val >= 170) & edge_near,
-        "Legendary": (hue >= 10) & (hue <= 23) & (sat >= 160) & (val >= 170) & edge_near,
-        "Mythic": (hue >= 154) & (hue <= 174) & (sat >= 160) & (val >= 170) & edge_near,
+        "Rare": (hue >= 86) & (hue <= 102) & (sat >= 160) & (val >= 170) & colored_gate,
+        "Epic": (hue >= 123) & (hue <= 139) & (sat >= 160) & (val >= 170) & colored_gate,
+        "Legendary": (hue >= 10) & (hue <= 23) & (sat >= 160) & (val >= 170) & colored_gate,
+        "Mythic": (hue >= 154) & (hue <= 174) & (sat >= 160) & (val >= 170) & colored_gate,
     }
 
     crop_h, crop_w = crop.shape[:2]
@@ -419,6 +435,10 @@ def rarity_text_color_counts(image: np.ndarray, y: int, droid: str, *, row_heigh
                 area >= 8
                 and component_w >= 2
                 and component_h >= 3
+                # Glyphs are 13-26px tall at reference scale (a blur-merged
+                # word stays under ~30); HUD coins (~55px) and billboard
+                # blobs are taller and must not count as rarity text.
+                and component_h <= 30
                 and area <= max_area
                 and not (touches_top and touches_bottom)
                 and not (touches_left and touches_right)
@@ -518,14 +538,15 @@ def classify_rarity_word_shape(
     *,
     row_height: int,
     threshold: float = 0.35,
+    word_matches: list[RarityCandidate] | None = None,
 ) -> tuple[str, float, float, str]:
-    if not templates:
+    if not templates and word_matches is None:
         return "Unknown", 0.0, 0.0, "shape:no-templates"
 
     row_center = y + (row_height // 2)
     matches = [
         match
-        for match in rarity_candidates(image, templates, threshold)
+        for match in rarity_candidates(image, templates, threshold, matches=word_matches)
         if abs(((match.box[1] + match.box[3]) // 2) - row_center) <= 18
     ]
     if not matches:
@@ -546,6 +567,7 @@ def classify_rarity_roi(
     shape_templates: list[Template] | None = None,
     *,
     row_height: int,
+    word_matches: list[RarityCandidate] | None = None,
 ) -> tuple[str, float, float, str]:
     templates = templates_by_droid.get(droid, [])
     if not templates:
@@ -587,6 +609,7 @@ def classify_rarity_roi(
         y,
         shape_templates or [],
         row_height=row_height,
+        word_matches=word_matches,
     )
     if (
         color_rarity in {"Legendary", "Mythic"}
@@ -660,27 +683,105 @@ def classify_rarity_roi(
     return rarity, float(score), float(margin), template_name
 
 
-def rarity_candidates(image: np.ndarray, templates: list[Template], threshold: float) -> list[RarityCandidate]:
-    edge = preprocess_for_template(image)
-    candidates: list[RarityCandidate] = []
+def _word_search_edges(image: np.ndarray) -> np.ndarray:
+    """Edge map for rarity-word template search, restricted to the columns
+    where the word can appear (center-x <= 430, widest template ~250px).
+    Cuts matchTemplate cost ~2x vs the full 845px band."""
+    return preprocess_for_template(image[:, : min(image.shape[1], 560)])
+
+
+def collect_word_matches(
+    image: np.ndarray,
+    templates: list[Template],
+    *,
+    min_score: float = 0.20,
+    per_template_cap: int = 48,
+) -> list[RarityCandidate]:
+    """One matchTemplate pass over the band for ALL rarity-word templates.
+
+    Every consumer (row seeding, word-shape argmax, per-rarity shape gate)
+    filters this shared list instead of re-scanning — the scan dominated
+    per-frame cost when repeated per row. Raw matches, no NMS: the Mythic
+    alert gate needs per-rarity maxima that NMS would suppress.
+    """
+    edge = _word_search_edges(image)
+    matches: list[RarityCandidate] = []
     for template in templates:
         templ = template.image
         if templ.shape[0] > edge.shape[0] or templ.shape[1] > edge.shape[1]:
             continue
         result = cv2.matchTemplate(edge, templ, cv2.TM_CCOEFF_NORMED)
-        ys, xs = np.where(result >= threshold)
-        for x, y in zip(xs.tolist(), ys.tolist()):
+        ys, xs = np.where(result >= min_score)
+        if ys.size == 0:
+            continue
+        scores = result[ys, xs]
+        if ys.size > per_template_cap:
+            keep = np.argpartition(scores, -per_template_cap)[-per_template_cap:]
+            ys, xs, scores = ys[keep], xs[keep], scores[keep]
+        for x, y, score in zip(xs.tolist(), ys.tolist(), scores.tolist()):
             center_x = x + templ.shape[1] // 2
             if center_x < 175 or center_x > 430:
                 continue
-            candidates.append(
+            matches.append(
                 RarityCandidate(
                     rarity=template.rarity,
-                    score=float(result[y, x]),
+                    score=float(score),
                     box=(x, y, x + templ.shape[1], y + templ.shape[0]),
                     template_name=template.path.name,
                 )
             )
+    return matches
+
+
+def rarity_word_shape_score(
+    image: np.ndarray,
+    y: int,
+    rarity: str,
+    templates: list[Template],
+    *,
+    row_height: int,
+) -> float:
+    """Best word-shape template score for one specific rarity near a row.
+
+    Unlike classify_rarity_word_shape (argmax across rarities), this answers
+    "how strongly does THIS rarity's word appear here" — needed because a
+    busy background can push another rarity's template above the true one.
+    """
+    matches = collect_word_matches(image, [t for t in templates if t.rarity == rarity])
+    return rarity_word_shape_score_from_matches(matches, y, rarity, row_height=row_height)
+
+
+def rarity_word_shape_score_from_matches(
+    matches: list[RarityCandidate],
+    y: int,
+    rarity: str,
+    *,
+    row_height: int,
+) -> float:
+    row_center = y + row_height // 2
+    best = 0.0
+    for match in matches:
+        if match.rarity != rarity:
+            continue
+        # 26px: detected rows can sit ~15px off the true row top, and word
+        # centers land low in the row; stays under the 33px row spacing so
+        # an adjacent row's word can't be borrowed.
+        if abs(((match.box[1] + match.box[3]) // 2) - row_center) > 26:
+            continue
+        best = max(best, match.score)
+    return best
+
+
+def rarity_candidates(
+    image: np.ndarray,
+    templates: list[Template],
+    threshold: float,
+    *,
+    matches: list[RarityCandidate] | None = None,
+) -> list[RarityCandidate]:
+    if matches is None:
+        matches = collect_word_matches(image, templates, min_score=threshold)
+    candidates = [match for match in matches if match.score >= threshold]
 
     selected: list[RarityCandidate] = []
     for candidate in sorted(candidates, key=lambda item: item.score, reverse=True):
@@ -713,10 +814,11 @@ def row_positions_from_rarity_candidates(
     *,
     threshold: float,
     row_height: int,
+    matches: list[RarityCandidate] | None = None,
 ) -> list[int]:
     h = image.shape[0]
     rows: list[tuple[int, float]] = []
-    for rarity_match in rarity_candidates(image, templates, threshold):
+    for rarity_match in rarity_candidates(image, templates, threshold, matches=matches):
         _rx1, ry1, _rx2, ry2 = rarity_match.box
         center_y = (ry1 + ry2) // 2
         y = max(0, min(h - row_height, center_y - row_height // 2))
@@ -748,11 +850,15 @@ class DroidVisualDetector:
 
     def detect(self, image: np.ndarray, extra_row_ys: list[int] | None = None) -> list[Detection]:
         h, w = image.shape[:2]
+        # Single template pass per frame; every downstream consumer filters
+        # this list. min_score 0.20 covers the lowest threshold in use.
+        word_matches = collect_word_matches(image, self.templates, min_score=0.20)
         row_ys = row_positions_from_rarity_candidates(
             image,
             self.templates,
             threshold=self.rarity_threshold,
             row_height=self.row_height,
+            matches=word_matches,
         )
         # Extra seeds (e.g. from the resolution-relative row finder) go through
         # the exact same per-row gates; template-seeded rows take precedence.
@@ -781,11 +887,17 @@ class DroidVisualDetector:
                 self.rarity_roi_templates,
                 self.templates,
                 row_height=self.row_height,
+                word_matches=word_matches,
             )
             if rarity == "Unknown":
                 continue
 
             score = (rarity_score * 0.72) + (droid_score * 0.28)
+            shape_score = 1.0
+            if rarity == "Mythic":
+                shape_score = rarity_word_shape_score_from_matches(
+                    word_matches, y, rarity, row_height=self.row_height
+                )
             candidates.append(
                 Detection(
                     droid=droid,
@@ -796,6 +908,7 @@ class DroidVisualDetector:
                     rarity_margin=float(rarity_margin),
                     score=float(score),
                     source=f"roi:{template_name}",
+                    shape_score=float(shape_score),
                 )
             )
 
