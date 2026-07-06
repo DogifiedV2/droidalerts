@@ -84,6 +84,7 @@ class DroidAlertsApp:
         self.watch_thread: threading.Thread | None = None
         self.stop_event: threading.Event | None = None
         self.region_overlay: tk.Toplevel | None = None
+        self.region_overlay_windows: list[tk.Toplevel] = []
         self.region_box: PixelBox | None = None
         self.region_source: str = ""
         self.region_screen_size: tuple[int, int] | None = None
@@ -1164,13 +1165,27 @@ class DroidAlertsApp:
             capture.close()
 
     def close_region_overlay(self) -> None:
-        if self.region_overlay is not None and self.region_overlay.winfo_exists():
-            self.region_overlay.destroy()
-        self.region_overlay = None
+        self.destroy_region_overlay_windows()
         self.region_box = None
         self.region_source = ""
         self.region_screen_size = None
         self.set_region_controls_visible(False)
+
+    def destroy_region_overlay_windows(self) -> None:
+        for overlay in self.region_overlay_windows:
+            try:
+                if overlay.winfo_exists():
+                    overlay.destroy()
+            except Exception:
+                pass
+        if self.region_overlay is not None:
+            try:
+                if self.region_overlay.winfo_exists():
+                    self.region_overlay.destroy()
+            except Exception:
+                pass
+        self.region_overlay = None
+        self.region_overlay_windows = []
 
     def set_region_controls_visible(self, visible: bool) -> None:
         if hasattr(self, "region_adjust_frame"):
@@ -1205,9 +1220,7 @@ class DroidAlertsApp:
             },
             monitor_signature={"width": screen_w, "height": screen_h},
         ).save()
-        if self.region_overlay is not None and self.region_overlay.winfo_exists():
-            self.region_overlay.destroy()
-            self.region_overlay = None
+        self.destroy_region_overlay_windows()
         left_offset, top_offset = self.region_monitor_offset
         self.show_region_overlay(
             left_offset + self.region_box.left,
@@ -1229,8 +1242,7 @@ class DroidAlertsApp:
         )
         overlay_was_open = self.region_overlay is not None and self.region_overlay.winfo_exists()
         if overlay_was_open:
-            self.region_overlay.destroy()
-            self.region_overlay = None
+            self.destroy_region_overlay_windows()
             self.region_box = None
             self.region_source = ""
             self.region_screen_size = None
@@ -1240,30 +1252,53 @@ class DroidAlertsApp:
             self.detail_var.set(note)
 
     def show_region_overlay(self, left: int, top: int, width: int, height: int, source: str) -> None:
-        overlay = tk.Toplevel(self.root)
-        overlay.overrideredirect(True)
-        overlay.attributes("-topmost", True)
-        transparent = "#010203"
-        overlay.configure(bg=transparent)
-        try:
-            overlay.attributes("-transparentcolor", transparent)
-            canvas_bg = transparent
-        except Exception:
-            canvas_bg = "#ff1744"
-            overlay.configure(bg=canvas_bg)
-        overlay.geometry(f"{width}x{height}+{left}+{top}")
-        canvas = tk.Canvas(overlay, width=width, height=height, bg=canvas_bg, highlightthickness=0)
-        canvas.pack(fill="both", expand=True)
-        canvas.create_rectangle(3, 3, width - 4, height - 4, outline="#ff1744", width=5)
-        canvas.create_text(
-            12,
-            12,
-            text=f"Droid Alerts region: {source}",
-            fill="#ff1744",
-            anchor="nw",
-            font=("Segoe UI", 14, "bold"),
-        )
-        self.region_overlay = overlay
+        self.destroy_region_overlay_windows()
+        color = "#ff1744"
+        thickness = 5
+        left = int(left)
+        top = int(top)
+        width = max(1, int(width))
+        height = max(1, int(height))
+        thickness = min(thickness, max(1, width), max(1, height))
+        windows: list[tk.Toplevel] = []
+
+        def add_bar(x: int, y: int, w: int, h: int) -> None:
+            if w <= 0 or h <= 0:
+                return
+            bar = tk.Toplevel(self.root)
+            bar.overrideredirect(True)
+            bar.attributes("-topmost", True)
+            bar.configure(bg=color)
+            bar.geometry(f"{w}x{h}+{x}+{y}")
+            windows.append(bar)
+
+        add_bar(left, top, width, thickness)
+        add_bar(left, top + height - thickness, width, thickness)
+        add_bar(left, top, thickness, height)
+        add_bar(left + width - thickness, top, thickness, height)
+
+        title = f"Droid Alerts region: {source}"
+        label_height = 24
+        if top >= label_height + 4:
+            label = tk.Toplevel(self.root)
+            label.overrideredirect(True)
+            label.attributes("-topmost", True)
+            label.configure(bg=color)
+            label_width = min(width, max(230, min(420, len(title) * 9 + 18)))
+            label.geometry(f"{label_width}x{label_height}+{left}+{top - label_height - 2}")
+            tk.Label(
+                label,
+                text=title,
+                bg=color,
+                fg="white",
+                anchor="w",
+                font=("Segoe UI", 10, "bold"),
+                padx=8,
+            ).pack(fill="both", expand=True)
+            windows.append(label)
+
+        self.region_overlay_windows = windows
+        self.region_overlay = windows[0] if windows else None
 
     def check_updates(self, *, manual: bool) -> None:
         if self.update_check_running:
@@ -1319,8 +1354,7 @@ class DroidAlertsApp:
                 pass
         if self.stop_event is not None:
             self.stop_event.set()
-        if self.region_overlay is not None and self.region_overlay.winfo_exists():
-            self.region_overlay.destroy()
+        self.destroy_region_overlay_windows()
         self.root.destroy()
 
 
