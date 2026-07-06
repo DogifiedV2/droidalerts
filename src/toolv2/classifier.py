@@ -246,6 +246,76 @@ def color_scores(row: np.ndarray) -> dict[str, float]:
     }
 
 
+def droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
+    """Dark-outlined, glyph-sized text components in the droid-word columns.
+
+    The droid NAME ('Diamond'/'Rainbow'/'Beskar' + 'Droid') is rendered in the
+    droid's colors, sits on the backdrop, and is far larger than the icon —
+    scenery blobs can't imitate letter-shaped outlined text (same filtering
+    that made rarity classification background-proof). Columns 30-240 stop
+    short of the rarity word so e.g. a cyan '(Rare)' can't inflate Diamond.
+    """
+    h, w = row.shape[:2]
+    win = row[:, 30 : min(w, 240)]
+    if win.size == 0:
+        return {"cyan": 0, "gray": 0, "colored_total": 0, "strong_families": 0}
+    hsv = cv2.cvtColor(win, cv2.COLOR_BGR2HSV)
+    gray_img = cv2.cvtColor(win, cv2.COLOR_BGR2GRAY)
+    hue, sat, val = cv2.split(hsv)
+    edge_near = cv2.dilate(cv2.Canny(gray_img, 35, 125), np.ones((3, 3), np.uint8)) > 0
+    dark_near = cv2.dilate((gray_img < 95).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    gate = edge_near & dark_near
+
+    def text_shaped_count(mask: np.ndarray) -> int:
+        component_mask = mask.astype(np.uint8)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(component_mask, 8)
+        keep = np.zeros_like(component_mask, dtype=bool)
+        for i in range(1, n):
+            x, y, cw, ch, area = (int(v) for v in stats[i])
+            if area >= 8 and cw >= 2 and 3 <= ch <= 30 and area <= 2600:
+                keep |= labels == i
+        return int((mask & keep).sum())
+
+    colored = (sat >= 110) & (val >= 140) & gate
+    families = {
+        "cyan": colored & (hue >= 78) & (hue <= 105),
+        "green": colored & (hue >= 38) & (hue < 78),
+        "yellow": colored & (hue >= 24) & (hue < 38),
+        "orange": colored & (hue >= 5) & (hue < 24),
+        "magenta": colored & ((hue >= 155) | (hue <= 4)),
+        "purple": colored & (hue >= 122) & (hue < 155),
+    }
+    counts = {name: text_shaped_count(mask) for name, mask in families.items()}
+    return {
+        "cyan": counts["cyan"],
+        "gray": text_shaped_count((sat < 55) & (val > 150) & gate),
+        "colored_total": sum(counts.values()),
+        "strong_families": sum(1 for v in counts.values() if v >= 60),
+    }
+
+
+def classify_droid_word(row: np.ndarray) -> tuple[str, float] | None:
+    """Droid family from the droid-word text; None when evidence is weak.
+
+    Thresholds measured across all 44 labeled fixture rows (2026-07-06):
+    Rainbow rows show 5-6 strong hue families; Diamond rows cyan 1422-1651
+    with cyan >=78% of colored text; Beskar rows gray 1041-2182 with cyan
+    <=232. No overlaps at these gates.
+    """
+    p = droid_word_text_profile(row)
+    if p["strong_families"] >= 4 and p["colored_total"] >= 800:
+        return "Rainbow", min(0.99, p["colored_total"] / 1200.0)
+    if (
+        p["cyan"] >= 700
+        and p["strong_families"] <= 3
+        and p["cyan"] >= 0.6 * max(1, p["colored_total"])
+    ):
+        return "Diamond", min(0.99, p["cyan"] / 1000.0)
+    if p["gray"] >= 700 and p["cyan"] < 700 and p["strong_families"] <= 3:
+        return "Beskar", min(0.99, p["gray"] / 900.0)
+    return None
+
+
 def best_droid_type(row: np.ndarray) -> tuple[str, float]:
     scores = color_scores(row)
     if scores["Rainbow"] >= 0.75:
@@ -874,11 +944,20 @@ class DroidVisualDetector:
             if not has_spawn_phrase_structure(row):
                 continue
 
-            droid, droid_score = best_droid_type(row)
-            if droid_score < self.droid_threshold:
-                continue
-            if not has_droid_icon_structure(row, droid):
-                continue
+            # Word-text verdict first: background-proof and unambiguous when
+            # it fires. Legacy icon-window path (plus icon-structure gate)
+            # only for rows without strong word evidence.
+            word_verdict = classify_droid_word(row)
+            if word_verdict is not None:
+                droid, droid_score = word_verdict
+                if droid_score < self.droid_threshold:
+                    continue
+            else:
+                droid, droid_score = best_droid_type(row)
+                if droid_score < self.droid_threshold:
+                    continue
+                if not has_droid_icon_structure(row, droid):
+                    continue
 
             rarity, rarity_score, rarity_margin, template_name = classify_rarity_roi(
                 image,
