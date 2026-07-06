@@ -154,13 +154,16 @@ class DroidAlertsApp:
         notebook.grid(row=1, column=0, sticky="nsew")
 
         self.settings_tab = ttk.Frame(notebook, padding=12)
+        self.runtime_tab = ttk.Frame(notebook, padding=12)
         self.logs_tab = ttk.Frame(notebook, padding=12)
         self.files_tab = ttk.Frame(notebook, padding=12)
         notebook.add(self.settings_tab, text="Settings")
+        notebook.add(self.runtime_tab, text="Runtime")
         notebook.add(self.logs_tab, text="Logs")
         notebook.add(self.files_tab, text="Files")
 
         self._build_settings_tab()
+        self._build_runtime_tab()
         self._build_logs_tab()
         self._build_files_tab()
 
@@ -170,10 +173,19 @@ class DroidAlertsApp:
         inner.pack(fill="both", expand=True)
         return outer, inner
 
+    def _add_save_actions(self, parent, *, row: int, columnspan: int = 1) -> None:
+        actions = ttk.Frame(parent)
+        actions.grid(row=row, column=0, columnspan=columnspan, sticky="ew", pady=(12, 0))
+        actions.columnconfigure(0, weight=1)
+        ttk.Button(actions, text="Reload", command=self.load_settings).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(actions, text="Save", command=self.save_settings, **bootstyle("success")).grid(
+            row=0, column=2
+        )
+
     def _build_settings_tab(self) -> None:
         self.settings_tab.columnconfigure(0, weight=1)
         self.settings_tab.columnconfigure(1, weight=1)
-        self.settings_tab.rowconfigure(1, weight=1)
+        self.settings_tab.rowconfigure(0, weight=1)
 
         alerts_outer, alerts_frame = self._labeled_section(self.settings_tab, "Priority Alerts")
         alerts_outer.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
@@ -248,8 +260,14 @@ class DroidAlertsApp:
             **bootstyle("warning-outline"),
         ).grid(row=5, column=1, padx=(12, 0), sticky="ew")
 
-        runtime_outer, runtime_frame = self._labeled_section(self.settings_tab, "Runtime")
-        runtime_outer.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(12, 0))
+        self._add_save_actions(self.settings_tab, row=1, columnspan=2)
+
+    def _build_runtime_tab(self) -> None:
+        self.runtime_tab.columnconfigure(0, weight=1)
+        self.runtime_tab.rowconfigure(0, weight=1)
+
+        runtime_outer, runtime_frame = self._labeled_section(self.runtime_tab, "Runtime")
+        runtime_outer.grid(row=0, column=0, sticky="nsew")
         for column in (1, 3):
             runtime_frame.columnconfigure(column, weight=1)
 
@@ -288,13 +306,7 @@ class DroidAlertsApp:
             entry = ttk.Entry(runtime_frame, textvariable=var, width=28)
             entry.grid(row=row, column=column + 1, sticky="ew", padx=(8, 18), pady=5)
 
-        actions = ttk.Frame(self.settings_tab)
-        actions.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
-        actions.columnconfigure(0, weight=1)
-        ttk.Button(actions, text="Reload", command=self.load_settings).grid(row=0, column=1, padx=(0, 8))
-        ttk.Button(actions, text="Save", command=self.save_settings, **bootstyle("success")).grid(
-            row=0, column=2
-        )
+        self._add_save_actions(self.runtime_tab, row=1)
 
     def _build_logs_tab(self) -> None:
         self.logs_tab.rowconfigure(0, weight=1)
