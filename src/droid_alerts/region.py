@@ -13,13 +13,19 @@ from .config import CALIBRATION_FILE, config_dir
 from .normalize import estimate_scale, normalize_band
 from .row_finder import find_candidate_rows
 
-# Position-notes "safer" auto box for wide 16:9/21:9 captures.
+# Position-notes "safer" auto box for standard wide captures.
 AUTO_BOX_PERCENT = {"left": 0.0, "top": 0.47, "width": 0.33, "height": 0.16}
 
 # Compact 4:3-ish captures place the same chat alert row higher on screen.
 # Measured on a 1439x1079 capture: alert text y=413-469 (38.3%-43.5%).
 COMPACT_ASPECT_MAX = 1.50
 COMPACT_AUTO_BOX_PERCENT = {"left": 0.0, "top": 0.36, "width": 0.33, "height": 0.16}
+
+# 3440-wide ultrawide captures place the chat alert row above the standard
+# wide profile. Measured from a 3440x1392 capture where the old 47% top started
+# below the alert row.
+ULTRAWIDE_ASPECT_MIN = 2.20
+ULTRAWIDE_AUTO_BOX_PERCENT = {"left": 0.0, "top": 0.40, "width": 0.33, "height": 0.16}
 
 
 class NeedsCalibration(Exception):
@@ -37,14 +43,21 @@ def auto_box_percent(screen_width: int, screen_height: int) -> PixelBox:
 
 
 def auto_box_ratios(screen_width: int, screen_height: int) -> dict[str, float]:
-    if auto_box_profile(screen_width, screen_height) == "compact":
+    profile = auto_box_profile(screen_width, screen_height)
+    if profile == "compact":
         return COMPACT_AUTO_BOX_PERCENT
+    if profile == "ultrawide":
+        return ULTRAWIDE_AUTO_BOX_PERCENT
     return AUTO_BOX_PERCENT
 
 
 def auto_box_profile(screen_width: int, screen_height: int) -> str:
     aspect = screen_width / max(1, screen_height)
-    return "compact" if aspect <= COMPACT_ASPECT_MAX else "wide"
+    if aspect <= COMPACT_ASPECT_MAX:
+        return "compact"
+    if aspect >= ULTRAWIDE_ASPECT_MIN:
+        return "ultrawide"
+    return "wide"
 
 
 @dataclass
@@ -69,7 +82,7 @@ def validate_region(
 
     Requires at least one candidate row showing icon-color-blob evidence plus
     rarity-word template evidence on the normalized band. Note: an empty chat
-    box legitimately fails this - callers must only count failures on frames
+    box legitimately fails this. Callers must only count failures on frames
     that contain candidate rows.
     """
     candidates = find_candidate_rows(band_bgr)
@@ -184,7 +197,7 @@ class RegionResolver:
             source = "manual(rescaled)" if self.signature_changed else "manual"
             return box, source
         profile = auto_box_profile(self.screen_width, self.screen_height)
-        source = "auto" if profile == "wide" else "auto(compact)"
+        source = "auto" if profile == "wide" else f"auto({profile})"
         return auto_box_percent(self.screen_width, self.screen_height), source
 
     def record_validation(self, ok: bool) -> None:

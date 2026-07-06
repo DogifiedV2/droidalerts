@@ -26,7 +26,7 @@ class NormalizedBand:
 def scale_from_screen(screen_height: int, screen_width: int | None = None) -> float:
     """The game fits its HUD to a 16:9 box: on 16:9 screens the UI scales
     with height, but on narrower aspects (e.g. 1440x1040, ~4:3) it scales
-    with WIDTH - measured on a real 4:3 user whose text was 0.5625x reference
+    with WIDTH. This was measured on a real 4:3 user whose text was 0.5625x reference
     (= 1440/2560), not the 0.72x that height alone predicts. min() of both
     ratios reproduces that fit exactly, and equals the old height-based value
     on every 16:9 screen (zero behavior change there)."""

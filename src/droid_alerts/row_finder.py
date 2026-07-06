@@ -94,7 +94,7 @@ def band_has_phrase_evidence(image_bgr: np.ndarray, *, min_window_pixels: int = 
     spawn-phrase columns hold enough white outlined text to possibly be an
     alert row? Frames without alerts skip the expensive template pipeline.
 
-    Deliberately laxer than the per-row gate (600 vs 700) - this must never
+    Deliberately laxer than the per-row gate (600 vs 700). This must never
     veto a real alert, only skip obviously empty frames.
     """
     h, w = image_bgr.shape[:2]
@@ -117,7 +117,7 @@ def band_has_phrase_evidence(image_bgr: np.ndarray, *, min_window_pixels: int = 
 
 
 def measured_row_heights(candidates: list[RowCandidate]) -> list[int]:
-    """Heights of confident candidates only - used for scale estimation."""
+    """Heights of confident candidates only, used for scale estimation."""
     return [c.height for c in candidates if c.score >= 0.45 and 8 <= c.height <= 80]
 
 

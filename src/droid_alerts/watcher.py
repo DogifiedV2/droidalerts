@@ -114,7 +114,7 @@ def run_watch(
 
             # Region-health tracking: alert-free stretches are normal (spawns
             # are random), so only frames with phrase-like rows that still
-            # classify to nothing count as misses - and the hint prints once.
+            # classify to nothing count as misses, and the hint prints once.
             if result.detections:
                 misfire_count = 0
             elif result.phrase_row_boxes:

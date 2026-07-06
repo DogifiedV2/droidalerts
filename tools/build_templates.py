@@ -37,7 +37,7 @@ ROW_HEIGHT = REFERENCE_ROW_HEIGHT_PX
 # Sources whose old debug overlays must be erased before cropping.
 OVERLAYED_SOURCES = {"IMG_6604.png", "IMG_6605.png", "IMG_6606.png", "IMG_6607.png", "IMG_6608.png"}
 
-# (rarity, source, (x1, y1, x2, y2)) - rarity-word shape templates.
+# (rarity, source, (x1, y1, x2, y2)): rarity-word shape templates.
 REFERENCE_CROPS: list[tuple[str, str, tuple[int, int, int, int]]] = [
     ("Common", "beskarcommon.png", (180, 20, 410, 64)),
     ("Common", "beskarcommonepicmythic.png", (180, 40, 410, 84)),
@@ -70,7 +70,7 @@ REFERENCE_CROPS: list[tuple[str, str, tuple[int, int, int, int]]] = [
     ("Mythic", "IMG_6608.png", (180, 157, 410, 201)),
 ]
 
-# (droid, rarity, name, source, row_top_y) - full rarity-ROI templates.
+# (droid, rarity, name, source, row_top_y): full rarity-ROI templates.
 RARITY_ROI_CROPS: list[tuple[str, str, str, str, int]] = [
     ("Beskar", "Common", "BC_beskarcommon", "beskarcommon.png", 20),
     ("Beskar", "Common", "BC_stack", "beskarcommonepicmythic.png", 40),

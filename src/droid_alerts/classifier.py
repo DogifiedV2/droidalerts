@@ -70,7 +70,7 @@ class Detection:
             if self.droid == "Diamond":
                 return self.droid_score >= 0.55 and self.rarity_score >= 0.62 and self.rarity_margin >= 0.08
             if self.droid == "Rainbow":
-                # 0.70 (was 0.85): the shape gate is the FP defense now - the
+                # 0.70 (was 0.85): the shape gate is the FP defense now. The
                 # billboard fake scored droid 1.00, while a real Mythic capture
                 # (IMG_6604) scores 0.75 and must alert.
                 return self.droid_score >= 0.70 and self.rarity_score >= 0.55 and self.rarity_margin >= 0.08
@@ -770,7 +770,7 @@ def collect_word_matches(
     """One matchTemplate pass over the band for ALL rarity-word templates.
 
     Every consumer (row seeding, word-shape argmax, per-rarity shape gate)
-    filters this shared list instead of re-scanning - the scan dominated
+    filters this shared list instead of re-scanning. The scan dominated
     per-frame cost when repeated per row. Raw matches, no NMS: the Mythic
     alert gate needs per-rarity maxima that NMS would suppress.
     """
@@ -814,7 +814,7 @@ def rarity_word_shape_score(
     """Best word-shape template score for one specific rarity near a row.
 
     Unlike classify_rarity_word_shape (argmax across rarities), this answers
-    "how strongly does THIS rarity's word appear here" - needed because a
+    "how strongly does THIS rarity's word appear here", which is needed because a
     busy background can push another rarity's template above the true one.
     """
     matches = collect_word_matches(image, [t for t in templates if t.rarity == rarity])
