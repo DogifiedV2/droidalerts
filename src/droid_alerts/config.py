@@ -7,7 +7,7 @@ from typing import Any
 
 
 def project_root() -> Path:
-    """Droid Alerts project root. Everything lives under here — the tool is fully
+    """Droid Alerts project root. Everything lives under here - the tool is fully
     self-contained and never writes to OS user-data directories."""
     return Path(__file__).resolve().parents[2]
 

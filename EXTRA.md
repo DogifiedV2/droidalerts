@@ -1,4 +1,4 @@
-# Droid Alerts — technical notes
+# Droid Alerts - technical notes
 
 Everything here is for people who want to run Droid Alerts from the command
 line, understand how the detection works, or contribute captures. If you just
@@ -23,19 +23,19 @@ Runtime templates are committed under `templates/`, so a fresh checkout can run
 live detection right after installing dependencies.
 
 The tool writes runtime data (logs, alert samples, debug screenshots) only
-under its own folder — never to OS user-data directories. The public repo
+under its own folder - never to OS user-data directories. The public repo
 intentionally excludes local captures, logs, screenshots, and training data.
 
 ## How detection works
 
 1. **Region** (`src/droid_alerts/region.py`): the chat-alert area is found as a
-   percent-of-screen band — left 0%, width 33%, height 16%. Wide screens use
+   percent-of-screen band - left 0%, width 33%, height 16%. Wide screens use
    top 47%; compact screens (aspect <= 1.50, e.g. 1440x1040) use top 36%
    because the alert rows sit higher. Manual calibration is stored as
    *percent ratios* in `config/calibration.json`, so it survives resolution
    changes.
 2. **Scale normalization** (`normalize.py`): the captured band is resized so
-   alert rows are 44px tall — the reference scale the templates and column
+   alert rows are 44px tall - the reference scale the templates and column
    constants were measured at. The game fits its HUD to a 16:9 box, so the
    scale is `min(width / 2560, height / 1440)`.
 3. **Row seeding** (`row_finder.py`): resolution-relative foreground masks
@@ -55,7 +55,7 @@ Priority detections that pass the alert policy print as `[ALERT]` and fire the
 enabled channels (sound, popup, ntfy, Pushover, Discord). Debug mode also
 prints non-alert detections as `[SEEN]`.
 
-Debug mode never saves screenshots automatically — press numpad `+` during
+Debug mode never saves screenshots automatically - press numpad `+` during
 `watch --debug` to save the current chat-box region plus a candidate-check
 overlay.
 

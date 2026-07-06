@@ -1,7 +1,7 @@
 """Generate synthetic multi-resolution stress fixtures from image.png.
 
 - 1920x1080 / 2560x1440: uniform resize (game UI scales with screen height).
-- 3440x1440 ultrawide: right-pad with replicated edge — real ultrawide keeps
+- 3440x1440 ultrawide: right-pad with replicated edge - real ultrawide keeps
   the left-anchored alert stack in place and widens FOV; stretching would be
   an unrealistic distortion.
 """

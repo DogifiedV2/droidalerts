@@ -35,7 +35,7 @@ RESULTS_DIR = BASE_DIR / "tests" / "results"
 
 # The single Beskar Mythic sample is a template-source crop; no real full-row
 # capture exists yet. Flagged in every report rather than silently passing.
-KNOWN_GAPS = ["Beskar Mythic: no real (non-template-source) full-row capture yet — please supply one when available."]
+KNOWN_GAPS = ["Beskar Mythic: no real (non-template-source) full-row capture yet - please supply one when available."]
 
 
 def load_manifest() -> dict:

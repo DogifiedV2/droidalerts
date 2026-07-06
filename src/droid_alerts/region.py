@@ -69,7 +69,7 @@ def validate_region(
 
     Requires at least one candidate row showing icon-color-blob evidence plus
     rarity-word template evidence on the normalized band. Note: an empty chat
-    box legitimately fails this — callers must only count failures on frames
+    box legitimately fails this - callers must only count failures on frames
     that contain candidate rows.
     """
     candidates = find_candidate_rows(band_bgr)

@@ -13,9 +13,9 @@ Out of the box it alerts on the five spawns worth dropping everything for:
 - **Beskar Legendary**
 - **Beskar Epic**
 
-It works on most pcs. It finds the chat box by itself,
-no setup needed. Everything it saves stays inside its own folder, and the
-screenshots it takes of the chat corner never leave your PC.
+It works on most PCs. It finds the chat box by itself, no setup needed.
+Everything it saves stays inside its own folder, and the screenshots it takes
+of the chat corner never leave your PC.
 
 ## How to install (Windows)
 
@@ -27,7 +27,7 @@ screenshots it takes of the chat corner never leave your PC.
    choose **Download ZIP**, then unzip it anywhere you like (your Desktop is
    fine).
 3. **Double-click `Start Droid Alerts.bat`** inside the folder. The first
-   start takes a minute while it downloads what it needs, after that it opens
+   start takes a minute while it downloads what it needs. After that it opens
    right away.
 
 That's it. Click **Start** in the app, go play, and it will ping you when
@@ -37,7 +37,7 @@ what an alert looks like.
 ## Get alerts on your phone
 
 The best part: Droid Alerts can ping your phone even when you're away from the
-PC. There are two options, pick whichever you like. Both have a **Set Up**
+PC. There are two options. Pick whichever you like. Both have a **Set Up**
 button in the app that walks you through everything step by step and sends a
 test alert to make sure it works.
 
@@ -49,7 +49,7 @@ reliable, loud notifications.
 1. Go to [pushover.net](https://pushover.net), create an account, and install
    the Pushover app on your phone.
 2. In Droid Alerts, click **Set Up Pushover**. It shows you exactly where to
-   find your User Key and how to create an API Token, just copy and paste
+   find your User Key and how to create an API Token. Just copy and paste
    them in.
 3. It sends a test alert to your phone so you know it's working.
 
@@ -70,7 +70,7 @@ Discord channel. The **Set Up Discord** button walks you through that too.
 
 - **No alerts coming through?** Make sure the game is on the monitor Droid
   Alerts is watching and the chat box is visible.
-- **Test alert works but nothing in-game?** Give it a moment. it checks the
+- **Test alert works but nothing in-game?** Give it a moment. It checks the
   chat several times a second, but spawns are random.
 - Anything beyond that, and for power-user features (command line, custom
   regions, debug mode), see [EXTRA.md](EXTRA.md).

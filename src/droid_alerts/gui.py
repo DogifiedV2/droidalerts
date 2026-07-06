@@ -477,7 +477,7 @@ class DroidAlertsApp:
 
         choice = self._setup_dialog(
             "Get Alerts On Your Phone",
-            intro="Droid Alerts can ping your phone the moment a priority droid spawns — "
+            intro="Droid Alerts can ping your phone the moment a priority droid spawns - "
             "even when you're away from your PC.\n\n"
             "The easiest way is the free ntfy app. Setting it up takes about two minutes. "
             "Want to do that now?",
@@ -539,7 +539,7 @@ class DroidAlertsApp:
         config.alert_targets = [list(combo) for combo in selected]
 
         # Channels that are on but not configured yet simply stay quiet until
-        # their Set Up button is used — no wizard nagging on every save.
+        # their Set Up button is used - no wizard nagging on every save.
         needs_setup = []
         if config.ntfy_enabled and not ntfy_configured(config):
             needs_setup.append("ntfy")
@@ -555,7 +555,7 @@ class DroidAlertsApp:
         saved_label = "Settings saved"
         if needs_setup:
             self.detail_var.set(
-                f"{saved_label} — {', '.join(needs_setup)} won't send alerts until set up"
+                f"{saved_label} - {', '.join(needs_setup)} won't send alerts until set up"
             )
         else:
             self.detail_var.set(saved_label)
@@ -647,8 +647,7 @@ class DroidAlertsApp:
                 text=note,
                 wraplength=wrap,
                 justify="left",
-                font=("Segoe UI", 9),
-                **bootstyle("secondary"),
+                font=("Segoe UI", 10),
             ).grid(row=row, column=0, sticky="w", pady=(10, 0))
             row += 1
         if error:
@@ -695,7 +694,7 @@ class DroidAlertsApp:
                 intro=f"A test alert was just sent through {channel}. "
                 "It should pop up on your phone within a few seconds.",
                 ok_text="It Arrived!",
-                cancel_text="It Didn't — Go Back",
+                cancel_text="It Didn't - Go Back",
             )
             is not None
         )
@@ -729,7 +728,7 @@ class DroidAlertsApp:
                 ("topic", "Topic name", topic, None)
             ]
             note = (
-                "Alerts are sent through ntfy.sh — no account needed. Turn on Advanced "
+                "Alerts are sent through ntfy.sh - no account needed. Turn on Advanced "
                 "settings to use your own ntfy server or an access token."
             )
             if config.advanced_mode:
@@ -743,8 +742,8 @@ class DroidAlertsApp:
                 steps=(
                     'Install the free "ntfy" app from the App Store or Google Play.',
                     "Open the app and tap the + button to add a subscription.",
-                    "Make up a topic name nobody could guess — something like "
-                    "droid-alerts-mando-4821 — and subscribe to it.",
+                    "Make up a topic name nobody could guess - something like "
+                    "droid-alerts-mando-4821 - and subscribe to it.",
                     "Type that exact same topic name below.",
                 ),
                 fields=tuple(fields),
@@ -758,7 +757,7 @@ class DroidAlertsApp:
             server_url = (result.get("server") or server_url).strip().rstrip("/") or "https://ntfy.sh"
             token = result.get("token", token)
             if not valid_ntfy_server_url(server_url):
-                error = "That server URL doesn't look right — it must start with http:// or https://."
+                error = "That server URL doesn't look right - it must start with http:// or https://."
                 continue
             if not valid_ntfy_topic(topic):
                 error = "Topic names can only use letters, numbers, - and _ (up to 64 characters)."

@@ -38,7 +38,7 @@ def _monitor_for_region(region: dict[str, int], monitors: list[dict[str, object]
 class RegionSelector:
     """Fullscreen frozen-frame drag selector (ported from the original
     select_chat_region.py). Saves ONLY percent ratios + monitor signature to
-    config/calibration.json — the ratios are the source of truth."""
+    config/calibration.json - the ratios are the source of truth."""
 
     def __init__(self, *, capture_delay: float = 0.0) -> None:
         self.root = tk.Tk()

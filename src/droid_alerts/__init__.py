@@ -1,4 +1,4 @@
-"""Droid Alerts — cross-PC Droid Tycoon alert detector.
+"""Droid Alerts - cross-PC Droid Tycoon alert detector.
 
 Combines portable percent-of-screen region auto-detection with a fixed-column
 classifier made scale-invariant by normalizing each captured band to the
