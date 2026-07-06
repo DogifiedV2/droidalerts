@@ -1,89 +1,76 @@
-# Droid Alerts — Cross-PC Droid Tycoon Alert Detector
+# Droid Alerts
 
-Watches the game's droid-spawn chat alerts and plays a sound on the five
-priority combos: **Beskar Epic, Beskar Legendary, Diamond Mythic,
-Rainbow Mythic, Beskar Mythic**.
+Droid Alerts watches the Droid Tycoon chat while you play and tells you the
+moment a rare droid spawns — with a sound, a popup on screen, and (if you want)
+a notification on your phone. No more staring at the chat box or missing a
+Mythic because you tabbed out.
 
-Works on any PC/monitor/resolution: the capture region is found as a
-percent-of-screen band (no manual pixel dragging needed), and every frame is
-scale-normalized to a 44px-row reference before the classifier runs, so the
-proven fixed-column detection logic stays valid everywhere.
+Out of the box it alerts on the five spawns worth dropping everything for:
 
-The tool writes runtime data only under this project folder. The public repo
-includes the generated runtime templates, but intentionally excludes local
-captures, logs, generated screenshots, and training data.
+- **Beskar Mythic**
+- **Rainbow Mythic**
+- **Diamond Mythic**
+- **Beskar Legendary**
+- **Beskar Epic**
 
-## Usage
+It works on any PC, monitor, or resolution — it finds the chat box by itself,
+no setup needed. Everything it saves stays inside its own folder, and the
+screenshots it takes of the chat corner never leave your PC.
 
-```
-python main.py gui              # open the interactive GUI
-python main.py watch            # run the live watcher
-python main.py watch --debug    # verbose + numpad + saves the current chat box/candidate check
-python main.py calibrate        # optional: drag the alert region manually
-python main.py calibrate --reset  # back to automatic region detection
-python main.py build-templates  # rebuild templates/ from training_data/current_ui/
-python main.py test             # run the fixture evaluation harness
-python main.py test --dump-unlabeled  # also dump review crops for unlabeled fixtures
-```
+## How to install (Windows)
 
-Install deps: `pip install -r requirements.txt`
+1. **Install Python** (a free program Droid Alerts runs on). Get it from
+   [python.org/downloads](https://www.python.org/downloads/) and click the big
+   yellow download button. When the installer opens, **tick the box that says
+   "Add python.exe to PATH"** at the bottom, then click Install.
+2. **Download Droid Alerts.** On this page, click the green **Code** button,
+   choose **Download ZIP**, then unzip it anywhere you like (your Desktop is
+   fine).
+3. **Double-click `Start Droid Alerts.bat`** inside the folder. The first
+   start takes a minute while it downloads what it needs — after that it opens
+   right away.
 
-Runtime templates are committed under `templates/`, so a fresh checkout can run
-live detection after installing dependencies.
+That's it. Click **Start** in the app, go play, and it will ping you when
+something good spawns. Use the **Test Alert** button any time to hear and see
+what an alert looks like.
 
-## How it works
+## Get alerts on your phone
 
-1. **Region** (`src/droid_alerts/region.py`): auto-box at left 0%, width 33%,
-   height 16% of the screen. Wide screens use top 47%; compact screens
-   (aspect <= 1.50, such as 1440x1040/1080) use top 36% because the chat
-   alert row is higher. Manual calibration is stored as *percent ratios* in
-   `config/calibration.json`, so it survives resolution changes.
-2. **Scale normalization** (`normalize.py`): the band is resized so alert
-   rows are 44px tall (scale = screen_height / 1440), the reference scale the
-   templates and column constants were captured at.
-3. **Row seeding** (`row_finder.py`): Tool V1's resolution-relative masks
-   plus a precise spawn-phrase white-text profile locate candidate rows.
-4. **Classification** (`classifier.py`): the reference detector, ported with
-   targeted robustness fixes (icon window anchored to content-left,
-   text-shaped color analysis allowed to override sand-inflated "Common",
-   blur-tolerant thresholds — all measured against fixtures).
-5. **Alerts** (`alerts.py`): per-combo score gates + cooldown + row-hash
-   dedupe; sound via `assets/sounds/*.wav` (first file found) or a beep.
+The best part: Droid Alerts can ping your phone even when you're away from the
+PC. There are two options — pick whichever you like. Both have a **Set Up**
+button in the app that walks you through everything step by step and sends a
+test alert to make sure it works.
 
-Live watch prints each unique non-alert spawn once as `[DETECTED]`. Priority
-detections that pass the alert policy print as `[ALERT]` and play the alert
-sound. When enabled in the GUI, priority alerts can also show the on-screen
-popup, send ntfy phone alerts, send Discord webhook messages, and send
-Pushover phone alerts. ntfy is the recommended phone option: install the ntfy
-app, subscribe to a private topic, then enter the server URL and topic in the
-GUI.
-Debug mode additionally prints non-alert detections as `[SEEN]`.
+### Pushover
 
-Debug mode does not save automatic screenshots. Press numpad `+` while
-`watch --debug` is running to save the current chat-box region and a
-candidate-check overlay for template review.
+Pushover is a paid app (one-time purchase after a free 30-day trial) with very
+reliable, loud notifications.
 
-## Testing
+1. Go to [pushover.net](https://pushover.net), create an account, and install
+   the Pushover app on your phone.
+2. In Droid Alerts, click **Set Up Pushover**. It shows you exactly where to
+   find your User Key and how to create an API Token — just copy and paste
+   them in.
+3. It sends a test alert to your phone so you know it's working.
 
-In a private checkout with templates and fixtures populated, `python main.py
-test` runs every fixture in `tests/fixtures/` and writes a scored report to
-`tests/results/`. Current private baseline: **32/32 labeled fixtures pass with
-zero false positives and zero false negatives**, including synthetic
-1920x1080 / 2560x1440 / 3440x1440 stress renders with identical results.
+### ntfy
 
-`python tests/test_paths_guard.py` asserts the tool never references OS
-user-data paths.
+ntfy is completely free and takes about two minutes.
 
-### Known gap
+1. Install the free **ntfy** app from the App Store or Google Play.
+2. In Droid Alerts, click **Set Up ntfy**. It tells you what to do: subscribe
+   to a made-up topic name in the app, type the same name into Droid Alerts,
+   done.
+3. It sends a test alert to your phone so you know it's working.
 
-No real (non-template-source) **Beskar Mythic** full-row capture exists yet.
-When one appears, drop it in `training_data/current_ui/` and
-`tests/fixtures/real_captures/`, add its crops to `tools/build_templates.py`,
-label it in `tests/fixtures/manifest.json`, rebuild and re-run the eval.
+There's also a **Discord** option if you'd rather have alerts posted into a
+Discord channel — the **Set Up Discord** button walks you through that too.
 
-## Adding new training captures
+## Something not working?
 
-1. Copy the screenshot into `training_data/current_ui/`.
-2. Add crop entries in `tools/build_templates.py` (row top y, at reference
-   scale; use `tests/run_eval.py --dump-unlabeled` review dumps to measure).
-3. `python main.py build-templates`, then `python main.py test`.
+- **No alerts coming through?** Make sure the game is on the monitor Droid
+  Alerts is watching and the chat box is visible.
+- **Test alert works but nothing in-game?** Give it a moment — it checks the
+  chat several times a second, but spawns are random.
+- Anything beyond that, and for power-user features (command line, custom
+  regions, debug mode), see [EXTRA.md](EXTRA.md).
