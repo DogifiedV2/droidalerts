@@ -11,6 +11,7 @@ Install dependencies once with `pip install -r requirements.txt`, then:
 ```
 python main.py gui                    # open the app (same as the .bat file)
 python main.py watch                  # run the watcher in the terminal, no GUI
+python main.py watch --extra-checks   # enable HDR / washed-out color fallback checks
 python main.py watch --debug          # verbose output; numpad + saves a chat-box snapshot
 python main.py calibrate              # drag-select the alert region manually
 python main.py calibrate --reset      # go back to automatic region detection

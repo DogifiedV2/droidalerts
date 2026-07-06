@@ -47,13 +47,13 @@ def find_candidate_rows(image_bgr: np.ndarray) -> list[RowCandidate]:
     return merged[:24]
 
 
-def phrase_row_seeds(image_bgr: np.ndarray) -> list[int]:
-    """Precise row-top seeds from the white 'spawned at the ...' phrase text.
+def phrase_text_bands(image_bgr: np.ndarray) -> list[tuple[int, int]]:
+    """(start_y, height) of each white 'spawned at the ...' text band.
 
     Runs on a reference-scale (normalized) band: scans the spawn-phrase
-    columns (330-720) for white-text bands with dark outlines; each band of
-    plausible glyph height marks a row top 13px above it (measured offset at
-    reference scale). Far more position-accurate than projection candidates.
+    columns (330-720) for white-text bands with dark outlines. At correct
+    scale the bands measure ~13px tall with ~32-33px pitch between rows;
+    deviations from that are the scale-refinement signal.
     """
     h, w = image_bgr.shape[:2]
     if w <= 340 or h < 20:
@@ -71,7 +71,7 @@ def phrase_row_seeds(image_bgr: np.ndarray) -> list[int]:
     # well below glyph-core counts; relative to strip width for narrow bands.
     threshold = max(20, int((x2 - 330) * 0.09))
 
-    seeds: list[int] = []
+    bands: list[tuple[int, int]] = []
     in_run = False
     start = 0
     for y in range(h):
@@ -83,10 +83,17 @@ def phrase_row_seeds(image_bgr: np.ndarray) -> list[int]:
             in_run = False
             band_h = y - start
             if 8 <= band_h <= 30:
-                seeds.append(max(0, start - 13))
+                bands.append((start, band_h))
     if in_run and 8 <= h - start <= 30:
-        seeds.append(max(0, start - 13))
-    return seeds
+        bands.append((start, h - start))
+    return bands
+
+
+def phrase_row_seeds(image_bgr: np.ndarray) -> list[int]:
+    """Precise row-top seeds from the spawn-phrase text bands: each band
+    marks a row top 13px above it (measured offset at reference scale). Far
+    more position-accurate than projection candidates."""
+    return [max(0, start - 13) for start, _height in phrase_text_bands(image_bgr)]
 
 
 def band_has_phrase_evidence(image_bgr: np.ndarray, *, min_window_pixels: int = 600) -> bool:

@@ -14,6 +14,11 @@ def main() -> None:
 
     watch = sub.add_parser("watch", help="Run the live watcher.")
     watch.add_argument("--debug", action="store_true", help="Verbose output + ROI/overlay dumps.")
+    watch.add_argument(
+        "--extra-checks",
+        action="store_true",
+        help="Enable the washed-out color/HDR fallback checks for this run.",
+    )
 
     sub.add_parser("gui", help="Open the interactive GUI.")
 
@@ -30,9 +35,13 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "watch":
+        from droid_alerts.config import load_config
         from droid_alerts.watcher import run_watch
 
-        run_watch(debug=args.debug)
+        config = load_config()
+        if args.extra_checks:
+            config.extra_checks = True
+        run_watch(debug=args.debug, config=config)
     elif args.command == "gui":
         from droid_alerts.gui import run_gui
 

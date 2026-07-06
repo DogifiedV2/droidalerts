@@ -9,7 +9,33 @@ import numpy as np
 from .classifier import Detection, DroidVisualDetector, column_drift_report
 from .config import Thresholds
 from .normalize import estimate_scale, normalize_band
-from .row_finder import band_has_phrase_evidence, find_candidate_rows, phrase_row_seeds
+from .row_finder import (
+    band_has_phrase_evidence,
+    find_candidate_rows,
+    phrase_row_seeds,
+    phrase_text_bands,
+)
+
+# Measured on reference-scale fixtures: the white spawn-phrase text bands are
+# ~13px tall and stacked rows sit ~32-33px apart. Machines whose game UI is
+# smaller/larger than the screen-size formula predicts (e.g. one 3440x1440
+# ultrawide renders the HUD at ~0.84x) show up here as smaller bands/pitch.
+REF_ROW_PITCH = 32.5
+REF_PHRASE_BAND_H = 13.0
+
+
+def _row_scale_ratio(bands: list[tuple[int, int]]) -> float | None:
+    """How the measured phrase rows compare to reference scale (1.0 = as
+    expected). Pitch between stacked rows is the precise signal; a single
+    row falls back to the band height (quantized, ~8% granularity)."""
+    starts = [start for start, _height in bands]
+    pitches = [b - a for a, b in zip(starts, starts[1:])]
+    pitches = [p for p in pitches if 20 <= p <= 45]
+    if pitches:
+        return float(np.median(pitches)) / REF_ROW_PITCH
+    if bands:
+        return float(np.median([height for _start, height in bands])) / REF_PHRASE_BAND_H
+    return None
 
 
 @dataclass
@@ -69,6 +95,20 @@ class Pipeline:
                 scale_max=self.thresholds.scale_max,
             )
         normalized = normalize_band(image_bgr, scale)
+        # Self-calibration: if the phrase rows measure noticeably smaller or
+        # larger than reference, the screen-size scale formula is wrong for
+        # this machine, renormalize at the measured scale. Kept only when
+        # the corrected band re-measures at ~reference size.
+        if known_scale is None:
+            ratio = _row_scale_ratio(phrase_text_bands(normalized.image))
+            if ratio is not None and 0.5 <= ratio <= 1.5 and not (0.90 < ratio < 1.10):
+                candidate_scale = scale * ratio
+                renormalized = normalize_band(image_bgr, candidate_scale)
+                check_ratio = _row_scale_ratio(phrase_text_bands(renormalized.image))
+                if check_ratio is not None and 0.90 <= check_ratio <= 1.10:
+                    scale = candidate_scale
+                    normalized = renormalized
+                    method = f"{method}+row-pitch"
         # Fast path: most live frames have no alerts at all. Every accepted
         # row must pass the spawn-phrase gate anyway, so a band without any
         # phrase-like white text can skip the expensive template pipeline.

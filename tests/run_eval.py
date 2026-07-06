@@ -33,9 +33,9 @@ from droid_alerts.region import auto_box_percent  # noqa: E402
 FIXTURES_DIR = BASE_DIR / "tests" / "fixtures"
 RESULTS_DIR = BASE_DIR / "tests" / "results"
 
-# The single Beskar Mythic sample is a template-source crop; no real full-row
-# capture exists yet. Flagged in every report rather than silently passing.
-KNOWN_GAPS = ["Beskar Mythic: no real (non-template-source) full-row capture yet. Please supply one when available."]
+# 2026-07-06: the Beskar Mythic gap closed. A real full-row capture from the
+# ultrawide user's machine is now fixture uw_beskar_mythic_tp.png.
+KNOWN_GAPS: list[str] = []
 
 
 def load_manifest() -> dict:
@@ -57,7 +57,14 @@ def evaluate_fixture(pipeline: Pipeline, path: Path, spec: dict) -> dict:
         result = pipeline.detect(band, screen_height=h, screen_width=w, keep_normalized=True)
         region = {"left": box.left, "top": box.top, "width": box.width, "height": box.height}
     else:
-        result = pipeline.detect(image, known_scale=spec.get("scale"), keep_normalized=True)
+        screen = spec.get("screen")
+        result = pipeline.detect(
+            image,
+            known_scale=spec.get("scale"),
+            screen_width=screen[0] if screen else None,
+            screen_height=screen[1] if screen else None,
+            keep_normalized=True,
+        )
         region = None
 
     detected = [(d.droid, d.rarity) for d in result.detections]
