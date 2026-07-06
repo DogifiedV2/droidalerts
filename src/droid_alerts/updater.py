@@ -134,7 +134,12 @@ def _stage_frozen_update(
     exe_path = Path(sys.executable).resolve()
     script_path.write_text(_frozen_update_script(), encoding="utf-8")
 
-    creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    # CREATE_NO_WINDOW, not DETACHED_PROCESS: powershell.exe is a console app
+    # and silently fails to start with no console at all when the parent is a
+    # windowless GUI exe. NO_WINDOW gives it a hidden console instead.
+    creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+    boot_log = updates / f"install_{tag}.boot.log".replace("/", "_")
+    boot_handle = boot_log.open("w", encoding="utf-8")
     subprocess.Popen(
         [
             "powershell",
@@ -160,8 +165,11 @@ def _stage_frozen_update(
         ],
         cwd=str(target_root),
         creationflags=creationflags,
+        stdout=boot_handle,
+        stderr=subprocess.STDOUT,
         close_fds=True,
     )
+    boot_handle.close()
     return UpdateInstallResult(updated_files=0, external_restart=True)
 
 
@@ -270,7 +278,9 @@ def restart_program() -> None:
     """
     creationflags = 0
     if sys.platform == "win32":
-        creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        # NO_WINDOW rather than DETACHED: python.exe (source installs) is a
+        # console app and can fail to start fully console-less.
+        creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     command = [sys.executable]
     if not getattr(sys, "frozen", False):
         command.extend([str(project_root() / "main.py"), "gui"])

@@ -164,17 +164,33 @@ class DroidAlertsApp:
             row=1, column=0, columnspan=first_button_col + 3, sticky="ew", pady=(7, 0)
         )
 
+        # Bigger, bolder tabs: comfortable click targets instead of the
+        # default cramped text-sized ones. Applied again after the notebook
+        # exists because ttkbootstrap (re)builds theme styles lazily.
+        def style_tabs() -> None:
+            try:
+                style = ttk.Style()
+                style.configure(
+                    "TNotebook.Tab", font=("Segoe UI", 11, "bold"), padding=(24, 10)
+                )
+            except Exception:
+                pass
+
+        style_tabs()
         self.notebook = ttk.Notebook(outer)
         self.notebook.grid(row=1, column=0, sticky="nsew")
+        self.root.after_idle(style_tabs)
 
         self.settings_tab = ttk.Frame(self.notebook, padding=12)
         self.runtime_tab = ttk.Frame(self.notebook, padding=12)
         self.logs_tab = ttk.Frame(self.notebook, padding=12)
         self.files_tab = ttk.Frame(self.notebook, padding=12)
-        self.notebook.add(self.settings_tab, text="Settings")
-        self.notebook.add(self.runtime_tab, text="Runtime")
-        self.notebook.add(self.logs_tab, text="Logs")
-        self.notebook.add(self.files_tab, text="Files")
+        # Label padding widens the click targets; the theme swallows
+        # horizontal Tab padding from Style.configure.
+        self.notebook.add(self.settings_tab, text="   Settings   ")
+        self.notebook.add(self.runtime_tab, text="   Runtime   ")
+        self.notebook.add(self.logs_tab, text="   Logs   ")
+        self.notebook.add(self.files_tab, text="   Files   ")
 
         self._build_settings_tab()
         self._build_runtime_tab()
