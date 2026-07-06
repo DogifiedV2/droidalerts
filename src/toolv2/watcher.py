@@ -55,7 +55,7 @@ def run_watch(*, debug: bool = False, config: AppConfig | None = None) -> None:
                 time.sleep(config.capture_interval_seconds)
                 continue
 
-            result = pipeline.detect(band, screen_height=screen_h, keep_normalized=True)
+            result = pipeline.detect(band, screen_height=screen_h, screen_width=screen_w, keep_normalized=True)
 
             # Region-health tracking: alert-free stretches are normal (spawns
             # are random), so only frames with phrase-like rows that still

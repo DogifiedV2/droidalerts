@@ -35,6 +35,7 @@ CALIBRATION_FILE = "calibration.json"
 # The templates/columns were captured at 2560x1440 with 44px rows.
 REFERENCE_ROW_HEIGHT_PX = 44
 REFERENCE_SCREEN_HEIGHT = 1440
+REFERENCE_SCREEN_WIDTH = 2560
 
 
 @dataclass

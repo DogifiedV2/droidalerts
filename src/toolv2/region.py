@@ -13,8 +13,13 @@ from .config import CALIBRATION_FILE, config_dir
 from .normalize import estimate_scale, normalize_band
 from .row_finder import find_candidate_rows
 
-# Position-notes "safer" auto box; matches Tool V1's default ROI almost exactly.
+# Position-notes "safer" auto box for wide 16:9/21:9 captures.
 AUTO_BOX_PERCENT = {"left": 0.0, "top": 0.47, "width": 0.33, "height": 0.16}
+
+# Compact 4:3-ish captures place the same chat alert row higher on screen.
+# Measured on a 1439x1079 capture: alert text y=413-469 (38.3%-43.5%).
+COMPACT_ASPECT_MAX = 1.50
+COMPACT_AUTO_BOX_PERCENT = {"left": 0.0, "top": 0.36, "width": 0.33, "height": 0.16}
 
 
 class NeedsCalibration(Exception):
@@ -22,12 +27,24 @@ class NeedsCalibration(Exception):
 
 
 def auto_box_percent(screen_width: int, screen_height: int) -> PixelBox:
+    ratios = auto_box_ratios(screen_width, screen_height)
     return PixelBox(
-        left=int(round(screen_width * AUTO_BOX_PERCENT["left"])),
-        top=int(round(screen_height * AUTO_BOX_PERCENT["top"])),
-        width=max(1, int(round(screen_width * AUTO_BOX_PERCENT["width"]))),
-        height=max(1, int(round(screen_height * AUTO_BOX_PERCENT["height"]))),
+        left=int(round(screen_width * ratios["left"])),
+        top=int(round(screen_height * ratios["top"])),
+        width=max(1, int(round(screen_width * ratios["width"]))),
+        height=max(1, int(round(screen_height * ratios["height"]))),
     )
+
+
+def auto_box_ratios(screen_width: int, screen_height: int) -> dict[str, float]:
+    if auto_box_profile(screen_width, screen_height) == "compact":
+        return COMPACT_AUTO_BOX_PERCENT
+    return AUTO_BOX_PERCENT
+
+
+def auto_box_profile(screen_width: int, screen_height: int) -> str:
+    aspect = screen_width / max(1, screen_height)
+    return "compact" if aspect <= COMPACT_ASPECT_MAX else "wide"
 
 
 @dataclass
@@ -45,6 +62,7 @@ def validate_region(
     templates: list[classifier.Template],
     *,
     screen_height: int | None = None,
+    screen_width: int | None = None,
     rarity_threshold: float = 0.35,
 ) -> ValidationResult:
     """Position-notes recommendation: do not rely on percentages alone.
@@ -55,7 +73,9 @@ def validate_region(
     that contain candidate rows.
     """
     candidates = find_candidate_rows(band_bgr)
-    scale, _method = estimate_scale(screen_height=screen_height, candidates=candidates)
+    scale, _method = estimate_scale(
+        screen_height=screen_height, screen_width=screen_width, candidates=candidates
+    )
     normalized = normalize_band(band_bgr, scale)
     norm_candidates = find_candidate_rows(normalized.image)
     if not norm_candidates:
@@ -163,7 +183,9 @@ class RegionResolver:
             )
             source = "manual(rescaled)" if self.signature_changed else "manual"
             return box, source
-        return auto_box_percent(self.screen_width, self.screen_height), "auto"
+        profile = auto_box_profile(self.screen_width, self.screen_height)
+        source = "auto" if profile == "wide" else "auto(compact)"
+        return auto_box_percent(self.screen_width, self.screen_height), source
 
     def record_validation(self, ok: bool) -> None:
         """Call only on frames that actually contained candidate rows."""

@@ -32,9 +32,10 @@ live detection after installing dependencies.
 
 ## How it works
 
-1. **Region** (`src/toolv2/region.py`): auto-box at left 0%, top 47%,
-   width 33%, height 16% of the screen (from the measured position notes).
-   Manual calibration is stored as *percent ratios* in
+1. **Region** (`src/toolv2/region.py`): auto-box at left 0%, width 33%,
+   height 16% of the screen. Wide screens use top 47%; compact screens
+   (aspect <= 1.50, such as 1440x1040/1080) use top 36% because the chat
+   alert row is higher. Manual calibration is stored as *percent ratios* in
    `config/calibration.json`, so it survives resolution changes.
 2. **Scale normalization** (`normalize.py`): the band is resized so alert
    rows are 44px tall (scale = screen_height / 1440), the reference scale the

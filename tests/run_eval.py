@@ -54,7 +54,7 @@ def evaluate_fixture(pipeline: Pipeline, path: Path, spec: dict) -> dict:
         h, w = image.shape[:2]
         box = auto_box_percent(w, h)
         band = image[box.top : box.bottom, box.left : box.right]
-        result = pipeline.detect(band, screen_height=h, keep_normalized=True)
+        result = pipeline.detect(band, screen_height=h, screen_width=w, keep_normalized=True)
         region = {"left": box.left, "top": box.top, "width": box.width, "height": box.height}
     else:
         result = pipeline.detect(image, known_scale=spec.get("scale"), keep_normalized=True)

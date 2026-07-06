@@ -6,7 +6,7 @@ from statistics import median
 import cv2
 import numpy as np
 
-from .config import REFERENCE_ROW_HEIGHT_PX, REFERENCE_SCREEN_HEIGHT
+from .config import REFERENCE_ROW_HEIGHT_PX, REFERENCE_SCREEN_HEIGHT, REFERENCE_SCREEN_WIDTH
 from .row_finder import RowCandidate, measured_row_heights
 
 # Median height of confident row-finder candidates measured on reference-scale
@@ -23,10 +23,17 @@ class NormalizedBand:
     method: str
 
 
-def scale_from_screen(screen_height: int) -> float:
-    """Game UI scales with screen height; the chat box renders at the same
-    relative size everywhere once the region is correctly auto-detected."""
-    return screen_height / REFERENCE_SCREEN_HEIGHT
+def scale_from_screen(screen_height: int, screen_width: int | None = None) -> float:
+    """The game fits its HUD to a 16:9 box: on 16:9 screens the UI scales
+    with height, but on narrower aspects (e.g. 1440x1040, ~4:3) it scales
+    with WIDTH — measured on a real 4:3 user whose text was 0.5625x reference
+    (= 1440/2560), not the 0.72x that height alone predicts. min() of both
+    ratios reproduces that fit exactly, and equals the old height-based value
+    on every 16:9 screen (zero behavior change there)."""
+    height_scale = screen_height / REFERENCE_SCREEN_HEIGHT
+    if screen_width is None:
+        return height_scale
+    return min(height_scale, screen_width / REFERENCE_SCREEN_WIDTH)
 
 
 def scale_from_rows(candidates: list[RowCandidate]) -> float | None:
@@ -39,19 +46,21 @@ def scale_from_rows(candidates: list[RowCandidate]) -> float | None:
 def estimate_scale(
     *,
     screen_height: int | None = None,
+    screen_width: int | None = None,
     candidates: list[RowCandidate] | None = None,
     scale_min: float = 0.4,
     scale_max: float = 2.5,
 ) -> tuple[float, str]:
     """Estimate source scale relative to the 2560x1440 reference.
 
-    Screen height is the primary signal when known (live capture). Measured
-    row heights are the fallback for fixtures of unknown provenance, and a
+    Screen size is the primary signal when known (live capture); width
+    matters on non-16:9 aspects (see scale_from_screen). Measured row
+    heights are the fallback for fixtures of unknown provenance, and a
     sanity check otherwise. Clamped to catch bad row detections.
     """
     row_scale = scale_from_rows(candidates or [])
     if screen_height is not None:
-        scale = scale_from_screen(screen_height)
+        scale = scale_from_screen(screen_height, screen_width)
         method = "screen"
         if row_scale is not None and not (0.65 <= row_scale / max(scale, 1e-6) <= 1.55):
             method = "screen(row-mismatch)"

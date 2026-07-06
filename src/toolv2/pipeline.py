@@ -44,6 +44,7 @@ class Pipeline:
         image_bgr: np.ndarray,
         *,
         screen_height: int | None = None,
+        screen_width: int | None = None,
         known_scale: float | None = None,
         keep_normalized: bool = False,
     ) -> PipelineResult:
@@ -53,6 +54,7 @@ class Pipeline:
         else:
             scale, method = estimate_scale(
                 screen_height=screen_height,
+                screen_width=screen_width,
                 candidates=candidates,
                 scale_min=self.thresholds.scale_min,
                 scale_max=self.thresholds.scale_max,
