@@ -82,6 +82,11 @@ class AppConfig:
     sound_enabled: bool = True
     popup_enabled: bool = True
     droid_timers_enabled: bool = False
+    # Overlay layout, user-adjustable via "Adjust Timers": size factor plus
+    # position as fractions of the screen (center-x, top-y).
+    droid_timers_scale: float = 1.0
+    droid_timers_center_x: float = 0.5
+    droid_timers_top_y: float = 0.006
     popup_seconds: float = 8.0
     popup_icon_file: str = "signals_icon.png"
     save_alert_samples: bool = True
@@ -133,6 +138,9 @@ class AppConfig:
             sound_enabled=bool(data.get("sound_enabled", True)),
             popup_enabled=bool(data.get("popup_enabled", True)),
             droid_timers_enabled=bool(data.get("droid_timers_enabled", False)),
+            droid_timers_scale=float(data.get("droid_timers_scale", 1.0)),
+            droid_timers_center_x=float(data.get("droid_timers_center_x", 0.5)),
+            droid_timers_top_y=float(data.get("droid_timers_top_y", 0.006)),
             popup_seconds=float(data.get("popup_seconds", 8.0)),
             popup_icon_file=str(data.get("popup_icon_file", "signals_icon.png")),
             save_alert_samples=bool(data.get("save_alert_samples", True)),
@@ -184,6 +192,9 @@ class AppConfig:
             "sound_enabled": self.sound_enabled,
             "popup_enabled": self.popup_enabled,
             "droid_timers_enabled": self.droid_timers_enabled,
+            "droid_timers_scale": self.droid_timers_scale,
+            "droid_timers_center_x": self.droid_timers_center_x,
+            "droid_timers_top_y": self.droid_timers_top_y,
             "popup_seconds": self.popup_seconds,
             "popup_icon_file": self.popup_icon_file,
             "save_alert_samples": self.save_alert_samples,

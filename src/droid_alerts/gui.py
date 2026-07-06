@@ -256,6 +256,7 @@ class DroidAlertsApp:
                 self.advanced_widgets.append(check)
 
         setup_buttons = (
+            (2, "Adjust Timers", self.adjust_droid_timers, "secondary-outline"),
             (3, "Set Up Pushover", self.setup_phone_alerts_and_enable, "warning-outline"),
             (4, "Set Up ntfy", self.setup_ntfy_alerts_and_enable, "success-outline"),
             (5, "Set Up Discord", self.setup_discord_alerts_and_enable, "info-outline"),
@@ -432,11 +433,39 @@ class DroidAlertsApp:
             return
         from .timers import DroidTimersOverlay
 
+        config = load_config()
         try:
-            self.droid_timers = DroidTimersOverlay(self.root)
+            self.droid_timers = DroidTimersOverlay(
+                self.root,
+                scale=config.droid_timers_scale,
+                center_x_ratio=config.droid_timers_center_x,
+                top_y_ratio=config.droid_timers_top_y,
+                on_layout_change=self._save_droid_timers_layout,
+            )
         except Exception as exc:
             print(f"[TIMERS] Failed to show Droid Timers overlay: {exc}")
             self.droid_timers = None
+
+    def _save_droid_timers_layout(self, center_x: float, top_y: float, scale: float) -> None:
+        config = load_config()
+        config.droid_timers_center_x = round(center_x, 4)
+        config.droid_timers_top_y = round(top_y, 4)
+        config.droid_timers_scale = round(scale, 2)
+        save_config(config)
+        self.config = config
+        self.detail_var.set("Droid Timers position and size saved")
+
+    def adjust_droid_timers(self) -> None:
+        """Show the overlay (enabling it if needed) and let the user drag it
+        around / resize it; Done on the strip saves the layout."""
+        if not bool(self._value("droid_timers_enabled")):
+            self._set_var("droid_timers_enabled", True)
+        self.show_droid_timers()
+        if self.droid_timers is not None:
+            self.droid_timers.enter_edit_mode()
+            self.detail_var.set(
+                "Drag the timer strip to move it; use − / + to resize; click Done to save"
+            )
 
     def hide_droid_timers(self) -> None:
         if self.droid_timers is not None:

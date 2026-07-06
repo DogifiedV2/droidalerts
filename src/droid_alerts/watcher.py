@@ -58,7 +58,12 @@ def run_watch(
     if config.droid_timers_enabled and popup_parent is None:
         from .timers import start_droid_timers_thread
 
-        start_droid_timers_thread(stop_event)
+        start_droid_timers_thread(
+            stop_event,
+            scale=config.droid_timers_scale,
+            center_x_ratio=config.droid_timers_center_x,
+            top_y_ratio=config.droid_timers_top_y,
+        )
         print("Droid Timers overlay: ENABLED")
     elif config.droid_timers_enabled:
         print("Droid Timers overlay: ENABLED (GUI-managed)")

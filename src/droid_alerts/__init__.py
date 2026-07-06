@@ -5,4 +5,4 @@ classifier made scale-invariant by normalizing each captured band to the
 classifier's reference row height.
 """
 
-__version__ = "0.9"
+__version__ = "1.0.1"
