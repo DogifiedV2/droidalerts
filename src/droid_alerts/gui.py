@@ -224,6 +224,7 @@ class DroidAlertsApp:
             ("phone_alerts_enabled", "Pushover phone alerts", self.on_phone_alert_toggle),
             ("ntfy_enabled", "ntfy phone alerts", self.on_ntfy_alert_toggle),
             ("discord_enabled", "Discord webhook alerts", self.on_discord_alert_toggle),
+            ("extra_checks", "Extra checks (fixes washed-out colors, e.g. HDR)", None),
         )
         advanced_rows = (
             ("save_alert_samples", "Save alert samples", None),
@@ -405,6 +406,7 @@ class DroidAlertsApp:
                 "ntfy_include_attachment",
                 "phone_include_attachment",
                 "update_check_enabled",
+                "extra_checks",
                 "save_debug_screenshots",
             ):
                 var = self.setting_vars.get(key)
@@ -529,6 +531,7 @@ class DroidAlertsApp:
         config.ntfy_include_attachment = bool(self._value("ntfy_include_attachment"))
         config.phone_include_attachment = bool(self._value("phone_include_attachment"))
         config.update_check_enabled = bool(self._value("update_check_enabled"))
+        config.extra_checks = bool(self._value("extra_checks"))
         config.ntfy_server_url = str(self._value("ntfy_server_url")).strip() or "https://ntfy.sh"
         config.ntfy_topic = str(self._value("ntfy_topic")).strip()
         config.ntfy_priority = str(self._value("ntfy_priority")).strip() or "5"

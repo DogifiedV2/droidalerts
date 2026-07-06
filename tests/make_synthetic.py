@@ -32,6 +32,14 @@ def main() -> None:
     base = cv2.resize(src, (2560, 1440), interpolation=cv2.INTER_AREA)
     pad = np.repeat(base[:, -1:, :], 3440 - 2560, axis=1)
     ultrawide = np.concatenate([base, pad], axis=1)
+    # Real 3440x1440 captures (2026-07-06) put the alert stack ~111px higher
+    # than on 16:9 (row top ~43% of height vs ~50.6%), matching the top-40%
+    # ultrawide auto-box. Shift content up so the synthetic agrees with the
+    # measured machine instead of the old 16:9 placement.
+    shift = 111
+    ultrawide = np.concatenate(
+        [ultrawide[shift:], np.repeat(ultrawide[-1:, :, :], shift, axis=0)], axis=0
+    )
     cv2.imwrite(str(OUT / "image_3440x1440.png"), ultrawide)
     print("wrote image_3440x1440.png")
 

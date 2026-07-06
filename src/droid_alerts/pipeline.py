@@ -23,6 +23,8 @@ class PipelineResult:
     candidate_row_boxes: list[tuple[int, int, int, int]] = field(default_factory=list)
     phrase_row_boxes: list[tuple[int, int, int, int]] = field(default_factory=list)
     normalized_image: np.ndarray | None = None
+    # Alert-like rows the classifier dropped, with the reason (debug surface).
+    rejections: list[dict] = field(default_factory=list)
 
 
 class Pipeline:
@@ -30,13 +32,20 @@ class Pipeline:
     measures the frame, the band is resized to the 44px-row reference scale,
     and the fixed-column detector runs on the result."""
 
-    def __init__(self, template_dir: str | Path, thresholds: Thresholds | None = None) -> None:
+    def __init__(
+        self,
+        template_dir: str | Path,
+        thresholds: Thresholds | None = None,
+        *,
+        extra_checks: bool = False,
+    ) -> None:
         thresholds = thresholds or Thresholds()
         self.thresholds = thresholds
         self.detector = DroidVisualDetector(
             template_dir,
             rarity_threshold=thresholds.rarity_threshold,
             droid_threshold=thresholds.droid_threshold,
+            extra_checks=extra_checks,
         )
 
     def detect(
@@ -95,4 +104,5 @@ class Pipeline:
             candidate_row_boxes=candidate_row_boxes,
             phrase_row_boxes=phrase_row_boxes,
             normalized_image=normalized.image if keep_normalized else None,
+            rejections=list(self.detector.last_rejections),
         )

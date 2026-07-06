@@ -84,6 +84,7 @@ class AppConfig:
     update_check_enabled: bool = True
     update_repo: str = "DogifiedV2/droidalerts"
     advanced_mode: bool = False
+    extra_checks: bool = False
     validation_failures_before_calibration_prompt: int = 30
     thresholds: Thresholds = field(default_factory=Thresholds)
     alert_targets: list[list[str]] = field(
@@ -132,6 +133,7 @@ class AppConfig:
             update_check_enabled=bool(data.get("update_check_enabled", True)),
             update_repo=str(data.get("update_repo", "DogifiedV2/droidalerts")),
             advanced_mode=bool(data.get("advanced_mode", False)),
+            extra_checks=bool(data.get("extra_checks", False)),
             validation_failures_before_calibration_prompt=int(
                 data.get("validation_failures_before_calibration_prompt", 30)
             ),
@@ -180,6 +182,7 @@ class AppConfig:
             "update_check_enabled": self.update_check_enabled,
             "update_repo": self.update_repo,
             "advanced_mode": self.advanced_mode,
+            "extra_checks": self.extra_checks,
             "validation_failures_before_calibration_prompt": self.validation_failures_before_calibration_prompt,
             "thresholds": {
                 "rarity_threshold": self.thresholds.rarity_threshold,

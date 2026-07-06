@@ -43,7 +43,7 @@ def run_watch(
         max_failures=config.validation_failures_before_calibration_prompt,
     )
     box, region_source = resolver.resolve()
-    pipeline = Pipeline(templates_dir(), config.thresholds)
+    pipeline = Pipeline(templates_dir(), config.thresholds, extra_checks=config.extra_checks)
     policy = AlertPolicy(config)
     webhook_url = None
     phone_credentials = None
@@ -51,6 +51,7 @@ def run_watch(
     print(f"Droid Alerts watching monitor {config.monitor_index} ({screen_w}x{screen_h})")
     print(f"Region [{region_source}]: left={box.left} top={box.top} w={box.width} h={box.height}")
     print(f"Targets: {sorted(config.targets)}")
+    print(f"Extra checks (washed-out colors/HDR): {'ENABLED' if config.extra_checks else 'DISABLED'}")
     print(f"Popup alerts: {'ENABLED' if config.popup_enabled else 'DISABLED'}")
     if config.discord_enabled:
         try:
@@ -205,6 +206,19 @@ def run_watch(
                     print(
                         f"[DETECTED] {event['ts']} {label} "
                         f"score={detection.score:.2f} priority={detection.is_priority}"
+                    )
+
+            if debug:
+                now = time.monotonic()
+                for rejection in result.rejections:
+                    rej_key = f"rej|{rejection['droid']}|{rejection['reason']}|{rejection['y'] // 32}"
+                    if _recently_logged(logged_spawn_keys, rej_key, now, log_dedupe_seconds):
+                        continue
+                    logged_spawn_keys[rej_key] = now
+                    detail = f" {rejection['detail']}" if rejection.get("detail") else ""
+                    print(
+                        f"[REJECTED] {timestamp()} y={rejection['y']} "
+                        f"droid={rejection['droid']} reason={rejection['reason']}{detail}"
                     )
 
             if debug and debug_hotkey is not None and debug_hotkey():
