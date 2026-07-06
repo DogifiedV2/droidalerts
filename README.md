@@ -1,4 +1,4 @@
-# ToolV2 — Cross-PC Droid Tycoon Alert Detector
+# Droid Alerts — Cross-PC Droid Tycoon Alert Detector
 
 Watches the game's droid-spawn chat alerts and plays a sound on the five
 priority combos: **Beskar Epic, Beskar Legendary, Diamond Mythic,
@@ -33,7 +33,7 @@ live detection after installing dependencies.
 
 ## How it works
 
-1. **Region** (`src/toolv2/region.py`): auto-box at left 0%, width 33%,
+1. **Region** (`src/droid_alerts/region.py`): auto-box at left 0%, width 33%,
    height 16% of the screen. Wide screens use top 47%; compact screens
    (aspect <= 1.50, such as 1440x1040/1080) use top 36% because the chat
    alert row is higher. Manual calibration is stored as *percent ratios* in

@@ -220,7 +220,7 @@ def show_popup(
         _draw_segments(canvas, _title_segments(detection), center_x, title_y, title_font)
 
         if icon is not None:
-            window._toolv2_popup_icon = icon  # type: ignore[attr-defined]
+            window._droid_alerts_popup_icon = icon  # type: ignore[attr-defined]
             icon_left = panel_width - hand_x + 3
             icon_top = panel_height - hand_y + hand_drop
             canvas.create_image(icon_left, icon_top, image=icon, anchor="nw")

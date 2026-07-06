@@ -26,9 +26,9 @@ import numpy as np
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from toolv2.classifier import preprocess_for_template, trim_blank_edges  # noqa: E402
-from toolv2.config import REFERENCE_ROW_HEIGHT_PX, REFERENCE_SCREEN_HEIGHT  # noqa: E402
-from toolv2.overlay_cleanup import clean_overlay  # noqa: E402
+from droid_alerts.classifier import preprocess_for_template, trim_blank_edges  # noqa: E402
+from droid_alerts.config import REFERENCE_ROW_HEIGHT_PX, REFERENCE_SCREEN_HEIGHT  # noqa: E402
+from droid_alerts.overlay_cleanup import clean_overlay  # noqa: E402
 
 RARITY_ROI_X1 = 180
 RARITY_ROI_X2 = 410

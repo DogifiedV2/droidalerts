@@ -16,8 +16,9 @@ from .classifier import Detection
 from .config import AppConfig, config_dir
 
 
-APP_NAME = "DroidAlerts"
-USER_AGENT = f"{APP_NAME}/{__version__}"
+APP_NAME = "Droid Alerts"
+UA_NAME = "DroidAlerts"
+USER_AGENT = f"{UA_NAME}/{__version__}"
 
 
 def event_text(detection: Detection) -> str:
@@ -227,7 +228,7 @@ def post_ntfy_message(
 def send_ntfy_test_alert(config: AppConfig) -> None:
     post_ntfy_message(
         config,
-        title="DroidAlerts Test Alert",
+        title="Droid Alerts Test Alert",
         message="ntfy alerts are set up. Priority droid alerts will use this topic.",
         priority=config.ntfy_priority,
         tags=config.ntfy_tags,
@@ -245,7 +246,7 @@ def send_ntfy_alert(
     try:
         post_ntfy_message(
             config,
-            title="DroidAlerts Priority Spawn",
+            title="Droid Alerts Priority Spawn",
             message=event_text(detection),
             priority=config.ntfy_priority,
             tags=config.ntfy_tags,
@@ -380,7 +381,7 @@ def post_phone_message(
 def send_phone_test_alert(credentials: dict[str, str], *, sound: str) -> None:
     post_phone_message(
         credentials,
-        title="DroidAlerts Test Alert",
+        title="Droid Alerts Test Alert",
         message="Phone alerts are set up. Priority droid alerts will use this same +1 priority sound.",
         priority=1,
         sound=sound,
@@ -399,7 +400,7 @@ def send_phone_alert(
     try:
         post_phone_message(
             credentials,
-            title="DroidAlerts Priority Spawn",
+            title="Droid Alerts Priority Spawn",
             message=event_text(detection),
             priority=1,
             sound=sound,

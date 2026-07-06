@@ -9,7 +9,7 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="toolv2", description="Cross-PC Droid Tycoon alert detector.")
+    parser = argparse.ArgumentParser(prog="droid-alerts", description="Cross-PC Droid Tycoon alert detector.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     watch = sub.add_parser("watch", help="Run the live watcher.")
@@ -30,15 +30,15 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "watch":
-        from toolv2.watcher import run_watch
+        from droid_alerts.watcher import run_watch
 
         run_watch(debug=args.debug)
     elif args.command == "gui":
-        from toolv2.gui import run_gui
+        from droid_alerts.gui import run_gui
 
         run_gui()
     elif args.command == "calibrate":
-        from toolv2.calibrate_cli import run_calibrate
+        from droid_alerts.calibrate_cli import run_calibrate
 
         run_calibrate(capture_delay=max(0.0, args.capture_delay), reset=args.reset)
     elif args.command == "build-templates":

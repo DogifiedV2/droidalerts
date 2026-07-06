@@ -24,11 +24,11 @@ import cv2
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from toolv2.classifier import PRIORITY_ALERTS, draw_detections  # noqa: E402
-from toolv2.config import Thresholds, templates_dir  # noqa: E402
-from toolv2.overlay_cleanup import clean_overlay  # noqa: E402
-from toolv2.pipeline import Pipeline  # noqa: E402
-from toolv2.region import auto_box_percent  # noqa: E402
+from droid_alerts.classifier import PRIORITY_ALERTS, draw_detections  # noqa: E402
+from droid_alerts.config import Thresholds, templates_dir  # noqa: E402
+from droid_alerts.overlay_cleanup import clean_overlay  # noqa: E402
+from droid_alerts.pipeline import Pipeline  # noqa: E402
+from droid_alerts.region import auto_box_percent  # noqa: E402
 
 FIXTURES_DIR = BASE_DIR / "tests" / "fixtures"
 RESULTS_DIR = BASE_DIR / "tests" / "results"

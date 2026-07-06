@@ -6,7 +6,7 @@ import threading
 import webbrowser
 from collections import deque
 from pathlib import Path
-from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, messagebox, simpledialog
+from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, messagebox
 
 import tkinter as tk
 
@@ -22,7 +22,7 @@ except Exception:
 from .alerts import AlertPolicy
 from .capture import create_capture, set_dpi_awareness
 from .classifier import Detection
-from .config import AppConfig, config_dir, data_dir, load_config, project_root, save_config
+from .config import AppConfig, config_dir, load_config, project_root, save_config
 from .logging_io import alert_samples_dir, debug_dir, logs_dir
 from .notifications import (
     check_for_update,
@@ -72,7 +72,7 @@ def make_root() -> tk.Tk:
 class DroidAlertsApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("DroidAlerts")
+        self.root.title("Droid Alerts")
         self.root.geometry("980x700")
         self.root.minsize(880, 620)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -87,14 +87,19 @@ class DroidAlertsApp:
         self.update_check_running = False
         self._log_file_signature: tuple[int, int] | None = None
         self._log_refresh_after_id: str | None = None
+        self._autosave_after_id: str | None = None
+        self._loading_settings = False
+        self._autosave_ready = False
 
         self.status_var = StringVar(value="Stopped")
         self.detail_var = StringVar(value=f"Config: {config_dir() / 'config.json'}")
         self.setting_vars: dict[str, object] = {}
         self.alert_vars: dict[tuple[str, str], BooleanVar] = {}
+        self.advanced_widgets: list[object] = []
 
         self._build_ui()
         self.load_settings()
+        self._wire_auto_save()
         self.refresh_logs()
         self._schedule_log_refresh()
         self.root.after(700, self.prompt_notification_setup_if_needed)
@@ -129,7 +134,7 @@ class DroidAlertsApp:
         if self.header_icon is not None:
             ttk.Label(header, image=self.header_icon).grid(row=0, column=0, sticky="w", padx=(0, 8))
 
-        ttk.Label(header, text="DroidAlerts", font=("Segoe UI", 20, "bold")).grid(
+        ttk.Label(header, text="Droid Alerts", font=("Segoe UI", 20, "bold")).grid(
             row=0, column=title_col, sticky="w"
         )
         ttk.Label(header, textvariable=self.status_var, font=("Segoe UI", 11, "bold")).grid(
@@ -150,17 +155,17 @@ class DroidAlertsApp:
             row=1, column=0, columnspan=first_button_col + 3, sticky="ew", pady=(7, 0)
         )
 
-        notebook = ttk.Notebook(outer)
-        notebook.grid(row=1, column=0, sticky="nsew")
+        self.notebook = ttk.Notebook(outer)
+        self.notebook.grid(row=1, column=0, sticky="nsew")
 
-        self.settings_tab = ttk.Frame(notebook, padding=12)
-        self.runtime_tab = ttk.Frame(notebook, padding=12)
-        self.logs_tab = ttk.Frame(notebook, padding=12)
-        self.files_tab = ttk.Frame(notebook, padding=12)
-        notebook.add(self.settings_tab, text="Settings")
-        notebook.add(self.runtime_tab, text="Runtime")
-        notebook.add(self.logs_tab, text="Logs")
-        notebook.add(self.files_tab, text="Files")
+        self.settings_tab = ttk.Frame(self.notebook, padding=12)
+        self.runtime_tab = ttk.Frame(self.notebook, padding=12)
+        self.logs_tab = ttk.Frame(self.notebook, padding=12)
+        self.files_tab = ttk.Frame(self.notebook, padding=12)
+        self.notebook.add(self.settings_tab, text="Settings")
+        self.notebook.add(self.runtime_tab, text="Runtime")
+        self.notebook.add(self.logs_tab, text="Logs")
+        self.notebook.add(self.files_tab, text="Files")
 
         self._build_settings_tab()
         self._build_runtime_tab()
@@ -177,14 +182,24 @@ class DroidAlertsApp:
         actions = ttk.Frame(parent)
         actions.grid(row=row, column=0, columnspan=columnspan, sticky="ew", pady=(12, 0))
         actions.columnconfigure(0, weight=1)
-        ttk.Button(actions, text="Reload", command=self.load_settings).grid(row=0, column=1, padx=(0, 8))
-        ttk.Button(actions, text="Save", command=self.save_settings, **bootstyle("success")).grid(
-            row=0, column=2
-        )
+        ttk.Button(actions, text="Reload", command=self.load_settings).grid(row=0, column=1)
+
+    def _add_settings_actions(self, parent, *, row: int, columnspan: int = 1) -> None:
+        actions = ttk.Frame(parent)
+        actions.grid(row=row, column=0, columnspan=columnspan, sticky="ew", pady=(12, 0))
+        actions.columnconfigure(1, weight=1)
+        ttk.Checkbutton(
+            actions,
+            text="Advanced settings",
+            variable=self.setting_vars["advanced_mode"],
+            command=self.on_advanced_toggle,
+            **bootstyle("round-toggle"),
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Button(actions, text="Reload", command=self.load_settings).grid(row=0, column=2)
 
     def _build_settings_tab(self) -> None:
-        self.settings_tab.columnconfigure(0, weight=1)
-        self.settings_tab.columnconfigure(1, weight=1)
+        self.settings_tab.columnconfigure(0, weight=0, minsize=285)
+        self.settings_tab.columnconfigure(1, weight=1, minsize=560)
         self.settings_tab.rowconfigure(0, weight=1)
 
         alerts_outer, alerts_frame = self._labeled_section(self.settings_tab, "Priority Alerts")
@@ -199,68 +214,48 @@ class DroidAlertsApp:
                 variable=var,
             ).grid(row=row, column=0, sticky="w", pady=3)
 
-        channels_outer, channels_frame = self._labeled_section(self.settings_tab, "Alert Channels")
-        channels_outer.grid(row=0, column=1, sticky="nsew")
-        channels_frame.columnconfigure(0, weight=1)
-        for key, label in (
-            ("popup_enabled", "Popup alerts"),
-            ("sound_enabled", "Sound alerts"),
-            ("save_alert_samples", "Save alert samples"),
-            ("ntfy_enabled", "ntfy phone alerts (recommended)"),
-            ("discord_enabled", "Discord webhook alerts"),
-            ("phone_alerts_enabled", "Pushover phone alerts"),
-            ("ntfy_include_attachment", "Attach alert sample to ntfy"),
-            ("phone_include_attachment", "Attach alert sample to Pushover"),
-            ("update_check_enabled", "Check GitHub releases on startup"),
-        ):
+        options_outer, options_frame = self._labeled_section(self.settings_tab, "Options")
+        options_outer.grid(row=0, column=1, sticky="nsew")
+        options_frame.columnconfigure(0, weight=1, minsize=380)
+        options_frame.columnconfigure(1, minsize=150)
+        simple_rows = (
+            ("popup_enabled", "Popup alerts", None),
+            ("sound_enabled", "Sound alerts", None),
+            ("phone_alerts_enabled", "Pushover phone alerts", self.on_phone_alert_toggle),
+            ("ntfy_enabled", "ntfy phone alerts", self.on_ntfy_alert_toggle),
+            ("discord_enabled", "Discord webhook alerts", self.on_discord_alert_toggle),
+        )
+        advanced_rows = (
+            ("save_alert_samples", "Save alert samples", None),
+            ("ntfy_include_attachment", "Attach alert sample to ntfy", None),
+            ("phone_include_attachment", "Attach alert sample to Pushover", None),
+            ("update_check_enabled", "Check GitHub releases on startup", None),
+        )
+        for key, _label, _command in simple_rows + advanced_rows:
             self.setting_vars[key] = BooleanVar(value=False)
-        for row, (key, label) in enumerate(
-            (
-                ("popup_enabled", "Popup alerts"),
-                ("sound_enabled", "Sound alerts"),
-                ("save_alert_samples", "Save alert samples"),
-                ("ntfy_enabled", "ntfy phone alerts (recommended)"),
-                ("discord_enabled", "Discord webhook alerts"),
-                ("phone_alerts_enabled", "Pushover phone alerts"),
-                ("ntfy_include_attachment", "Attach alert sample to ntfy"),
-                ("phone_include_attachment", "Attach alert sample to Pushover"),
-                ("update_check_enabled", "Check GitHub releases on startup"),
-            )
-        ):
-            command = None
-            if key == "ntfy_enabled":
-                command = self.on_ntfy_alert_toggle
-            elif key == "discord_enabled":
-                command = self.on_discord_alert_toggle
-            elif key == "phone_alerts_enabled":
-                command = self.on_phone_alert_toggle
-            ttk.Checkbutton(
-                channels_frame,
+        for row, (key, label, command) in enumerate(simple_rows + advanced_rows):
+            check = ttk.Checkbutton(
+                options_frame,
                 text=label,
                 variable=self.setting_vars[key],
                 command=command,
-            ).grid(row=row, column=0, sticky="w", pady=3)
+            )
+            check.grid(row=row, column=0, sticky="w", pady=3)
+            if (key, label, command) in advanced_rows:
+                self.advanced_widgets.append(check)
 
-        ttk.Button(
-            channels_frame,
-            text="Set Up ntfy",
-            command=self.setup_ntfy_alerts_and_enable,
-            **bootstyle("success-outline"),
-        ).grid(row=3, column=1, padx=(12, 0), sticky="ew")
-        ttk.Button(
-            channels_frame,
-            text="Set Up Discord",
-            command=self.setup_discord_alerts_and_enable,
-            **bootstyle("info-outline"),
-        ).grid(row=4, column=1, padx=(12, 0), sticky="ew")
-        ttk.Button(
-            channels_frame,
-            text="Set Up Pushover",
-            command=self.setup_phone_alerts_and_enable,
-            **bootstyle("warning-outline"),
-        ).grid(row=5, column=1, padx=(12, 0), sticky="ew")
+        setup_buttons = (
+            (2, "Set Up Pushover", self.setup_phone_alerts_and_enable, "warning-outline"),
+            (3, "Set Up ntfy", self.setup_ntfy_alerts_and_enable, "success-outline"),
+            (4, "Set Up Discord", self.setup_discord_alerts_and_enable, "info-outline"),
+        )
+        for row, label, command, style in setup_buttons:
+            ttk.Button(
+                options_frame, text=label, command=command, **bootstyle(style)
+            ).grid(row=row, column=1, padx=(12, 0), sticky="ew")
 
-        self._add_save_actions(self.settings_tab, row=1, columnspan=2)
+        self.setting_vars["advanced_mode"] = BooleanVar(value=False)
+        self._add_settings_actions(self.settings_tab, row=1, columnspan=2)
 
     def _build_runtime_tab(self) -> None:
         self.runtime_tab.columnconfigure(0, weight=1)
@@ -283,6 +278,7 @@ class DroidAlertsApp:
         self.setting_vars["ntfy_tags"] = StringVar(value="rotating_light")
         self.setting_vars["phone_sound"] = StringVar(value="siren")
         self.setting_vars["update_repo"] = StringVar(value="DogifiedV2/droidalerts")
+        self.setting_vars["save_debug_screenshots"] = BooleanVar(value=False)
 
         fields = (
             ("Monitor index", "monitor_index"),
@@ -305,6 +301,13 @@ class DroidAlertsApp:
             var = self.setting_vars[key]
             entry = ttk.Entry(runtime_frame, textvariable=var, width=28)
             entry.grid(row=row, column=column + 1, sticky="ew", padx=(8, 18), pady=5)
+
+        debug_row = (len(fields) + 1) // 2
+        ttk.Checkbutton(
+            runtime_frame,
+            text="Debug mode",
+            variable=self.setting_vars["save_debug_screenshots"],
+        ).grid(row=debug_row, column=0, columnspan=2, sticky="w", pady=(8, 2))
 
         self._add_save_actions(self.runtime_tab, row=1)
 
@@ -366,46 +369,97 @@ class DroidAlertsApp:
                 row=row, column=0, sticky="w", pady=4
             )
 
+    def on_advanced_toggle(self) -> None:
+        advanced = bool(self._value("advanced_mode"))
+        self._apply_advanced_visibility(advanced)
+        self._schedule_auto_save()
+
+    def _apply_advanced_visibility(self, advanced: bool) -> None:
+        for widget in self.advanced_widgets:
+            if advanced:
+                widget.grid()
+            else:
+                widget.grid_remove()
+        try:
+            if advanced:
+                self.notebook.add(self.runtime_tab)
+            else:
+                self.notebook.hide(self.runtime_tab)
+        except Exception:
+            pass
+
     def load_settings(self) -> None:
-        self.config = load_config()
-        selected = set(self.config.targets)
-        for combo, var in self.alert_vars.items():
-            var.set(combo in selected)
-        for key in (
-            "popup_enabled",
-            "sound_enabled",
-            "save_alert_samples",
-            "ntfy_enabled",
-            "discord_enabled",
-            "phone_alerts_enabled",
-            "ntfy_include_attachment",
-            "phone_include_attachment",
-            "update_check_enabled",
-        ):
-            var = self.setting_vars.get(key)
-            if isinstance(var, BooleanVar):
-                var.set(bool(getattr(self.config, key)))
-        self._set_var("monitor_index", self.config.monitor_index)
-        self._set_var("capture_interval_seconds", self.config.capture_interval_seconds)
-        self._set_var("dedupe_seconds", self.config.dedupe_seconds)
-        self._set_var("alert_cooldown_seconds", self.config.alert_cooldown_seconds)
-        self._set_var(
-            "validation_failures_before_calibration_prompt",
-            self.config.validation_failures_before_calibration_prompt,
-        )
-        self._set_var("popup_seconds", self.config.popup_seconds)
-        self._set_var("ntfy_server_url", self.config.ntfy_server_url)
-        self._set_var("ntfy_topic", self.config.ntfy_topic)
-        self._set_var("ntfy_priority", self.config.ntfy_priority)
-        self._set_var("ntfy_tags", self.config.ntfy_tags)
-        self._set_var("phone_sound", self.config.phone_sound)
-        self._set_var("update_repo", self.config.update_repo)
-        self.detail_var.set(f"Settings loaded from {config_dir() / 'config.json'}")
+        self._loading_settings = True
+        try:
+            self.config = load_config()
+            selected = set(self.config.targets)
+            for combo, var in self.alert_vars.items():
+                var.set(combo in selected)
+            for key in (
+                "popup_enabled",
+                "sound_enabled",
+                "save_alert_samples",
+                "ntfy_enabled",
+                "discord_enabled",
+                "phone_alerts_enabled",
+                "ntfy_include_attachment",
+                "phone_include_attachment",
+                "update_check_enabled",
+                "save_debug_screenshots",
+            ):
+                var = self.setting_vars.get(key)
+                if isinstance(var, BooleanVar):
+                    var.set(bool(getattr(self.config, key)))
+            self._set_var("monitor_index", self.config.monitor_index)
+            self._set_var("capture_interval_seconds", self.config.capture_interval_seconds)
+            self._set_var("dedupe_seconds", self.config.dedupe_seconds)
+            self._set_var("alert_cooldown_seconds", self.config.alert_cooldown_seconds)
+            self._set_var(
+                "validation_failures_before_calibration_prompt",
+                self.config.validation_failures_before_calibration_prompt,
+            )
+            self._set_var("popup_seconds", self.config.popup_seconds)
+            self._set_var("ntfy_server_url", self.config.ntfy_server_url)
+            self._set_var("ntfy_topic", self.config.ntfy_topic)
+            self._set_var("ntfy_priority", self.config.ntfy_priority)
+            self._set_var("ntfy_tags", self.config.ntfy_tags)
+            self._set_var("phone_sound", self.config.phone_sound)
+            self._set_var("update_repo", self.config.update_repo)
+            self._set_var("advanced_mode", self.config.advanced_mode)
+            self._apply_advanced_visibility(self.config.advanced_mode)
+            self.detail_var.set(f"Settings loaded from {config_dir() / 'config.json'}")
+        finally:
+            self._loading_settings = False
 
     def _set_var(self, key: str, value: object) -> None:
         var = self.setting_vars.get(key)
         if hasattr(var, "set"):
             var.set(value)
+
+    def _wire_auto_save(self) -> None:
+        for var in [*self.setting_vars.values(), *self.alert_vars.values()]:
+            if hasattr(var, "trace_add"):
+                var.trace_add("write", self._on_setting_changed)
+        self._autosave_ready = True
+
+    def _on_setting_changed(self, *_args) -> None:
+        if self._loading_settings:
+            return
+        self._schedule_auto_save()
+
+    def _schedule_auto_save(self, delay_ms: int = 600) -> None:
+        if not self._autosave_ready:
+            return
+        if self._autosave_after_id is not None:
+            try:
+                self.root.after_cancel(self._autosave_after_id)
+            except Exception:
+                pass
+        self._autosave_after_id = self.root.after(delay_ms, self._auto_save_settings)
+
+    def _auto_save_settings(self) -> None:
+        self._autosave_after_id = None
+        self.save_settings(interactive=False, update_detail=False)
 
     def prompt_notification_setup_if_needed(self) -> None:
         config = load_config()
@@ -421,12 +475,18 @@ class DroidAlertsApp:
             self.config = config
             return
 
-        if messagebox.askyesno(
-            "Set Up Phone Alerts",
-            "Set up ntfy phone alerts now?\n\n"
-            "ntfy is the recommended option. Install the ntfy app, subscribe to a private topic, "
-            "then enter that topic here.",
-        ):
+        choice = self._setup_dialog(
+            "Get Alerts On Your Phone",
+            intro="Droid Alerts can ping your phone the moment a priority droid spawns — "
+            "even when you're away from your PC.\n\n"
+            "The easiest way is the free ntfy app. Setting it up takes about two minutes. "
+            "Want to do that now?",
+            note="You can always do this later with the Set Up ntfy or Set Up Pushover "
+            "buttons in Settings.",
+            ok_text="Set Up ntfy",
+            cancel_text="Maybe Later",
+        )
+        if choice is not None:
             if self.setup_ntfy_alerts_and_enable():
                 return
 
@@ -435,9 +495,9 @@ class DroidAlertsApp:
         save_config(config)
         self.config = config
 
-    def save_settings(self) -> AppConfig | None:
+    def save_settings(self, *, interactive: bool = True, update_detail: bool = True) -> AppConfig | None:
         selected = [combo for combo, var in self.alert_vars.items() if var.get()]
-        if not selected and not messagebox.askyesno(
+        if interactive and not selected and not messagebox.askyesno(
             "No Priority Alerts", "Continue with no priority alerts selected?"
         ):
             return None
@@ -453,12 +513,16 @@ class DroidAlertsApp:
             )
             config.popup_seconds = max(0.5, float(self._value("popup_seconds")))
         except (TypeError, ValueError) as exc:
-            messagebox.showerror("Settings", f"Invalid numeric setting: {exc}")
+            if interactive:
+                messagebox.showerror("Settings", f"Invalid numeric setting: {exc}")
+            elif update_detail:
+                self.detail_var.set("Settings not saved: invalid numeric value")
             return None
 
         config.sound_enabled = bool(self._value("sound_enabled"))
         config.popup_enabled = bool(self._value("popup_enabled"))
         config.save_alert_samples = bool(self._value("save_alert_samples"))
+        config.save_debug_screenshots = bool(self._value("save_debug_screenshots"))
         config.ntfy_enabled = bool(self._value("ntfy_enabled"))
         config.discord_enabled = bool(self._value("discord_enabled"))
         config.phone_alerts_enabled = bool(self._value("phone_alerts_enabled"))
@@ -471,24 +535,30 @@ class DroidAlertsApp:
         config.ntfy_tags = str(self._value("ntfy_tags")).strip() or "rotating_light"
         config.phone_sound = str(self._value("phone_sound")).strip() or "siren"
         config.update_repo = str(self._value("update_repo")).strip() or "DogifiedV2/droidalerts"
+        config.advanced_mode = bool(self._value("advanced_mode"))
         config.alert_targets = [list(combo) for combo in selected]
 
+        # Channels that are on but not configured yet simply stay quiet until
+        # their Set Up button is used — no wizard nagging on every save.
+        needs_setup = []
         if config.ntfy_enabled and not ntfy_configured(config):
-            if not self.setup_ntfy_alerts(config):
-                config.ntfy_enabled = False
-                self._set_var("ntfy_enabled", False)
+            needs_setup.append("ntfy")
         if config.discord_enabled and not discord_webhook_configured(config):
-            if not self.setup_discord_alerts(config):
-                config.discord_enabled = False
-                self._set_var("discord_enabled", False)
+            needs_setup.append("Discord")
         if config.phone_alerts_enabled and not phone_alerts_configured(config):
-            if not self.setup_phone_alerts(config):
-                config.phone_alerts_enabled = False
-                self._set_var("phone_alerts_enabled", False)
+            needs_setup.append("Pushover")
 
         save_config(config)
         self.config = config
-        self.detail_var.set("Settings saved")
+        if not update_detail:
+            return config
+        saved_label = "Settings saved"
+        if needs_setup:
+            self.detail_var.set(
+                f"{saved_label} — {', '.join(needs_setup)} won't send alerts until set up"
+            )
+        else:
+            self.detail_var.set(saved_label)
         return config
 
     def _value(self, key: str) -> object:
@@ -496,6 +566,139 @@ class DroidAlertsApp:
         if hasattr(var, "get"):
             return var.get()
         return var
+
+    def _setup_dialog(
+        self,
+        title: str,
+        *,
+        intro: str = "",
+        steps: tuple[str, ...] = (),
+        fields: tuple[tuple[str, str, str, str | None], ...] = (),
+        note: str = "",
+        error: str = "",
+        link: tuple[str, str] | None = None,
+        ok_text: str = "Continue",
+        cancel_text: str = "Cancel",
+    ) -> dict[str, str] | None:
+        """Styled modal dialog for setup flows.
+
+        Replaces messagebox/simpledialog so tutorials read as plain steps
+        instead of a chain of bare OS prompts with generic icons. Returns the
+        entered field values ({} when there are no fields) or None on cancel.
+        """
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        result: dict[str, str] | None = None
+
+        body = ttk.Frame(dialog, padding=(22, 18))
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        wrap = 460
+        row = 0
+
+        ttk.Label(body, text=title, font=("Segoe UI", 14, "bold")).grid(
+            row=row, column=0, sticky="w", pady=(0, 10)
+        )
+        row += 1
+        if intro:
+            ttk.Label(body, text=intro, wraplength=wrap, justify="left").grid(
+                row=row, column=0, sticky="w", pady=(0, 10)
+            )
+            row += 1
+        for index, step in enumerate(steps, start=1):
+            step_frame = ttk.Frame(body)
+            step_frame.grid(row=row, column=0, sticky="w", pady=3)
+            row += 1
+            ttk.Label(
+                step_frame, text=f"{index}.", font=("Segoe UI", 10, "bold"), **bootstyle("info")
+            ).grid(row=0, column=0, sticky="nw", padx=(0, 8))
+            ttk.Label(step_frame, text=step, wraplength=wrap - 26, justify="left").grid(
+                row=0, column=1, sticky="w"
+            )
+        if link is not None:
+            link_text, link_url = link
+            ttk.Button(
+                body,
+                text=link_text,
+                command=lambda: webbrowser.open(link_url),
+                **bootstyle("info-outline"),
+            ).grid(row=row, column=0, sticky="w", pady=(8, 2))
+            row += 1
+
+        entries: dict[str, StringVar] = {}
+        first_entry = None
+        for key, label, initial, show in fields:
+            ttk.Label(body, text=label, font=("Segoe UI", 10, "bold")).grid(
+                row=row, column=0, sticky="w", pady=(10, 2)
+            )
+            row += 1
+            var = StringVar(value=initial)
+            entries[key] = var
+            entry = ttk.Entry(body, textvariable=var, width=52, show=show or "")
+            entry.grid(row=row, column=0, sticky="ew")
+            row += 1
+            if first_entry is None:
+                first_entry = entry
+        if note:
+            ttk.Label(
+                body,
+                text=note,
+                wraplength=wrap,
+                justify="left",
+                font=("Segoe UI", 9),
+                **bootstyle("secondary"),
+            ).grid(row=row, column=0, sticky="w", pady=(10, 0))
+            row += 1
+        if error:
+            ttk.Label(
+                body, text=error, wraplength=wrap, justify="left", **bootstyle("danger")
+            ).grid(row=row, column=0, sticky="w", pady=(10, 0))
+            row += 1
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=row, column=0, sticky="e", pady=(16, 0))
+
+        def finish(values: dict[str, str] | None) -> None:
+            nonlocal result
+            result = values
+            dialog.destroy()
+
+        def accept() -> None:
+            finish({key: var.get().strip() for key, var in entries.items()})
+
+        ttk.Button(
+            buttons, text=cancel_text, command=lambda: finish(None), **bootstyle("secondary")
+        ).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(buttons, text=ok_text, command=accept, **bootstyle("success")).grid(
+            row=0, column=1
+        )
+        dialog.bind("<Return>", lambda _event: accept())
+        dialog.bind("<Escape>", lambda _event: finish(None))
+        dialog.protocol("WM_DELETE_WINDOW", lambda: finish(None))
+        if first_entry is not None:
+            first_entry.focus_set()
+
+        dialog.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - dialog.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - dialog.winfo_height()) // 3
+        dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
+        dialog.grab_set()
+        dialog.wait_window()
+        return result
+
+    def _confirm_test_alert(self, channel: str) -> bool:
+        return (
+            self._setup_dialog(
+                "Check Your Phone",
+                intro=f"A test alert was just sent through {channel}. "
+                "It should pop up on your phone within a few seconds.",
+                ok_text="It Arrived!",
+                cancel_text="It Didn't — Go Back",
+            )
+            is not None
+        )
 
     def setup_ntfy_alerts_and_enable(self) -> bool:
         config = load_config()
@@ -516,65 +719,67 @@ class DroidAlertsApp:
 
     def setup_ntfy_alerts(self, config: AppConfig | None = None) -> bool:
         config = config or load_config()
-        messagebox.showinfo(
-            "ntfy Setup",
-            "ntfy is the recommended phone alert option.\n\n"
-            "Install the ntfy app, subscribe to a hard-to-guess topic, then enter the same topic here.",
-        )
-        server_url = simpledialog.askstring(
-            "ntfy",
-            "ntfy server URL:",
-            initialvalue=config.ntfy_server_url or "https://ntfy.sh",
-            parent=self.root,
-        )
-        if server_url is None:
-            return False
-        server_url = server_url.strip().rstrip("/") or "https://ntfy.sh"
-        if not valid_ntfy_server_url(server_url):
-            messagebox.showerror("ntfy", "Server URL must start with http:// or https://.")
-            return False
-
-        topic = simpledialog.askstring(
-            "ntfy",
-            "Topic name (letters, numbers, _ and - only):",
-            initialvalue=config.ntfy_topic,
-            parent=self.root,
-        )
-        if topic is None:
-            return False
-        topic = topic.strip()
-        if not valid_ntfy_topic(topic):
-            messagebox.showerror(
-                "ntfy",
-                "Topic must be 1-64 chars and only use letters, numbers, _ or -.",
-            )
-            return False
-
         current_token, _source = load_ntfy_token(config)
-        token = simpledialog.askstring(
-            "ntfy",
-            "Bearer token (optional; leave blank for public topics):",
-            initialvalue=current_token or "",
-            show="*",
-            parent=self.root,
-        )
-        if token is None:
-            return False
-
-        config.ntfy_server_url = server_url
-        config.ntfy_topic = topic
-        config.ntfy_priority = str(config.ntfy_priority or "5")
-        config.ntfy_tags = str(config.ntfy_tags or "rotating_light")
-        save_ntfy_token(config, token)
-        self.detail_var.set(f"ntfy topic saved: {server_url}/{topic}")
-        try:
-            send_ntfy_test_alert(config)
-        except Exception as exc:
-            messagebox.showerror("ntfy", f"The ntfy test alert failed.\n\n{exc}")
-            return False
-        if not messagebox.askyesno("ntfy", "A test alert was sent. Did it arrive?"):
-            return False
-        return True
+        server_url = config.ntfy_server_url or "https://ntfy.sh"
+        topic = config.ntfy_topic
+        token = current_token or ""
+        error = ""
+        while True:
+            fields: list[tuple[str, str, str, str | None]] = [
+                ("topic", "Topic name", topic, None)
+            ]
+            note = (
+                "Alerts are sent through ntfy.sh — no account needed. Turn on Advanced "
+                "settings to use your own ntfy server or an access token."
+            )
+            if config.advanced_mode:
+                fields.append(("server", "ntfy server", server_url, None))
+                fields.append(("token", "Access token (leave blank unless your server needs one)", token, "*"))
+                note = ""
+            result = self._setup_dialog(
+                "Set Up ntfy Phone Alerts",
+                intro="ntfy is a free app that pushes alerts straight to your phone. "
+                "It takes about two minutes:",
+                steps=(
+                    'Install the free "ntfy" app from the App Store or Google Play.',
+                    "Open the app and tap the + button to add a subscription.",
+                    "Make up a topic name nobody could guess — something like "
+                    "droid-alerts-mando-4821 — and subscribe to it.",
+                    "Type that exact same topic name below.",
+                ),
+                fields=tuple(fields),
+                note=note,
+                error=error,
+                ok_text="Send Test Alert",
+            )
+            if result is None:
+                return False
+            topic = result["topic"]
+            server_url = (result.get("server") or server_url).strip().rstrip("/") or "https://ntfy.sh"
+            token = result.get("token", token)
+            if not valid_ntfy_server_url(server_url):
+                error = "That server URL doesn't look right — it must start with http:// or https://."
+                continue
+            if not valid_ntfy_topic(topic):
+                error = "Topic names can only use letters, numbers, - and _ (up to 64 characters)."
+                continue
+            config.ntfy_server_url = server_url
+            config.ntfy_topic = topic
+            config.ntfy_priority = str(config.ntfy_priority or "5")
+            config.ntfy_tags = str(config.ntfy_tags or "rotating_light")
+            save_ntfy_token(config, token)
+            self.detail_var.set(f"ntfy topic saved: {server_url}/{topic}")
+            try:
+                send_ntfy_test_alert(config)
+            except Exception as exc:
+                error = f"Sending the test alert failed: {exc}"
+                continue
+            if self._confirm_test_alert("ntfy"):
+                return True
+            error = (
+                "No alert? Make sure the topic below matches the one in the ntfy app "
+                "exactly, then send another test."
+            )
 
     def setup_discord_alerts_and_enable(self) -> bool:
         config = load_config()
@@ -591,21 +796,35 @@ class DroidAlertsApp:
     def setup_discord_alerts(self, config: AppConfig | None = None) -> bool:
         config = config or load_config()
         current, _source = load_discord_webhook(config)
-        webhook_url = simpledialog.askstring(
-            "Discord Webhook",
-            "Paste the Discord webhook URL:",
-            initialvalue=current or "",
-            parent=self.root,
-        )
-        if webhook_url is None:
-            return False
-        webhook_url = webhook_url.strip().lstrip("\ufeff")
-        if not valid_discord_webhook_url(webhook_url):
-            messagebox.showerror("Discord Webhook", "That does not look like a Discord webhook URL.")
-            return False
-        path = save_discord_webhook(config, webhook_url)
-        self.detail_var.set(f"Discord webhook saved to {path}")
-        return True
+        webhook_url = current or ""
+        error = ""
+        while True:
+            result = self._setup_dialog(
+                "Set Up Discord Alerts",
+                intro="Droid Alerts can post priority spawns into a Discord channel "
+                "using a webhook:",
+                steps=(
+                    "In Discord, open the server channel where alerts should go and "
+                    "click the gear icon next to its name (Edit Channel).",
+                    'Go to Integrations, then Webhooks, and click "New Webhook".',
+                    'Click "Copy Webhook URL" and paste it below.',
+                ),
+                fields=(("webhook", "Webhook URL", webhook_url, None),),
+                error=error,
+                ok_text="Save Webhook",
+            )
+            if result is None:
+                return False
+            webhook_url = result["webhook"].lstrip("\ufeff")
+            if not valid_discord_webhook_url(webhook_url):
+                error = (
+                    "That doesn't look like a Discord webhook URL \u2014 it should start "
+                    "with https://discord.com/api/webhooks/."
+                )
+                continue
+            path = save_discord_webhook(config, webhook_url)
+            self.detail_var.set(f"Discord webhook saved to {path}")
+            return True
 
     def setup_phone_alerts_and_enable(self) -> bool:
         config = load_config()
@@ -621,39 +840,53 @@ class DroidAlertsApp:
 
     def setup_phone_alerts(self, config: AppConfig | None = None) -> bool:
         config = config or load_config()
-        token = simpledialog.askstring(
-            "Pushover",
-            "Paste the Pushover app token:",
-            parent=self.root,
-        )
-        if token is None:
-            return False
-        user = simpledialog.askstring(
-            "Pushover",
-            "Paste the Pushover user key:",
-            parent=self.root,
-        )
-        if user is None:
-            return False
-        token = token.strip()
-        user = user.strip()
-        if not token or not user:
-            messagebox.showerror("Pushover", "Both Pushover values are required.")
-            return False
-        path = save_phone_credentials(config, token, user)
-        self.detail_var.set(f"Pushover credentials saved to {path}")
-        credentials = {"token": token, "user": user}
-        try:
-            send_phone_test_alert(credentials, sound=config.phone_sound)
-        except Exception as exc:
-            messagebox.showerror(
-                "Pushover",
-                f"The credentials were saved, but the test alert failed.\n\n{exc}",
+        existing, _source = load_phone_alert_credentials(config)
+        token = (existing or {}).get("token", "")
+        user = (existing or {}).get("user", "")
+        error = ""
+        while True:
+            result = self._setup_dialog(
+                "Set Up Pushover Phone Alerts",
+                intro="Pushover is a phone app Droid Alerts can send alerts through. "
+                "You only set this up once:",
+                steps=(
+                    "Go to pushover.net, create a free account, then install the "
+                    "Pushover app on your phone and log in.",
+                    'Back on the pushover.net home page, copy "Your User Key" '
+                    "(shown near the top-right) into the User Key box below.",
+                    'Further down that page, click "Create an Application/API Token". '
+                    "Name it anything (like Droid Alerts), create it, and copy the "
+                    "token it gives you into the API Token box.",
+                ),
+                fields=(
+                    ("user", "User Key", user, None),
+                    ("token", "API Token", token, None),
+                ),
+                link=("Open pushover.net", "https://pushover.net"),
+                error=error,
+                ok_text="Send Test Alert",
             )
-            return False
-        if not messagebox.askyesno("Pushover", "A test alert was sent. Did it arrive?"):
-            return False
-        return True
+            if result is None:
+                return False
+            user = result["user"]
+            token = result["token"]
+            if not token or not user:
+                error = "Both boxes need to be filled in before the test can be sent."
+                continue
+            path = save_phone_credentials(config, token, user)
+            self.detail_var.set(f"Pushover credentials saved to {path}")
+            credentials = {"token": token, "user": user}
+            try:
+                send_phone_test_alert(credentials, sound=config.phone_sound)
+            except Exception as exc:
+                error = f"Sending the test alert failed: {exc}"
+                continue
+            if self._confirm_test_alert("Pushover"):
+                return True
+            error = (
+                "No alert? Double-check both keys against the pushover.net page, "
+                "then send another test."
+            )
 
     def on_ntfy_alert_toggle(self) -> None:
         if not bool(self._value("ntfy_enabled")):
@@ -662,19 +895,19 @@ class DroidAlertsApp:
         config.ntfy_server_url = str(self._value("ntfy_server_url")).strip() or "https://ntfy.sh"
         config.ntfy_topic = str(self._value("ntfy_topic")).strip()
         if not ntfy_configured(config) and not self.setup_ntfy_alerts_and_enable():
-            messagebox.showinfo("ntfy", "ntfy alerts were left off because no topic was saved.")
+            self.detail_var.set("ntfy alerts stay off until a topic is set up")
 
     def on_discord_alert_toggle(self) -> None:
         if not bool(self._value("discord_enabled")):
             return
         if not discord_webhook_configured(load_config()) and not self.setup_discord_alerts_and_enable():
-            messagebox.showinfo("Discord", "Discord alerts were left off because no webhook was saved.")
+            self.detail_var.set("Discord alerts stay off until a webhook is set up")
 
     def on_phone_alert_toggle(self) -> None:
         if not bool(self._value("phone_alerts_enabled")):
             return
         if not phone_alerts_configured(load_config()) and not self.setup_phone_alerts_and_enable():
-            messagebox.showinfo("Pushover", "Pushover alerts were left off because no credentials were saved.")
+            self.detail_var.set("Pushover alerts stay off until the keys are set up")
 
     def send_test_alert(self) -> None:
         config = self.save_settings()
@@ -742,11 +975,17 @@ class DroidAlertsApp:
         self.watch_thread = threading.Thread(target=self._watch_thread, args=(config, self.stop_event), daemon=True)
         self.watch_thread.start()
         self.status_var.set("Running")
-        self.detail_var.set("Watcher started")
+        mode = "debug on" if config.save_debug_screenshots else "debug off"
+        self.detail_var.set(f"Watcher started ({mode})")
 
     def _watch_thread(self, config: AppConfig, stop_event: threading.Event) -> None:
         try:
-            run_watch(debug=False, config=config, stop_event=stop_event, popup_parent=self.root)
+            run_watch(
+                debug=config.save_debug_screenshots,
+                config=config,
+                stop_event=stop_event,
+                popup_parent=self.root,
+            )
             self.root.after(0, lambda: self._watcher_finished(None))
         except Exception as exc:
             self.root.after(0, lambda exc=exc: self._watcher_finished(exc))
@@ -833,9 +1072,6 @@ class DroidAlertsApp:
                     f"{float(row.get('score', 0.0)):.2f}" if row.get("score") is not None else "",
                 ),
             )
-        if update_detail:
-            self.detail_var.set(f"Loaded {len(rows)} unique log rows")
-
     def _log_row_key(self, row: dict[str, object]) -> str:
         row_box = row.get("row_box")
         y_bucket = ""
@@ -907,7 +1143,7 @@ class DroidAlertsApp:
         canvas.create_text(
             12,
             12,
-            text=f"ToolV2 region: {source}",
+            text=f"Droid Alerts region: {source}",
             fill="#ff1744",
             anchor="nw",
             font=("Segoe UI", 14, "bold"),
@@ -954,6 +1190,13 @@ class DroidAlertsApp:
             webbrowser.open(release["url"])
 
     def on_close(self) -> None:
+        if self._autosave_after_id is not None:
+            try:
+                self.root.after_cancel(self._autosave_after_id)
+            except Exception:
+                pass
+            self._autosave_after_id = None
+            self.save_settings(interactive=False, update_detail=False)
         if self._log_refresh_after_id is not None:
             try:
                 self.root.after_cancel(self._log_refresh_after_id)

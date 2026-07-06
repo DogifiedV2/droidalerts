@@ -7,7 +7,7 @@ from typing import Any
 
 
 def project_root() -> Path:
-    """ToolV2 project root. Everything lives under here — the tool is fully
+    """Droid Alerts project root. Everything lives under here — the tool is fully
     self-contained and never writes to OS user-data directories."""
     return Path(__file__).resolve().parents[2]
 
@@ -75,7 +75,7 @@ class AppConfig:
     ntfy_cache: str = "no"
     ntfy_include_attachment: bool = False
     notification_setup_prompted: bool = False
-    phone_alerts_enabled: bool = False
+    phone_alerts_enabled: bool = True
     phone_credentials_file: str = "phone_alerts.json"
     phone_env_token: str = "DROIDWATCHER_PHONE_ALERTS_TOKEN"
     phone_env_user: str = "DROIDWATCHER_PHONE_ALERTS_USER"
@@ -83,6 +83,7 @@ class AppConfig:
     phone_include_attachment: bool = True
     update_check_enabled: bool = True
     update_repo: str = "DogifiedV2/droidalerts"
+    advanced_mode: bool = False
     validation_failures_before_calibration_prompt: int = 30
     thresholds: Thresholds = field(default_factory=Thresholds)
     alert_targets: list[list[str]] = field(
@@ -122,7 +123,7 @@ class AppConfig:
             ntfy_cache=str(data.get("ntfy_cache", "no")),
             ntfy_include_attachment=bool(data.get("ntfy_include_attachment", False)),
             notification_setup_prompted=bool(data.get("notification_setup_prompted", False)),
-            phone_alerts_enabled=bool(data.get("phone_alerts_enabled", False)),
+            phone_alerts_enabled=bool(data.get("phone_alerts_enabled", True)),
             phone_credentials_file=str(data.get("phone_credentials_file", "phone_alerts.json")),
             phone_env_token=str(data.get("phone_env_token", "DROIDWATCHER_PHONE_ALERTS_TOKEN")),
             phone_env_user=str(data.get("phone_env_user", "DROIDWATCHER_PHONE_ALERTS_USER")),
@@ -130,6 +131,7 @@ class AppConfig:
             phone_include_attachment=bool(data.get("phone_include_attachment", True)),
             update_check_enabled=bool(data.get("update_check_enabled", True)),
             update_repo=str(data.get("update_repo", "DogifiedV2/droidalerts")),
+            advanced_mode=bool(data.get("advanced_mode", False)),
             validation_failures_before_calibration_prompt=int(
                 data.get("validation_failures_before_calibration_prompt", 30)
             ),
@@ -177,6 +179,7 @@ class AppConfig:
             "phone_include_attachment": self.phone_include_attachment,
             "update_check_enabled": self.update_check_enabled,
             "update_repo": self.update_repo,
+            "advanced_mode": self.advanced_mode,
             "validation_failures_before_calibration_prompt": self.validation_failures_before_calibration_prompt,
             "thresholds": {
                 "rarity_threshold": self.thresholds.rarity_threshold,

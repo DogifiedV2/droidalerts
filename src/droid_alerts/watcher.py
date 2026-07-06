@@ -48,7 +48,7 @@ def run_watch(
     webhook_url = None
     phone_credentials = None
 
-    print(f"ToolV2 watching monitor {config.monitor_index} ({screen_w}x{screen_h})")
+    print(f"Droid Alerts watching monitor {config.monitor_index} ({screen_w}x{screen_h})")
     print(f"Region [{region_source}]: left={box.left} top={box.top} w={box.width} h={box.height}")
     print(f"Targets: {sorted(config.targets)}")
     print(f"Popup alerts: {'ENABLED' if config.popup_enabled else 'DISABLED'}")

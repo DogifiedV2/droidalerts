@@ -2,7 +2,7 @@
 
 All pixel constants here (icon columns 14-72, rarity ROI 180-410/470,
 spawn-phrase columns 330-720, row_height 44) are valid at the 2560x1440
-reference scale. Inputs MUST be normalized via toolv2.normalize first.
+reference scale. Inputs MUST be normalized via droid_alerts.normalize first.
 """
 
 from __future__ import annotations

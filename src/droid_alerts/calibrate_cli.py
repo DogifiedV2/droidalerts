@@ -53,7 +53,7 @@ class RegionSelector:
         if not self.monitors:
             self.monitors = [self.virtual]
 
-        self.root.title("ToolV2 - Select Alert Region")
+        self.root.title("Droid Alerts - Select Alert Region")
         self.root.geometry(
             f"{self.virtual['width']}x{self.virtual['height']}+{self.virtual['left']}+{self.virtual['top']}"
         )
@@ -63,7 +63,7 @@ class RegionSelector:
         self.canvas = tk.Canvas(self.root, cursor="cross", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
 
-        self.temp_image = tempfile.NamedTemporaryFile(prefix="toolv2_region_", suffix=".png", delete=False)
+        self.temp_image = tempfile.NamedTemporaryFile(prefix="droid_alerts_region_", suffix=".png", delete=False)
         self.temp_image.close()
         cv2.imwrite(self.temp_image.name, self.full_image)
         self.background = tk.PhotoImage(file=self.temp_image.name)
