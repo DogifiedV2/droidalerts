@@ -43,7 +43,7 @@ def run_watch(*, debug: bool = False, config: AppConfig | None = None) -> None:
     frame_index = 0
     misfire_count = 0
     calibration_hint_shown = False
-    seen_prints: dict[str, float] = {}
+    logged_spawn_hashes: set[str] = set()
     try:
         while True:
             started = time.monotonic()
@@ -91,20 +91,22 @@ def run_watch(*, debug: bool = False, config: AppConfig | None = None) -> None:
                 label = f"{detection.droid} {detection.rarity}"
                 if fire:
                     print(f"[ALERT] {event['ts']} {label} score={detection.score:.2f}")
+                    logged_spawn_hashes.add(digest)
                     policy.notify(detection)
                     if config.save_alert_samples and norm is not None:
                         _save_sample(norm, detection, label)
-                else:
-                    # At 4 fps a persisting row would spam the console; every
-                    # event still lands in events.jsonl regardless.
-                    last_print = seen_prints.get(digest)
-                    if last_print is None or time.monotonic() - last_print >= 5.0:
-                        seen_prints[digest] = time.monotonic()
-                        print(
-                            f"[SEEN] {event['ts']} {label} "
-                            f"score={detection.score:.2f} rarity={detection.rarity_score:.2f} "
-                            f"margin={detection.rarity_margin:.2f} priority={detection.is_priority}"
-                        )
+                elif debug:
+                    print(
+                        f"[SEEN] {event['ts']} {label} "
+                        f"score={detection.score:.2f} rarity={detection.rarity_score:.2f} "
+                        f"margin={detection.rarity_margin:.2f} priority={detection.is_priority}"
+                    )
+                elif digest not in logged_spawn_hashes:
+                    logged_spawn_hashes.add(digest)
+                    print(
+                        f"[DETECTED] {event['ts']} {label} "
+                        f"score={detection.score:.2f} priority={detection.is_priority}"
+                    )
 
             if debug and debug_hotkey is not None and debug_hotkey():
                 saved = _save_debug(band, result, reason="manual")

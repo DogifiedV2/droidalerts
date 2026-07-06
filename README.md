@@ -48,8 +48,9 @@ live detection after installing dependencies.
 5. **Alerts** (`alerts.py`): per-combo score gates + cooldown + row-hash
    dedupe; sound via `assets/sounds/*.wav` (first file found) or a beep.
 
-Live watch prints every accepted detection as `[SEEN]`. Priority detections
-that pass the alert policy print as `[ALERT]` and play the alert sound.
+Live watch prints each unique non-alert spawn once as `[DETECTED]`. Priority
+detections that pass the alert policy print as `[ALERT]` and play the alert
+sound. Debug mode additionally prints non-alert detections as `[SEEN]`.
 
 Debug mode does not save automatic screenshots. Press numpad `+` while
 `watch --debug` is running to save the current chat-box region and a
