@@ -294,6 +294,21 @@ def droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
     }
 
 
+def _icon_cyan_count(row: np.ndarray) -> int:
+    """Cyan pixels in the anchored icon window (the Diamond droid's icon is
+    saturated cyan; Beskar's is gray)."""
+    x0 = _icon_x_start(row)
+    icon = row[:, x0 : x0 + 38]
+    if icon.size == 0:
+        return 0
+    hsv = cv2.cvtColor(icon, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(icon, cv2.COLOR_BGR2GRAY)
+    hue, sat, val = cv2.split(hsv)
+    edge_near = cv2.dilate(cv2.Canny(gray, 35, 125), np.ones((3, 3), np.uint8), iterations=1) > 0
+    cyan = (sat > 55) & (val > 95) & edge_near & (hue >= 78) & (hue <= 112)
+    return int(cyan.sum())
+
+
 def classify_droid_word(row: np.ndarray) -> tuple[str, float] | None:
     """Droid family from the droid-word text; None when evidence is weak.
 
@@ -312,6 +327,12 @@ def classify_droid_word(row: np.ndarray) -> tuple[str, float] | None:
     ):
         return "Diamond", min(0.99, p["cyan"] / 1000.0)
     if p["gray"] >= 700 and p["cyan"] < 700 and p["strong_families"] <= 3:
+        # A white player nameplate covering the droid word reads exactly like
+        # Beskar's silver text (live FP 2026-07-07: Diamond Legendary alerted
+        # as Beskar Legendary). The icon disambiguates: real Beskar rows
+        # measure icon-cyan <=8 across every fixture, Diamond icons 95-496.
+        if _icon_cyan_count(row) >= 60:
+            return "Diamond", min(0.99, p["gray"] / 900.0)
         return "Beskar", min(0.99, p["gray"] / 900.0)
     return None
 
@@ -762,18 +783,58 @@ def classify_rarity_roi(
             if confirmed:
                 return scan_rarity, scan_score, scan_margin, f"text-over-common:{scan_source}"
 
-    unconfirmed_priority_color = (
-        color_rarity in {"Legendary", "Mythic"}
-        and not (text_rarity == color_rarity and text_score >= 0.75)
-        and not (shape_rarity == color_rarity and shape_score >= 0.50)
-    )
-    if unconfirmed_priority_color:
-        return (
-            "Unknown",
-            color_score,
-            color_margin,
-            f"unconfirmed-priority-color:{color_source};{text_source};{shape_source}",
+    # Priority rarities decided by color counts need corroboration; measured
+    # 2026-07-07 on live debug uploads (Downloads tt batch), three FP modes:
+    #   - Epic was exempt from confirmation entirely: a purple mystery-box
+    #     card + white banner text alerted Beskar Epic with no spawn line.
+    #   - A billboard's literal "LEGENDARY" badge passes the text-color
+    #     confirm (it IS orange outlined text), but no rarity-word template
+    #     matches anywhere near the row (own-shape 0.00; every real alert
+    #     row measures >=0.21) -> own-shape floor 0.15.
+    #   - Orange shop cards behind a real "(Rare)" row outvoted Rare on raw
+    #     color; only there does a SECOND rarity's text count clear its own
+    #     floor while beating the winner on word shape -> dual-word veto.
+    if color_rarity in {"Epic", "Legendary", "Mythic"}:
+        own_shape: float | None = None
+        if word_matches is not None:
+            own_shape = rarity_word_shape_score_from_matches(
+                word_matches, y, color_rarity, row_height=row_height
+            )
+        elif shape_templates:
+            own_shape = rarity_word_shape_score(
+                image, y, color_rarity, shape_templates, row_height=row_height
+            )
+        text_confirms = text_rarity == color_rarity and text_score >= 0.75
+        shape_confirms = (
+            own_shape >= 0.50
+            if own_shape is not None
+            else (shape_rarity == color_rarity and shape_score >= 0.50)
         )
+        veto = None
+        if not text_confirms and not shape_confirms:
+            veto = "unconfirmed"
+        elif own_shape is not None and own_shape < 0.15:
+            veto = f"shape-floor:{own_shape:.2f}"
+        elif own_shape is not None:
+            text_counts = rarity_text_color_counts(image, y, droid, row_height=row_height)
+            for other in ("Rare", "Epic", "Legendary", "Mythic"):
+                if other == color_rarity:
+                    continue
+                if text_counts[other] < RARITY_COLOR_THRESHOLDS[other]:
+                    continue
+                other_shape = rarity_word_shape_score_from_matches(
+                    word_matches, y, other, row_height=row_height
+                )
+                if other_shape >= own_shape:
+                    veto = f"dual-word:{other}:{text_counts[other]}:{other_shape:.2f}"
+                    break
+        if veto is not None:
+            return (
+                "Unknown",
+                color_score,
+                color_margin,
+                f"unconfirmed-priority-color[{veto}]:{color_source};{text_source};{shape_source}",
+            )
 
     # Common's color score saturates on any row (white words + bright sand),
     # so it may not overturn a template verdict with a decisive margin.
