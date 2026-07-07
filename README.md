@@ -66,6 +66,20 @@ ntfy is completely free and takes about two minutes.
 There's also a **Discord** option if you'd rather have alerts posted into a
 Discord channel. The **Set Up Discord** button walks you through that too.
 
+## Anonymous watcher count
+
+Droid Alerts has a **Share anonymous data** option, enabled by default. While the
+watcher is running it sends a small heartbeat to `gonk.tools` so the site can
+show how many people are currently watching droids. The heartbeat contains only
+a random anonymous install ID, a per-run session ID, and the app version — no
+screenshots, detections, player names, notification settings, or machine names.
+Turn it off any time in **Settings → Options**.
+
+Debug mode also has a separate **Share detections with the developer** option.
+It is off by default and only appears while debug mode is enabled. If you turn it
+on, alert detections upload the two debug screenshots for that alert to help fix
+false flags.
+
 ## Something not working?
 
 - **No alerts coming through?** Make sure the game is on the monitor Droid

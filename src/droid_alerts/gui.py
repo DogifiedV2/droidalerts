@@ -96,6 +96,7 @@ class DroidAlertsApp:
         self._autosave_after_id: str | None = None
         self._loading_settings = False
         self._autosave_ready = False
+        self.share_debug_detections_check = None
 
         self.status_var = StringVar(value="Stopped")
         self.detail_var = StringVar(value=f"Config: {config_dir() / 'config.json'}")
@@ -251,6 +252,7 @@ class DroidAlertsApp:
             ("ntfy_enabled", "ntfy phone alerts", self.on_ntfy_alert_toggle),
             ("discord_enabled", "Discord webhook alerts", self.on_discord_alert_toggle),
             ("extra_checks", "Extra checks (fixes washed-out colors, e.g. HDR)", None),
+            ("share_anonymous_data", "Share anonymous data", None),
         )
         advanced_rows = (
             ("save_alert_samples", "Save alert samples", None),
@@ -307,6 +309,7 @@ class DroidAlertsApp:
         self.setting_vars["phone_sound"] = StringVar(value="siren")
         self.setting_vars["update_repo"] = StringVar(value="DogifiedV2/droidalerts")
         self.setting_vars["save_debug_screenshots"] = BooleanVar(value=False)
+        self.setting_vars["share_debug_detections"] = BooleanVar(value=False)
 
         fields = (
             ("Monitor index", "monitor_index"),
@@ -335,7 +338,15 @@ class DroidAlertsApp:
             runtime_frame,
             text="Debug mode",
             variable=self.setting_vars["save_debug_screenshots"],
-        ).grid(row=debug_row, column=0, columnspan=2, sticky="w", pady=(8, 2))
+            command=self.on_debug_mode_toggle,
+        ).grid(row=debug_row, column=0, columnspan=1, sticky="w", pady=(8, 2))
+        self.share_debug_detections_check = ttk.Checkbutton(
+            runtime_frame,
+            text="Share detections with the developer",
+            variable=self.setting_vars["share_debug_detections"],
+        )
+        self.share_debug_detections_check.grid(row=debug_row, column=1, columnspan=3, sticky="w", pady=(8, 2))
+        self.share_debug_detections_check.grid_remove()
 
         self._add_save_actions(self.runtime_tab, row=1)
 
@@ -455,6 +466,21 @@ class DroidAlertsApp:
                 row=row, column=0, sticky="w", pady=4
             )
 
+    def on_debug_mode_toggle(self) -> None:
+        debug_enabled = bool(self._value("save_debug_screenshots"))
+        if not debug_enabled:
+            self._set_var("share_debug_detections", False)
+        self._apply_debug_share_visibility(debug_enabled)
+        self._schedule_auto_save()
+
+    def _apply_debug_share_visibility(self, debug_enabled: bool) -> None:
+        if self.share_debug_detections_check is None:
+            return
+        if debug_enabled:
+            self.share_debug_detections_check.grid()
+        else:
+            self.share_debug_detections_check.grid_remove()
+
     def on_droid_timers_toggle(self) -> None:
         if bool(self._value("droid_timers_enabled")):
             self.show_droid_timers()
@@ -543,7 +569,9 @@ class DroidAlertsApp:
                 "phone_include_attachment",
                 "update_check_enabled",
                 "extra_checks",
+                "share_anonymous_data",
                 "save_debug_screenshots",
+                "share_debug_detections",
             ):
                 var = self.setting_vars.get(key)
                 if isinstance(var, BooleanVar):
@@ -563,7 +591,10 @@ class DroidAlertsApp:
             self._set_var("ntfy_tags", self.config.ntfy_tags)
             self._set_var("phone_sound", self.config.phone_sound)
             self._set_var("update_repo", self.config.update_repo)
+            if not self.config.save_debug_screenshots:
+                self._set_var("share_debug_detections", False)
             self._set_var("advanced_mode", self.config.advanced_mode)
+            self._apply_debug_share_visibility(self.config.save_debug_screenshots)
             self._apply_advanced_visibility(self.config.advanced_mode)
             self.detail_var.set(f"Settings loaded from {config_dir() / 'config.json'}")
         finally:
@@ -719,6 +750,7 @@ class DroidAlertsApp:
         config.droid_timers_enabled = bool(self._value("droid_timers_enabled"))
         config.save_alert_samples = bool(self._value("save_alert_samples"))
         config.save_debug_screenshots = bool(self._value("save_debug_screenshots"))
+        config.share_debug_detections = config.save_debug_screenshots and bool(self._value("share_debug_detections"))
         config.ntfy_enabled = bool(self._value("ntfy_enabled"))
         config.discord_enabled = bool(self._value("discord_enabled"))
         config.phone_alerts_enabled = bool(self._value("phone_alerts_enabled"))
@@ -726,6 +758,7 @@ class DroidAlertsApp:
         config.phone_include_attachment = bool(self._value("phone_include_attachment"))
         config.update_check_enabled = bool(self._value("update_check_enabled"))
         config.extra_checks = bool(self._value("extra_checks"))
+        config.share_anonymous_data = bool(self._value("share_anonymous_data"))
         config.ntfy_server_url = str(self._value("ntfy_server_url")).strip() or "https://ntfy.sh"
         config.ntfy_topic = str(self._value("ntfy_topic")).strip()
         config.ntfy_priority = str(self._value("ntfy_priority")).strip() or "5"

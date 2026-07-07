@@ -58,5 +58,9 @@
       "Beskar",
       "Mythic"
     ]
-  ]
+  ],
+  "share_anonymous_data": true,
+  "anonymous_stats_url": "https://gonk.tools/api/droid-alerts/heartbeat",
+  "share_debug_detections": false,
+  "debug_detection_upload_url": "https://gonk.tools/api/droid-alerts/debug-detections"
 }

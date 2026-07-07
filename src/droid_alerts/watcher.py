@@ -30,6 +30,7 @@ from .notifications import (
 from .pipeline import Pipeline
 from .popup import popup_icon_path, show_popup
 from .region import RegionResolver
+from .telemetry import AnonymousTelemetryClient
 
 
 def run_watch(
@@ -122,6 +123,8 @@ def run_watch(
     calibration_hint_shown = False
     logged_spawn_keys: dict[str, float] = {}
     log_dedupe_seconds = max(12.0, config.dedupe_seconds)
+    telemetry = AnonymousTelemetryClient(config)
+    telemetry.start()
 
     # Live settings: the GUI autosaves config.json (and region nudges save
     # calibration.json); watching the file mtimes lets changes apply on the
@@ -156,6 +159,7 @@ def run_watch(
                     monitor_changed = new_config.monitor_index != config.monitor_index
                     config = new_config
                     policy.apply_config(config)
+                    telemetry.apply_config(config)
                     pipeline.detector.extra_checks = config.extra_checks
                     log_dedupe_seconds = max(12.0, config.dedupe_seconds)
                     webhook_url = None
@@ -249,6 +253,10 @@ def run_watch(
                     sample_paths = None
                     if config.save_alert_samples and norm is not None:
                         sample_paths = _save_sample(norm, detection, label)
+                    if debug and config.share_debug_detections:
+                        debug_paths = _save_debug(band, result, reason="shared_alert")
+                        append_event(_debug_snapshot_event(frame_index, result, debug_paths, reason="shared_alert"))
+                        telemetry.submit_debug_detection(detection=detection, event=event, screenshot_paths=debug_paths)
                     if config.popup_enabled:
                         show_popup(
                             detection,
@@ -345,6 +353,7 @@ def run_watch(
     except KeyboardInterrupt:
         print("\nstopped")
     finally:
+        telemetry.stop()
         capture.close()
 
 

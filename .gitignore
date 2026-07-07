@@ -18,3 +18,5 @@ config/calibration.json
 config/discord_webhook.txt
 config/ntfy_token.txt
 config/phone_alerts.json
+config/anonymous_install_id.txt
+/.idea/
