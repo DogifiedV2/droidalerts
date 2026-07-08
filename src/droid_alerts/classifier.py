@@ -78,9 +78,25 @@ class Detection:
                 return self.droid_score >= 0.10 and self.rarity_score >= 0.66 and self.rarity_margin >= 0.08
             return self.droid_score >= 0.70 and self.rarity_score >= 0.66 and self.rarity_margin >= 0.08
         if self.droid == "Beskar" and self.rarity == "Legendary":
-            return self.droid_score >= 0.10 and self.rarity_score >= 0.55
+            # Margin floor 0.85: a gold coin badge behind a lower-rarity row
+            # (081b7912) or an orange desert backdrop (693a76e1) inflates the
+            # Legendary color count on a genuine Rare/Epic spawn -> the second
+            # rarity stays high so the margin collapses (0.23 / 0.80). Every
+            # real Beskar Legendary row measures margin 0.99. (live FP 2026-07-08)
+            return (
+                self.droid_score >= 0.10
+                and self.rarity_score >= 0.55
+                and self.rarity_margin >= 0.85
+            )
         if self.droid == "Beskar" and self.rarity == "Epic":
-            return self.droid_score >= 0.10 and self.rarity_score >= 0.55 and self.rarity_margin >= 0.06
+            # Same margin floor: a promo shop card's "EPIC" badge over a real
+            # "(Common)" spawn row alerted Beskar Epic at margin 0.57 (d619b446);
+            # every real Beskar Epic row measures 0.99.
+            return (
+                self.droid_score >= 0.10
+                and self.rarity_score >= 0.55
+                and self.rarity_margin >= 0.85
+            )
         return self.score >= 0.70
 
     def to_dict(self) -> dict[str, object]:
@@ -438,6 +454,50 @@ def has_spawn_phrase_structure(row: np.ndarray, *, min_white_edge_pixels: int = 
     edge_near = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1) > 0
     white_text_edges = (sat < 55) & (val > 165) & edge_near
     return int(white_text_edges.sum()) >= min_white_edge_pixels
+
+
+def has_spawn_line_phrase(
+    image: np.ndarray,
+    y: int,
+    templates: list[EdgeTemplate],
+    *,
+    row_height: int,
+    threshold: float = 0.38,
+    search_x: tuple[int, int] = (300, 640),
+) -> bool:
+    """Confirm the row carries the literal "spawned at the (Sandcrawler)" text.
+
+    The generic white-text gate (has_spawn_phrase_structure) only counts white
+    edge pixels, so it also passes milestone / craft / chat / promo rows
+    ("<player> crafted a Rainbow Droid", "reached Rebirth 12", chat lines, a
+    shop card) whose orange usernames and gold badges inflate the Legendary
+    color count -> eight live FPs 2026-07-08. The real spawn phrase is a fixed
+    string at a fixed position; a column-constrained edge-template match near
+    the row cleanly separates it (measured on the live batch: every non-spawn
+    Legendary upload scores <=0.337, every real Legendary row >=0.428).
+
+    Only Legendary is gated - that is where every observed non-spawn FP landed
+    (orange = Legendary's hue). Epic/Mythic rows can be legitimately occluded by
+    shop UI over the phrase (a real Beskar Epic measured 0.263) and would be
+    lost by this gate, so they keep the looser white-text gate only. Returns
+    True when no template is installed so a missing asset never blocks alerts.
+    """
+    if not templates:
+        return True
+    x0, x1 = search_x
+    if image.shape[1] <= x0 + 4:
+        return True
+    edge = preprocess_for_template(image[:, x0 : min(image.shape[1], x1)])
+    lo = max(0, y - 12)
+    for template in templates:
+        t = template.image
+        if t.shape[0] > edge.shape[0] or t.shape[1] > edge.shape[1]:
+            continue
+        result = cv2.matchTemplate(edge, t, cv2.TM_CCOEFF_NORMED)
+        hi = min(result.shape[0], y + 13)
+        if lo < hi and float(result[lo:hi].max()) >= threshold:
+            return True
+    return False
 
 
 def fixed_rarity_roi(image: np.ndarray, y: int, *, row_height: int, x1: int = 180, x2: int = 410) -> np.ndarray:
@@ -1023,6 +1083,7 @@ class DroidVisualDetector:
         self.templates = load_templates(template_dir)
         self.rarity_roi_templates = load_rarity_roi_templates(Path(template_dir) / "rarity_rois")
         self.crafted_phrase_templates = load_edge_templates(Path(template_dir) / "crafted_phrases")
+        self.spawn_line_templates = load_edge_templates(Path(template_dir) / "spawn_line")
         self.rarity_threshold = rarity_threshold
         self.droid_threshold = droid_threshold
         self.row_height = row_height
@@ -1105,6 +1166,17 @@ class DroidVisualDetector:
                     rarity, rarity_score, rarity_margin, template_name = rescued
             if rarity == "Unknown":
                 reject(y, "unknown-rarity", droid, template_name)
+                continue
+
+            # Legendary-only spawn-line confirmation: orange usernames/badges
+            # on craft/rebirth/chat/promo rows read as Legendary text but the
+            # row is not a spawn line. Require the literal "spawned at the"
+            # phrase in its fixed position (measured clean on the 2026-07-08
+            # live batch). Epic/Mythic keep the looser white-text gate.
+            if rarity == "Legendary" and not has_spawn_line_phrase(
+                image, y, self.spawn_line_templates, row_height=self.row_height
+            ):
+                reject(y, "no-spawn-line-phrase", droid, "Legendary")
                 continue
 
             score = (rarity_score * 0.72) + (droid_score * 0.28)
