@@ -155,12 +155,25 @@ class AnonymousTelemetryClient:
             if len(screenshots) != 2:
                 return
 
+            detection_key = _detection_key(detection.droid, detection.rarity)
             payload = {
                 "installId": self._install_id,
                 "sessionId": self._session_id,
                 "appVersion": __version__,
                 "detectedAt": str(event.get("ts") or ""),
+                "metadata": {
+                    "resolution": _resolution_metadata(event),
+                    "monitorIndex": _safe_int(event.get("monitor_index")),
+                    "captureRegion": _capture_region_metadata(event.get("capture_region")),
+                    "scale": _round_float(event.get("scale")),
+                    "scaleMethod": str(event.get("scale_method") or ""),
+                },
+                "storage": {
+                    "installId": self._install_id,
+                    "detectionKey": detection_key,
+                },
                 "detection": {
+                    "key": detection_key,
                     "droid": detection.droid,
                     "rarity": detection.rarity,
                     "score": _round_float(detection.score),
@@ -226,6 +239,42 @@ def _round_float(value: object) -> float | None:
         return round(float(value), 4)
     except (TypeError, ValueError):
         return None
+
+
+def _safe_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _detection_key(droid: object, rarity: object) -> str:
+    text = f"{droid}{rarity}".lower()
+    cleaned = "".join(char for char in text if char.isalnum())
+    return cleaned or "unknown"
+
+
+def _resolution_metadata(event: dict[str, Any]) -> dict[str, object]:
+    width = _safe_int(event.get("screen_width"))
+    height = _safe_int(event.get("screen_height"))
+    text = f"{width}x{height}" if width and height else ""
+    return {
+        "width": width,
+        "height": height,
+        "text": text,
+    }
+
+
+def _capture_region_metadata(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "source": str(value.get("source") or ""),
+        "left": _safe_int(value.get("left")),
+        "top": _safe_int(value.get("top")),
+        "width": _safe_int(value.get("width")),
+        "height": _safe_int(value.get("height")),
+    }
 
 
 def _valid_uuid(value: str) -> bool:

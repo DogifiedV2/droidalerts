@@ -77,8 +77,9 @@ Turn it off any time in **Settings → Options**.
 
 Debug mode also has a separate **Share detections with the developer** option.
 It is off by default and only appears while debug mode is enabled. If you turn it
-on, alert detections upload the two debug screenshots for that alert to help fix
-false flags.
+on, alert detections upload the two debug screenshots for that alert, the
+anonymous install/session IDs, app version, detected droid/rarity, monitor
+resolution, capture region, and detector scale metadata to help fix false flags.
 
 ## Something not working?
 
