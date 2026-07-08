@@ -19,7 +19,7 @@ of the chat corner never leave your PC.
 
 ## How to install (Windows)
 
-1. Download the latest `DroidAlerts-Windows.zip` from the GitHub Releases page.
+1. Download the latest `DroidAlerts.zip` from the GitHub Releases page.
 2. Unzip it anywhere you like. Your Desktop is fine.
 3. Open the `Droid Alerts` folder and double-click `Droid Alerts.exe`.
 
@@ -71,9 +71,13 @@ Discord channel. The **Set Up Discord** button walks you through that too.
 Droid Alerts has a **Share anonymous data** option, enabled by default. While the
 watcher is running it sends a small heartbeat to `gonk.tools` so the site can
 show how many people are currently watching droids. The heartbeat contains only
-a random anonymous install ID, a per-run session ID, and the app version — no
-screenshots, detections, player names, notification settings, or machine names.
-Turn it off any time in **Settings → Options**.
+a random anonymous install ID, a per-run session ID, and the app version.
+
+When a priority alert fires, the same anonymous-data setting also sends the
+timestamp plus the detected droid/rarity combo so the site can track which rare
+droids are being found. It still does **not** send screenshots, player names,
+notification settings, machine names, or chat text. Turn it off any time in
+**Settings → Options**.
 
 Debug mode also has a separate **Share detections with the developer** option.
 It is off by default and only appears while debug mode is enabled. If you turn it

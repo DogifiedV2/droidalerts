@@ -114,6 +114,7 @@ class AppConfig:
     update_check_enabled: bool = True
     share_anonymous_data: bool = True
     anonymous_stats_url: str = "https://gonk.tools/api/droid-alerts/heartbeat"
+    anonymous_detection_url: str = "https://gonk.tools/api/droid-alerts/detections"
     share_debug_detections: bool = False
     debug_detection_upload_url: str = "https://gonk.tools/api/droid-alerts/debug-detections"
     update_repo: str = "DogifiedV2/droidalerts"
@@ -173,6 +174,9 @@ class AppConfig:
             share_anonymous_data=bool(data.get("share_anonymous_data", True)),
             anonymous_stats_url=str(
                 data.get("anonymous_stats_url", "https://gonk.tools/api/droid-alerts/heartbeat")
+            ),
+            anonymous_detection_url=str(
+                data.get("anonymous_detection_url", "https://gonk.tools/api/droid-alerts/detections")
             ),
             share_debug_detections=bool(data.get("share_debug_detections", False)),
             debug_detection_upload_url=str(
@@ -234,6 +238,7 @@ class AppConfig:
             "update_check_enabled": self.update_check_enabled,
             "share_anonymous_data": self.share_anonymous_data,
             "anonymous_stats_url": self.anonymous_stats_url,
+            "anonymous_detection_url": self.anonymous_detection_url,
             "share_debug_detections": self.share_debug_detections,
             "debug_detection_upload_url": self.debug_detection_upload_url,
             "update_repo": self.update_repo,

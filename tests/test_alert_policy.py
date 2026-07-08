@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BASE_DIR / "src"))
+
+from droid_alerts.alerts import AlertPolicy
+from droid_alerts.classifier import Detection
+from droid_alerts.config import AppConfig
+
+
+def _detection(droid: str = "Diamond", rarity: str = "Mythic") -> Detection:
+    return Detection(
+        droid=droid,
+        rarity=rarity,
+        row_box=(0, 0, 845, 44),
+        droid_score=0.99,
+        rarity_score=0.99,
+        rarity_margin=0.99,
+        score=0.99,
+        source="test",
+        # This used to silently suppress Mythic alerts even though the logs
+        # showed the row as a priority detection.
+        shape_score=0.0,
+    )
+
+
+def main() -> int:
+    config = AppConfig()
+    policy = AlertPolicy(config)
+    priority = _detection()
+
+    failures: list[str] = []
+    if not priority.should_alert:
+        failures.append("priority detection should be marked alertable")
+    if not policy.should_alert(priority, "diamond-mythic-row"):
+        failures.append("first priority detection should fire")
+    if policy.should_alert(priority, "diamond-mythic-row"):
+        failures.append("duplicate row hash should still be deduped")
+
+    disabled_config = AppConfig(alert_targets=[])
+    if AlertPolicy(disabled_config).should_alert(priority, "disabled-row"):
+        failures.append("disabled target should not fire")
+
+    non_priority = _detection("Diamond", "Legendary")
+    if non_priority.should_alert:
+        failures.append("non-priority combo should not be marked alertable")
+    if AlertPolicy(config).should_alert(non_priority, "diamond-legendary-row"):
+        failures.append("non-target combo should not fire")
+
+    if failures:
+        print("alert policy failures:")
+        for failure in failures:
+            print(f"  - {failure}")
+        return 1
+    print("alert policy OK: priority detections fire, disabled/duplicate rows stay quiet")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

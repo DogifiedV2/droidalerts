@@ -30,7 +30,7 @@ if errorlevel 1 (
 )
 
 echo Creating release zip...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path 'dist\DroidAlerts-Windows.zip') { Remove-Item 'dist\DroidAlerts-Windows.zip' -Force }; Compress-Archive -Path 'dist\Droid Alerts' -DestinationPath 'dist\DroidAlerts-Windows.zip' -Force"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path 'dist\DroidAlerts.zip') { Remove-Item 'dist\DroidAlerts.zip' -Force }; Compress-Archive -Path 'dist\Droid Alerts' -DestinationPath 'dist\DroidAlerts.zip' -Force"
 if errorlevel 1 (
     pause
     exit /b 1
@@ -39,5 +39,5 @@ if errorlevel 1 (
 echo.
 echo Done.
 echo Folder: dist\Droid Alerts
-echo Zip:    dist\DroidAlerts-Windows.zip
+echo Zip:    dist\DroidAlerts.zip
 pause

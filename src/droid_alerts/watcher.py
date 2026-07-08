@@ -260,6 +260,7 @@ def run_watch(
                     print(f"[ALERT] {event['ts']} {label} score={detection.score:.2f}")
                     logged_spawn_keys[spawn_key] = now
                     policy.notify(detection)
+                    telemetry.submit_alert_detection(detection=detection, detected_at=event["ts"])
                     sample_paths = None
                     if config.save_alert_samples and norm is not None:
                         sample_paths = _save_sample(norm, detection, label)

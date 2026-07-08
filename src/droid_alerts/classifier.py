@@ -60,44 +60,14 @@ class Detection:
 
     @property
     def should_alert(self) -> bool:
-        if not self.is_priority:
-            return False
-        if self.rarity == "Mythic":
-            # Real Mythic rows score 0.49-0.59 on the Mythic word shape;
-            # measured background fakes (billboard, HUD coins) stay <=0.29.
-            if self.shape_score < 0.40:
-                return False
-            if self.droid == "Diamond":
-                return self.droid_score >= 0.55 and self.rarity_score >= 0.62 and self.rarity_margin >= 0.08
-            if self.droid == "Rainbow":
-                # 0.70 (was 0.85): the shape gate is the FP defense now. The
-                # billboard fake scored droid 1.00, while a real Mythic capture
-                # (IMG_6604) scores 0.75 and must alert.
-                return self.droid_score >= 0.70 and self.rarity_score >= 0.55 and self.rarity_margin >= 0.08
-            if self.droid == "Beskar":
-                return self.droid_score >= 0.10 and self.rarity_score >= 0.66 and self.rarity_margin >= 0.08
-            return self.droid_score >= 0.70 and self.rarity_score >= 0.66 and self.rarity_margin >= 0.08
-        if self.droid == "Beskar" and self.rarity == "Legendary":
-            # Margin floor 0.85: a gold coin badge behind a lower-rarity row
-            # (081b7912) or an orange desert backdrop (693a76e1) inflates the
-            # Legendary color count on a genuine Rare/Epic spawn -> the second
-            # rarity stays high so the margin collapses (0.23 / 0.80). Every
-            # real Beskar Legendary row measures margin 0.99. (live FP 2026-07-08)
-            return (
-                self.droid_score >= 0.10
-                and self.rarity_score >= 0.55
-                and self.rarity_margin >= 0.85
-            )
-        if self.droid == "Beskar" and self.rarity == "Epic":
-            # Same margin floor: a promo shop card's "EPIC" badge over a real
-            # "(Common)" spawn row alerted Beskar Epic at margin 0.57 (d619b446);
-            # every real Beskar Epic row measures 0.99.
-            return (
-                self.droid_score >= 0.10
-                and self.rarity_score >= 0.55
-                and self.rarity_margin >= 0.85
-            )
-        return self.score >= 0.70
+        # Every FP defense lives in the detector (spawn-line gate, dual-word
+        # veto, shape floor, text confirmation), so a detection that reaches
+        # here and is a priority combo should alert. The per-combo score
+        # gates that used to live here blocked ZERO of the 13 live FPs in the
+        # 2026-07-08 debug batch while sitting right on top of real alerts
+        # (three real Mythic rows measured shape 0.401-0.433 against the old
+        # 0.40 floor), and they made the UI show "Priority=yes / Alerted=no".
+        return self.is_priority
 
     def to_dict(self) -> dict[str, object]:
         data = asdict(self)
@@ -339,7 +309,13 @@ def classify_droid_word(row: np.ndarray) -> tuple[str, float] | None:
     if (
         p["cyan"] >= 700
         and p["strong_families"] <= 3
-        and p["cyan"] >= 0.6 * max(1, p["colored_total"])
+        # Orange scenery (a gold hexagon sign) behind a real Diamond word can
+        # push cyan under the 60%-of-colored ratio (measured 0.56 on a live
+        # 2026-07-08 FP: the verdict fell through to the icon path, misread
+        # Beskar, and alerted Beskar Legendary on a Diamond Legendary row).
+        # An absolute cyan count this high is Diamond regardless: real Diamond
+        # rows measure 1385-1553, every non-Diamond live row <=425.
+        and (p["cyan"] >= 0.6 * max(1, p["colored_total"]) or p["cyan"] >= 1200)
     ):
         return "Diamond", min(0.99, p["cyan"] / 1000.0)
     if p["gray"] >= 700 and p["cyan"] < 700 and p["strong_families"] <= 3:
@@ -349,6 +325,14 @@ def classify_droid_word(row: np.ndarray) -> tuple[str, float] | None:
         # measure icon-cyan <=8 across every fixture, Diamond icons 95-496.
         if _icon_cyan_count(row) >= 60:
             return "Diamond", min(0.99, p["gray"] / 900.0)
+        # A nameplate over a RAINBOW word leaves no icon cyan, but the
+        # multicolor letters peeking around the plate still count >=900
+        # colored text px across >=3 hue families (live FPs 2026-07-08:
+        # 1162/1183 px, 3 families -> alerted Beskar Epic on Rainbow Epic
+        # rows). Real Beskar rows top out at 883 colored px, and only reach
+        # 3 families at <=732 px (a colorful prop behind the row).
+        if p["colored_total"] >= 900 and p["strong_families"] >= 3:
+            return "Rainbow", min(0.99, p["colored_total"] / 1200.0)
         return "Beskar", min(0.99, p["gray"] / 900.0)
     return None
 
@@ -877,10 +861,16 @@ def classify_rarity_roi(
             veto = f"shape-floor:{own_shape:.2f}"
         elif own_shape is not None:
             text_counts = rarity_text_color_counts(image, y, droid, row_height=row_height)
-            for other in ("Rare", "Epic", "Legendary", "Mythic"):
+            for other in RARITIES:
                 if other == color_rarity:
                     continue
-                if text_counts[other] < RARITY_COLOR_THRESHOLDS[other]:
+                # Common joins the veto at a raised floor: the white spawn
+                # phrase bleeds 200-620 Common px into every row crop, but a
+                # literal "(Common)" word measures 1616 (live FP 2026-07-08:
+                # a real Beskar Common spawn in front of an orange COMPLETE
+                # quest banner alerted Beskar Legendary at color 2597).
+                floor = 900 if other == "Common" else RARITY_COLOR_THRESHOLDS[other]
+                if text_counts[other] < floor:
                     continue
                 other_shape = rarity_word_shape_score_from_matches(
                     word_matches, y, other, row_height=row_height

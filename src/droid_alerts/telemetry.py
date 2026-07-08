@@ -49,6 +49,8 @@ class AnonymousTelemetryClient:
     """Best-effort anonymous active-watcher and opt-in debug upload client.
 
     The active-watcher heartbeat sends only random UUIDs and the app version.
+    Priority alert reports share the same share_anonymous_data opt-in and send
+    only the anonymous IDs, app version, timestamp, and the droid/rarity combo.
     Debug detection sharing is a separate explicit opt-in that can upload the
     two debug PNGs for alert detections while debug mode is enabled.
     """
@@ -57,6 +59,7 @@ class AnonymousTelemetryClient:
         self._lock = threading.Lock()
         self._enabled = bool(config.share_anonymous_data)
         self._endpoint_url = config.anonymous_stats_url.strip()
+        self._detection_report_url = config.anonymous_detection_url.strip()
         self._debug_upload_enabled = bool(config.share_debug_detections)
         self._debug_upload_url = config.debug_detection_upload_url.strip()
         self._install_id: str | None = None
@@ -81,6 +84,7 @@ class AnonymousTelemetryClient:
         with self._lock:
             self._enabled = enabled
             self._endpoint_url = endpoint_url
+            self._detection_report_url = config.anonymous_detection_url.strip()
             self._debug_upload_enabled = bool(config.share_debug_detections)
             self._debug_upload_url = config.debug_detection_upload_url.strip()
             should_stop = (not enabled or not endpoint_url) and self._thread is not None
@@ -101,6 +105,20 @@ class AnonymousTelemetryClient:
             stop_event.set()
         if thread is not None and thread.is_alive():
             thread.join(timeout=0.2)
+
+    def submit_alert_detection(self, *, detection, detected_at: str) -> None:
+        with self._lock:
+            enabled = self._enabled
+            endpoint_url = self._detection_report_url
+        if not enabled or not endpoint_url:
+            return
+
+        threading.Thread(
+            target=self._send_alert_detection,
+            args=(endpoint_url, str(detection.droid), str(detection.rarity), detected_at),
+            name="DroidAlertsDetectionReport",
+            daemon=True,
+        ).start()
 
     def submit_debug_detection(self, *, detection, event: dict[str, Any], screenshot_paths: list[str]) -> None:
         with self._lock:
@@ -145,6 +163,25 @@ class AnonymousTelemetryClient:
         except (OSError, ValueError, urllib.error.URLError, TimeoutError):
             # Telemetry must never affect the watcher. Network failures, API
             # deploys, rate limits, and bad responses are all safe to ignore.
+            return
+
+    def _send_alert_detection(self, endpoint_url: str, droid: str, rarity: str, detected_at: str) -> None:
+        try:
+            if self._install_id is None:
+                self._install_id = load_or_create_anonymous_install_id()
+            payload = {
+                "installId": self._install_id,
+                "sessionId": self._session_id,
+                "appVersion": __version__,
+                "detectedAt": detected_at,
+                "detection": {
+                    "key": _detection_key(droid, rarity),
+                    "droid": droid,
+                    "rarity": rarity,
+                },
+            }
+            self._post_json(endpoint_url, payload)
+        except (OSError, ValueError, urllib.error.URLError, TimeoutError):
             return
 
     def _send_debug_detection(self, endpoint_url: str, detection, event: dict[str, Any], screenshot_paths: list[str]) -> None:
