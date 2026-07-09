@@ -20,7 +20,13 @@ except Exception:
     BOOTSTRAP = False
 
 from .alerts import AlertPolicy
-from .capture import PixelBox, create_capture, set_dpi_awareness
+from .capture import (
+    PixelBox,
+    create_capture,
+    format_monitor_label,
+    list_monitors,
+    set_dpi_awareness,
+)
 from .classifier import Detection
 from .config import AppConfig, config_dir, load_config, project_root, save_config
 from .logging_io import alert_samples_dir, debug_dir, logs_dir
@@ -101,9 +107,15 @@ class DroidAlertsApp:
         self.status_var = StringVar(value="Stopped")
         self.detail_var = StringVar(value=f"Config: {config_dir() / 'config.json'}")
         self.region_status_var = StringVar(value="")
-        self.setting_vars: dict[str, object] = {}
+        self.setting_vars: dict[str, object] = {"monitor_index": IntVar(value=1)}
         self.alert_vars: dict[tuple[str, str], BooleanVar] = {}
         self.advanced_widgets: list[object] = []
+        self.monitor_display_var = StringVar(value="Monitor 1")
+        self.monitor_indexes_by_label: dict[str, int] = {}
+        self.options_outer = None
+        self.options_canvas: tk.Canvas | None = None
+        self.options_canvas_window: int | None = None
+        self.options_scrollbar = None
 
         self._build_ui()
         self.load_settings()
@@ -162,8 +174,27 @@ class DroidAlertsApp:
             header, text="Test Alert", width=12, command=self.send_test_alert, **bootstyle("warning")
         ).grid(row=0, column=first_button_col + 2)
         ttk.Label(header, textvariable=self.detail_var).grid(
-            row=1, column=0, columnspan=first_button_col + 3, sticky="ew", pady=(7, 0)
+            row=1, column=0, columnspan=first_button_col, sticky="ew", pady=(7, 0)
         )
+
+        monitor_controls = ttk.Frame(header)
+        monitor_controls.grid(
+            row=1,
+            column=first_button_col,
+            columnspan=3,
+            sticky="e",
+            pady=(7, 0),
+        )
+        self.monitor_combobox = ttk.Combobox(
+            monitor_controls,
+            textvariable=self.monitor_display_var,
+            state="readonly",
+            width=39,
+            postcommand=self.refresh_monitor_choices,
+        )
+        self.monitor_combobox.grid(row=0, column=1, sticky="ew")
+        self.monitor_combobox.bind("<<ComboboxSelected>>", self.on_monitor_selected)
+        self.refresh_monitor_choices()
 
         # Bigger, bolder tabs: comfortable click targets instead of the
         # default cramped text-sized ones. Applied again after the notebook
@@ -240,8 +271,37 @@ class DroidAlertsApp:
                 variable=var,
             ).grid(row=row, column=0, sticky="w", pady=3)
 
-        options_outer, options_frame = self._labeled_section(self.settings_tab, "Options")
-        options_outer.grid(row=0, column=1, sticky="nsew")
+        self.options_outer = ttk.LabelFrame(self.settings_tab, text="Options")
+        self.options_outer.grid(row=0, column=1, sticky="nsew")
+        self.options_outer.columnconfigure(0, weight=1)
+        self.options_outer.rowconfigure(0, weight=1)
+        try:
+            canvas_background = ttk.Style().lookup("TFrame", "background") or self.root.cget("background")
+        except Exception:
+            canvas_background = self.root.cget("background")
+        self.options_canvas = tk.Canvas(
+            self.options_outer,
+            background=canvas_background,
+            borderwidth=0,
+            highlightthickness=0,
+            yscrollincrement=24,
+        )
+        self.options_canvas.grid(row=0, column=0, sticky="nsew")
+        self.options_scrollbar = ttk.Scrollbar(
+            self.options_outer,
+            orient="vertical",
+            command=self.options_canvas.yview,
+        )
+        self.options_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.options_scrollbar.grid_remove()
+        self.options_canvas.configure(yscrollcommand=self.options_scrollbar.set)
+
+        options_frame = ttk.Frame(self.options_canvas, padding=12)
+        self.options_canvas_window = self.options_canvas.create_window(
+            (0, 0), anchor="nw", window=options_frame
+        )
+        options_frame.bind("<Configure>", self._update_options_scrollregion)
+        self.options_canvas.bind("<Configure>", self._resize_options_content)
         options_frame.columnconfigure(0, weight=1, minsize=380)
         options_frame.columnconfigure(1, minsize=150)
         simple_rows = (
@@ -286,6 +346,9 @@ class DroidAlertsApp:
 
         self.setting_vars["advanced_mode"] = BooleanVar(value=False)
         self._add_settings_actions(self.settings_tab, row=1, columnspan=2)
+        self.root.bind_all("<MouseWheel>", self._on_options_mousewheel, add="+")
+        self.root.bind_all("<Button-4>", self._on_options_mousewheel, add="+")
+        self.root.bind_all("<Button-5>", self._on_options_mousewheel, add="+")
 
     def _build_runtime_tab(self) -> None:
         self.runtime_tab.columnconfigure(0, weight=1)
@@ -296,7 +359,6 @@ class DroidAlertsApp:
         for column in (1, 3):
             runtime_frame.columnconfigure(column, weight=1)
 
-        self.setting_vars["monitor_index"] = IntVar(value=1)
         self.setting_vars["capture_interval_seconds"] = DoubleVar(value=0.25)
         self.setting_vars["dedupe_seconds"] = DoubleVar(value=12.0)
         self.setting_vars["alert_cooldown_seconds"] = DoubleVar(value=10.0)
@@ -312,7 +374,6 @@ class DroidAlertsApp:
         self.setting_vars["share_debug_detections"] = BooleanVar(value=False)
 
         fields = (
-            ("Monitor index", "monitor_index"),
             ("Capture interval (sec)", "capture_interval_seconds"),
             ("Dedupe window (sec)", "dedupe_seconds"),
             ("Alert cooldown (sec)", "alert_cooldown_seconds"),
@@ -536,12 +597,71 @@ class DroidAlertsApp:
         self._apply_advanced_visibility(advanced)
         self._schedule_auto_save()
 
+    def _update_options_scrollregion(self, _event=None) -> None:
+        if self.options_canvas is None:
+            return
+        bounds = self.options_canvas.bbox("all")
+        if bounds is not None:
+            self.options_canvas.configure(scrollregion=bounds)
+
+    def _resize_options_content(self, event) -> None:
+        if self.options_canvas is None or self.options_canvas_window is None:
+            return
+        self.options_canvas.itemconfigure(self.options_canvas_window, width=event.width)
+
+    def _pointer_is_over_options(self) -> bool:
+        if self.options_outer is None:
+            return False
+        try:
+            widget = self.root.winfo_containing(
+                self.root.winfo_pointerx(), self.root.winfo_pointery()
+            )
+        except Exception:
+            return False
+        while widget is not None:
+            if widget is self.options_outer:
+                return True
+            widget = getattr(widget, "master", None)
+        return False
+
+    def _on_options_mousewheel(self, event):
+        if (
+            self.options_canvas is None
+            or not bool(self._value("advanced_mode"))
+            or not self._pointer_is_over_options()
+        ):
+            return None
+        if getattr(event, "num", None) == 4:
+            units = -1
+        elif getattr(event, "num", None) == 5:
+            units = 1
+        else:
+            delta = int(getattr(event, "delta", 0))
+            if not delta:
+                return None
+            units = -int(delta / 120)
+            if units == 0:
+                units = -1 if delta > 0 else 1
+        self.options_canvas.yview_scroll(units, "units")
+        return "break"
+
+    def _set_options_scrolling(self, enabled: bool) -> None:
+        if self.options_scrollbar is None or self.options_canvas is None:
+            return
+        if enabled:
+            self.options_scrollbar.grid()
+        else:
+            self.options_scrollbar.grid_remove()
+            self.options_canvas.yview_moveto(0)
+        self.root.after_idle(self._update_options_scrollregion)
+
     def _apply_advanced_visibility(self, advanced: bool) -> None:
         for widget in self.advanced_widgets:
             if advanced:
                 widget.grid()
             else:
                 widget.grid_remove()
+        self._set_options_scrolling(advanced)
         try:
             if advanced:
                 self.notebook.add(self.runtime_tab)
@@ -577,6 +697,7 @@ class DroidAlertsApp:
                 if isinstance(var, BooleanVar):
                     var.set(bool(getattr(self.config, key)))
             self._set_var("monitor_index", self.config.monitor_index)
+            self.refresh_monitor_choices()
             self._set_var("capture_interval_seconds", self.config.capture_interval_seconds)
             self._set_var("dedupe_seconds", self.config.dedupe_seconds)
             self._set_var("alert_cooldown_seconds", self.config.alert_cooldown_seconds)
@@ -599,6 +720,44 @@ class DroidAlertsApp:
             self.detail_var.set(f"Settings loaded from {config_dir() / 'config.json'}")
         finally:
             self._loading_settings = False
+
+    def refresh_monitor_choices(self) -> None:
+        selected_index = max(1, int(self._value("monitor_index")))
+        try:
+            monitors = list_monitors()
+        except Exception as exc:
+            print(f"[GUI] Failed to list monitors: {exc}")
+            monitors = []
+
+        if not monitors:
+            fallback_label = f"Monitor {selected_index}"
+            self.monitor_indexes_by_label = {fallback_label: selected_index}
+            self.monitor_combobox.configure(values=(fallback_label,))
+            self.monitor_display_var.set(fallback_label)
+            return
+
+        primary = next((monitor for monitor in monitors if monitor.is_primary), monitors[0])
+        labels = [format_monitor_label(monitor, primary) for monitor in monitors]
+        self.monitor_indexes_by_label = {
+            label: monitor.index for label, monitor in zip(labels, monitors)
+        }
+        self.monitor_combobox.configure(values=labels)
+
+        selected_monitor = next(
+            (monitor for monitor in monitors if monitor.index == selected_index),
+            monitors[0],
+        )
+        if selected_monitor.index != selected_index:
+            self._set_var("monitor_index", selected_monitor.index)
+        self.monitor_display_var.set(format_monitor_label(selected_monitor, primary))
+
+    def on_monitor_selected(self, _event=None) -> None:
+        label = self.monitor_display_var.get()
+        monitor_index = self.monitor_indexes_by_label.get(label)
+        if monitor_index is None:
+            return
+        self._set_var("monitor_index", monitor_index)
+        self.detail_var.set(f"{label} selected")
 
     def _set_var(self, key: str, value: object) -> None:
         var = self.setting_vars.get(key)

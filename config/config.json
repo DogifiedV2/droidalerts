@@ -5,6 +5,10 @@
   "alert_cooldown_seconds": 10.0,
   "sound_enabled": true,
   "popup_enabled": true,
+  "droid_timers_enabled": false,
+  "droid_timers_scale": 1.0,
+  "droid_timers_center_x": 0.5,
+  "droid_timers_top_y": 0.006,
   "popup_seconds": 8.0,
   "popup_icon_file": "signals_icon.png",
   "save_alert_samples": true,
@@ -21,7 +25,8 @@
   "ntfy_tags": "rotating_light",
   "ntfy_cache": "no",
   "ntfy_include_attachment": false,
-  "notification_setup_prompted": false,
+  "notification_setup_prompted": true,
+  "intro_shown": true,
   "phone_alerts_enabled": false,
   "phone_credentials_file": "phone_alerts.json",
   "phone_env_token": "DROIDWATCHER_PHONE_ALERTS_TOKEN",
@@ -29,7 +34,14 @@
   "phone_sound": "siren",
   "phone_include_attachment": true,
   "update_check_enabled": true,
+  "share_anonymous_data": true,
+  "anonymous_stats_url": "https://gonk.tools/api/droid-alerts/heartbeat",
+  "anonymous_detection_url": "https://gonk.tools/api/droid-alerts/detections",
+  "share_debug_detections": false,
+  "debug_detection_upload_url": "https://gonk.tools/api/droid-alerts/debug-detections",
   "update_repo": "DogifiedV2/droidalerts",
+  "advanced_mode": false,
+  "extra_checks": false,
   "validation_failures_before_calibration_prompt": 30,
   "thresholds": {
     "rarity_threshold": 0.35,
@@ -58,9 +70,5 @@
       "Beskar",
       "Mythic"
     ]
-  ],
-  "share_anonymous_data": true,
-  "anonymous_stats_url": "https://gonk.tools/api/droid-alerts/heartbeat",
-  "share_debug_detections": false,
-  "debug_detection_upload_url": "https://gonk.tools/api/droid-alerts/debug-detections"
+  ]
 }

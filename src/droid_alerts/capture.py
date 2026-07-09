@@ -48,6 +48,113 @@ class MonitorInfo:
     height: int
 
 
+@dataclass(frozen=True)
+class MonitorDescriptor:
+    index: int
+    left: int
+    top: int
+    width: int
+    height: int
+    is_primary: bool = False
+    name: str = ""
+
+
+def _mss_instance():
+    import mss
+
+    # MSS 10.2 introduced the public MSS class while retaining the old
+    # lowercase factory for compatibility. Keep supporting the project's
+    # mss>=9.0 requirement without producing a deprecation warning on newer
+    # releases.
+    factory = getattr(mss, "MSS", None) or mss.mss
+    return factory()
+
+
+def list_monitors() -> list[MonitorDescriptor]:
+    """Return physical monitors in the same one-based order MSS captures."""
+    sct = _mss_instance()
+    try:
+        raw_monitors = [dict(monitor) for monitor in sct.monitors[1:]]
+        try:
+            primary_monitor = dict(sct.primary_monitor)
+        except Exception:
+            primary_monitor = None
+    finally:
+        sct.close()
+
+    def same_geometry(first: dict[str, object], second: dict[str, object]) -> bool:
+        keys = ("left", "top", "width", "height")
+        return all(int(first[key]) == int(second[key]) for key in keys)
+
+    primary_index = next(
+        (
+            index
+            for index, monitor in enumerate(raw_monitors, start=1)
+            if bool(monitor.get("is_primary"))
+        ),
+        None,
+    )
+    if primary_index is None and primary_monitor is not None:
+        primary_index = next(
+            (
+                index
+                for index, monitor in enumerate(raw_monitors, start=1)
+                if same_geometry(monitor, primary_monitor)
+            ),
+            None,
+        )
+    if primary_index is None:
+        primary_index = next(
+            (
+                index
+                for index, monitor in enumerate(raw_monitors, start=1)
+                if int(monitor["left"]) == 0 and int(monitor["top"]) == 0
+            ),
+            1 if raw_monitors else None,
+        )
+
+    return [
+        MonitorDescriptor(
+            index=index,
+            left=int(monitor["left"]),
+            top=int(monitor["top"]),
+            width=int(monitor["width"]),
+            height=int(monitor["height"]),
+            is_primary=index == primary_index,
+            name=str(monitor.get("name") or monitor.get("output") or "").strip(),
+        )
+        for index, monitor in enumerate(raw_monitors, start=1)
+    ]
+
+
+def format_monitor_label(
+    monitor: MonitorDescriptor,
+    primary: MonitorDescriptor | None = None,
+) -> str:
+    """Build a concise, game-style display label for a monitor picker."""
+    label = f"Monitor {monitor.index}: {monitor.width} × {monitor.height}"
+    if monitor.name:
+        label += f" — {monitor.name}"
+
+    position = ""
+    if monitor.is_primary:
+        position = "Primary"
+    elif primary is not None:
+        monitor_center_x = monitor.left + monitor.width / 2
+        monitor_center_y = monitor.top + monitor.height / 2
+        primary_center_x = primary.left + primary.width / 2
+        primary_center_y = primary.top + primary.height / 2
+        horizontal_distance = abs(monitor_center_x - primary_center_x)
+        vertical_distance = abs(monitor_center_y - primary_center_y)
+        if horizontal_distance >= vertical_distance:
+            position = "Left" if monitor_center_x < primary_center_x else "Right"
+        else:
+            position = "Above" if monitor_center_y < primary_center_y else "Below"
+    if position:
+        label += f" ({position})"
+    return label
+
+
 class CaptureBackend(Protocol):
     def screen_size(self) -> tuple[int, int]: ...
 
@@ -58,9 +165,7 @@ class CaptureBackend(Protocol):
 
 class MSSCapture:
     def __init__(self, monitor_index: int = 1) -> None:
-        import mss
-
-        self._mss = mss.mss()
+        self._mss = _mss_instance()
         self.monitor_index = monitor_index
         if monitor_index < 1 or monitor_index >= len(self._mss.monitors):
             self.monitor_index = 1
