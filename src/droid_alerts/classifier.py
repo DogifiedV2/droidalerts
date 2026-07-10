@@ -98,6 +98,13 @@ class EdgeTemplate:
 
 
 @dataclass(frozen=True)
+class DroidWordTemplate:
+    droid: str
+    path: Path
+    image: np.ndarray
+
+
+@dataclass(frozen=True)
 class RarityCandidate:
     rarity: str
     score: float
@@ -187,6 +194,23 @@ def load_edge_templates(template_dir: str | Path) -> list[EdgeTemplate]:
         if image is None or image.size == 0:
             continue
         templates.append(EdgeTemplate(path=path, image=image))
+    return templates
+
+
+def load_droid_word_templates(template_dir: str | Path) -> dict[str, list[DroidWordTemplate]]:
+    template_dir = Path(template_dir)
+    templates: dict[str, list[DroidWordTemplate]] = {droid: [] for droid in DROID_TYPES}
+    if not template_dir.exists():
+        return templates
+
+    for path in sorted(template_dir.glob("*.png")):
+        droid = path.stem.split("__", 1)[0]
+        if droid not in DROID_TYPES:
+            continue
+        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if image is None or image.size == 0:
+            continue
+        templates[droid].append(DroidWordTemplate(droid=droid, path=path, image=image))
     return templates
 
 
@@ -280,35 +304,84 @@ def droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
     }
 
 
-def _icon_cyan_count(row: np.ndarray) -> int:
-    """Cyan pixels in the anchored icon window (the Diamond droid's icon is
-    saturated cyan; Beskar's is gray)."""
-    x0 = _icon_x_start(row)
-    icon = row[:, x0 : x0 + 38]
-    if icon.size == 0:
-        return 0
-    hsv = cv2.cvtColor(icon, cv2.COLOR_BGR2HSV)
-    gray = cv2.cvtColor(icon, cv2.COLOR_BGR2GRAY)
+def droid_word_color_mask(row: np.ndarray, droid: str) -> np.ndarray:
+    """Binary, colour-segmented mask of the icon/name area for word matching.
+
+    Unlike grayscale edges, this drops scenery that does not share the target
+    family's text colour. The component limits were measured across the 149
+    valid rows in the 2026-07-10 1.1.5 debug batch.
+    """
+    win = row[:, 20 : min(row.shape[1], 270)]
+    if win.size == 0:
+        return np.zeros((0, 0), dtype=np.uint8)
+    hsv = cv2.cvtColor(win, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(win, cv2.COLOR_BGR2GRAY)
     hue, sat, val = cv2.split(hsv)
-    edge_near = cv2.dilate(cv2.Canny(gray, 35, 125), np.ones((3, 3), np.uint8), iterations=1) > 0
-    cyan = (sat > 55) & (val > 95) & edge_near & (hue >= 78) & (hue <= 112)
-    return int(cyan.sum())
+    edge_near = cv2.dilate(cv2.Canny(gray, 35, 125), np.ones((3, 3), np.uint8)) > 0
+    dark_near = cv2.dilate((gray < 95).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    gate = edge_near & dark_near
+    if droid == "Diamond":
+        raw = (hue >= 78) & (hue <= 112) & (sat > 55) & (val > 95) & gate
+    elif droid == "Rainbow":
+        raw = (sat >= 100) & (val >= 120) & gate
+    else:
+        raw = (sat < 60) & (val > 140) & gate
+
+    label_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(raw.astype(np.uint8), 8)
+    output = np.zeros_like(raw, dtype=np.uint8)
+    for label in range(1, label_count):
+        _x, y, component_w, component_h, area = (int(value) for value in stats[label])
+        if (
+            area >= 6
+            and component_w >= 2
+            and 3 <= component_h <= 30
+            and component_w <= 40
+            and area <= 2600
+            and y > 1
+            and y + component_h < raw.shape[0] - 1
+        ):
+            output[labels == label] = 255
+    return output
+
+
+def droid_word_shape_score(
+    row: np.ndarray,
+    droid: str,
+    templates_by_droid: dict[str, list[DroidWordTemplate]],
+) -> float:
+    mask = droid_word_color_mask(row, droid)
+    if mask.size == 0:
+        return 0.0
+    best = 0.0
+    for template in templates_by_droid.get(droid, []):
+        if template.image.shape[0] > mask.shape[0] or template.image.shape[1] > mask.shape[1]:
+            continue
+        result = cv2.matchTemplate(mask, template.image, cv2.TM_CCOEFF_NORMED)
+        best = max(best, float(result.max()))
+    return best
 
 
 def classify_droid_word(row: np.ndarray) -> tuple[str, float] | None:
     """Droid family from the droid-word text; None when evidence is weak.
 
-    Thresholds measured across all 44 labeled fixture rows (2026-07-06):
-    Rainbow rows show 5-6 strong hue families; Diamond rows cyan 1422-1651
-    with cyan >=78% of colored text; Beskar rows gray 1041-2182 with cyan
-    <=232. No overlaps at these gates.
+    The ordering and floors are measured across the 149 valid rows in the
+    2026-07-10 1.1.5 batch: Diamond words carry dominant cyan, Rainbow words
+    span at least four hue families, and Beskar words carry dominant gray.
     """
     p = droid_word_text_profile(row)
-    if p["strong_families"] >= 4 and p["colored_total"] >= 800:
-        return "Rainbow", min(0.99, p["colored_total"] / 1200.0)
+    # Resolve the dominant single-colour words before looking at background
+    # colour diversity. The old ordering let a multicolour prop behind a real
+    # Diamond word turn the row into Rainbow, while unrelated cyan scenery in
+    # the old icon fallback turned gray Beskar words into Diamond.
+    if p["gray"] >= 700 and p["gray"] > p["cyan"]:
+        # A white nameplate can cover a Rainbow word, leaving only the
+        # multicolour letters around it. Keep that measured exception, but do
+        # not let unrelated icon-window colour override a gray word.
+        if p["colored_total"] >= 900 and p["strong_families"] >= 3:
+            return "Rainbow", min(0.99, p["colored_total"] / 1200.0)
+        return "Beskar", min(0.99, p["gray"] / 900.0)
     if (
         p["cyan"] >= 700
-        and p["strong_families"] <= 3
         # Orange scenery (a gold hexagon sign) behind a real Diamond word can
         # push cyan under the 60%-of-colored ratio (measured 0.56 on a live
         # 2026-07-08 FP: the verdict fell through to the icon path, misread
@@ -318,22 +391,11 @@ def classify_droid_word(row: np.ndarray) -> tuple[str, float] | None:
         and (p["cyan"] >= 0.6 * max(1, p["colored_total"]) or p["cyan"] >= 1200)
     ):
         return "Diamond", min(0.99, p["cyan"] / 1000.0)
-    if p["gray"] >= 700 and p["cyan"] < 700 and p["strong_families"] <= 3:
-        # A white player nameplate covering the droid word reads exactly like
-        # Beskar's silver text (live FP 2026-07-07: Diamond Legendary alerted
-        # as Beskar Legendary). The icon disambiguates: real Beskar rows
-        # measure icon-cyan <=8 across every fixture, Diamond icons 95-496.
-        if _icon_cyan_count(row) >= 60:
-            return "Diamond", min(0.99, p["gray"] / 900.0)
-        # A nameplate over a RAINBOW word leaves no icon cyan, but the
-        # multicolor letters peeking around the plate still count >=900
-        # colored text px across >=3 hue families (live FPs 2026-07-08:
-        # 1162/1183 px, 3 families -> alerted Beskar Epic on Rainbow Epic
-        # rows). Real Beskar rows top out at 883 colored px, and only reach
-        # 3 families at <=732 px (a colorful prop behind the row).
-        if p["colored_total"] >= 900 and p["strong_families"] >= 3:
-            return "Rainbow", min(0.99, p["colored_total"] / 1200.0)
-        return "Beskar", min(0.99, p["gray"] / 900.0)
+    # Slightly clipped 1080p Rainbow rows measured 752 coloured pixels in the
+    # new 1.1.5 report batch. Four distinct text-colour families are still a
+    # stronger signal than the weak icon fallback that misread them as Beskar.
+    if p["strong_families"] >= 4 and p["colored_total"] >= 700:
+        return "Rainbow", min(0.99, p["colored_total"] / 1200.0)
     return None
 
 
@@ -575,8 +637,16 @@ def rarity_text_color_counts(image: np.ndarray, y: int, droid: str, *, row_heigh
                 # blobs are taller and must not count as rarity text.
                 and component_h <= 30
                 and area <= max_area
-                and not (touches_top and touches_bottom)
-                and not (touches_left and touches_right)
+                # Saturated rarity glyphs remain <=35px wide after scale
+                # normalization. Wider or boundary-touching components in the
+                # 1.1.5 report batch were solid orange/magenta scenery, not
+                # letters. Common stays permissive because its low-saturation
+                # mask can merge glyphs after downscale blur.
+                and (rarity == "Common" or component_w <= 35)
+                and (
+                    rarity == "Common"
+                    or not (touches_top or touches_bottom or touches_left or touches_right)
+                )
             )
             if text_shaped:
                 text_mask |= labels == label
@@ -855,7 +925,15 @@ def classify_rarity_roi(
             else (shape_rarity == color_rarity and shape_score >= 0.50)
         )
         veto = None
-        if not text_confirms and not shape_confirms:
+        # Shape matching alone is not enough to confirm Legendary/Mythic: a
+        # large orange panel in the 1.1.5 report batch scored 0.54 against a
+        # Legendary word template despite containing no Legendary word. Epic
+        # keeps the old shape fallback because three real, partially occluded
+        # Epic rows in that batch lose too many colour components after
+        # downscale normalization.
+        if color_rarity in {"Legendary", "Mythic"} and not text_confirms:
+            veto = "unconfirmed-text"
+        elif color_rarity == "Epic" and not text_confirms and not shape_confirms:
             veto = "unconfirmed"
         elif own_shape is not None and own_shape < 0.15:
             veto = f"shape-floor:{own_shape:.2f}"
@@ -1072,6 +1150,7 @@ class DroidVisualDetector:
     ) -> None:
         self.templates = load_templates(template_dir)
         self.rarity_roi_templates = load_rarity_roi_templates(Path(template_dir) / "rarity_rois")
+        self.droid_word_templates = load_droid_word_templates(Path(template_dir) / "droid_words")
         self.crafted_phrase_templates = load_edge_templates(Path(template_dir) / "crafted_phrases")
         self.spawn_line_templates = load_edge_templates(Path(template_dir) / "spawn_line")
         self.rarity_threshold = rarity_threshold
@@ -1125,6 +1204,23 @@ class DroidVisualDetector:
                 if droid_score < self.droid_threshold:
                     reject(y, "weak-droid-word", droid, f"score={droid_score:.2f}")
                     continue
+                # Gray custom names can resemble Beskar. When a strong icon
+                # verdict disagrees, require the literal Beskar word shape.
+                # Very strong gray text remains a safe occlusion fallback (one
+                # valid report row has a nameplate over most of the word).
+                if droid == "Beskar":
+                    icon_droid, icon_score = best_droid_type(row)
+                    profile = droid_word_text_profile(row)
+                    if icon_droid != "Beskar" and icon_score >= 0.75:
+                        word_shape = droid_word_shape_score(row, droid, self.droid_word_templates)
+                        if word_shape < 0.40 and profile["gray"] < 1800:
+                            reject(
+                                y,
+                                "conflicting-droid-word",
+                                droid,
+                                f"icon={icon_droid}:{icon_score:.2f};shape={word_shape:.2f}",
+                            )
+                            continue
             else:
                 droid, droid_score = best_droid_type(row)
                 if droid_score < self.droid_threshold:
@@ -1156,6 +1252,18 @@ class DroidVisualDetector:
                     rarity, rarity_score, rarity_margin, template_name = rescued
             if rarity == "Unknown":
                 reject(y, "unknown-rarity", droid, template_name)
+                continue
+
+            # A priority word must be bound to a phrase-derived row seed. A
+            # 44px candidate window overlaps the next 32-33px chat line, so the
+            # old generic white-edge gate could borrow a real spawn phrase for
+            # an adjacent rebirth/crafting line. Every real alert in both the
+            # existing fixtures and the 149-positive 1.1.5 batch sits within
+            # 13px of its phrase seed; use a small safety margin for rounding.
+            if (droid, rarity) in PRIORITY_ALERTS and (
+                not extra_row_ys or min(abs(y - phrase_y) for phrase_y in extra_row_ys) > 16
+            ):
+                reject(y, "no-aligned-spawn-phrase", droid, rarity)
                 continue
 
             # Legendary-only spawn-line confirmation: orange usernames/badges

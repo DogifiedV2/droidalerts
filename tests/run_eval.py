@@ -87,10 +87,15 @@ def evaluate_fixture(pipeline: Pipeline, path: Path, spec: dict) -> dict:
     for pair in spec.get("expect_alerts") or []:
         if tuple(pair) not in alerted:
             alert_failures.append(f"expected alert {tuple(pair)} did not fire")
+    for pair in spec.get("reject_alerts") or []:
+        if tuple(pair) in alerted:
+            alert_failures.append(f"rejected alert {tuple(pair)} fired")
     record["alert_failures"] = alert_failures
 
     expected = spec.get("rows")
-    if expected is None and (spec.get("expect_no_alerts") or spec.get("expect_alerts")):
+    if expected is None and (
+        spec.get("expect_no_alerts") or spec.get("expect_alerts") or spec.get("reject_alerts")
+    ):
         record.update({"labeled": True, "tp": {}, "fp": {}, "fn": {}, "pass": not alert_failures})
         return record
     if expected is not None:
@@ -171,7 +176,10 @@ def main(*, verbose: bool = False, dump_unlabeled: bool = False) -> int:
                     per_combo[bucket][combo] += n
             expected_desc = spec.get("rows")
             if expected_desc is None:
-                expected_desc = f"alerts={spec.get('expect_alerts') or 'none'}"
+                expected_desc = (
+                    f"alerts={spec.get('expect_alerts') or 'any non-rejected'} "
+                    f"rejected={spec.get('reject_alerts') or 'none'}"
+                )
             print(f"[{status}] {rel_path}: detected={record['detected_combos']} expected={expected_desc}")
             for failure in record.get("alert_failures", []):
                 print(f"        ALERT-CHECK: {failure}")

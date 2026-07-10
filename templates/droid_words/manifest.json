@@ -1,0 +1,42 @@
+{
+  "kind": "droid_word",
+  "droid": "Beskar",
+  "templates": [
+    {
+      "file": "Beskar__report_01_61a0a9f2.png",
+      "submission_id": "61a0a9f2-9566-4036-b4a2-2ece3be3b903",
+      "scale": 0.5192307692307692,
+      "source": "2026-07-10 1.1.5 valid debug batch"
+    },
+    {
+      "file": "Beskar__report_02_2f0f3206.png",
+      "submission_id": "2f0f3206-ae4f-4e81-8d72-ac182b168857",
+      "scale": 0.6346153846153846,
+      "source": "2026-07-10 1.1.5 valid debug batch"
+    },
+    {
+      "file": "Beskar__report_03_8cd630f2.png",
+      "submission_id": "8cd630f2-64c6-471b-a254-2ef449741cd7",
+      "scale": 0.75,
+      "source": "2026-07-10 1.1.5 valid debug batch"
+    },
+    {
+      "file": "Beskar__report_04_502144ea.png",
+      "submission_id": "502144ea-f69e-47e0-9d45-f0b3130d361e",
+      "scale": 0.8307692307692308,
+      "source": "2026-07-10 1.1.5 valid debug batch"
+    },
+    {
+      "file": "Beskar__report_05_30a906b6.png",
+      "submission_id": "30a906b6-d446-4e05-b21a-04639340993d",
+      "scale": 0.8461538461538461,
+      "source": "2026-07-10 1.1.5 valid debug batch"
+    },
+    {
+      "file": "Beskar__report_06_fc45557b.png",
+      "submission_id": "fc45557b-df7b-4791-8d53-06cdfe5bf9d4",
+      "scale": 1.0,
+      "source": "2026-07-10 1.1.5 valid debug batch"
+    }
+  ]
+}
