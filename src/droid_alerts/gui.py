@@ -113,8 +113,6 @@ class DroidAlertsApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Droid Alerts")
-        self.root.geometry("1120x760")
-        self.root.minsize(940, 650)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.config = load_config()
@@ -193,6 +191,7 @@ class DroidAlertsApp:
 
         self._build_ui()
         self.load_settings()
+        self._apply_initial_geometry()
         self._wire_auto_save()
         if self.config.droid_timers_enabled:
             self.show_droid_timers()
@@ -203,6 +202,19 @@ class DroidAlertsApp:
         self.root.after(200, self._update_dashboard_timers)
         self.root.after(500, self._refresh_storage_status)
         self.root.after(800, self._start_runtime_features)
+
+    def _apply_initial_geometry(self) -> None:
+        # Size the window from measured content so Windows DPI scaling and
+        # different font metrics never push controls out of view.
+        self.root.update_idletasks()
+        required_width = self.root.winfo_reqwidth() + 20
+        required_height = self.root.winfo_reqheight() + 20
+        usable_width = max(720, self.root.winfo_screenwidth() - 80)
+        usable_height = max(560, self.root.winfo_screenheight() - 140)
+        width = min(max(1120, required_width), usable_width)
+        height = min(max(760, required_height), usable_height)
+        self.root.geometry(f"{width}x{height}")
+        self.root.minsize(min(940, width), min(650, height))
 
     def _resolve_font_families(self) -> dict[str, str]:
         # Segoe UI / Consolas only exist on Windows; macOS silently substitutes
@@ -3008,6 +3020,9 @@ class DroidAlertsApp:
 
 
 def run_gui() -> None:
+    # DPI awareness must be set before the first window exists, or Windows
+    # bitmap-scales the UI and fixed sizes stop matching font metrics.
+    set_dpi_awareness()
     root = make_root()
     DroidAlertsApp(root)
     root.mainloop()
