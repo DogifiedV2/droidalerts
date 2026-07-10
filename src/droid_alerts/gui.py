@@ -139,6 +139,7 @@ class DroidAlertsApp:
         self._loading_settings = False
         self._autosave_ready = False
         self.share_debug_detections_check = None
+        self.timer_reminders_check = None
         self.session_detection_count = 0
         self.session_alert_count = 0
         self.session_monitoring_seconds = 0.0
@@ -255,26 +256,20 @@ class DroidAlertsApp:
         outer = ttk.Frame(self.root, padding=14)
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(1, weight=1)
+        outer.rowconfigure(2, weight=1)
 
         header = ttk.Frame(outer)
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         header.columnconfigure(2, weight=1)
         if self.header_icon is not None:
             ttk.Label(header, image=self.header_icon).grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 10))
         title_column = 1 if self.header_icon is not None else 0
         ttk.Label(header, text="DROID ALERTS", font=self._font(20, "bold")).grid(
-            row=0, column=title_column, rowspan=2, sticky="w"
+            row=0, column=title_column, sticky="sw"
         )
-        self.header_status_label = ttk.Label(
-            header,
-            textvariable=self.status_var,
-            font=self._font(11, "bold"),
-            padding=(14, 7),
-            **bootstyle("danger-inverse"),
+        ttk.Label(header, text=f"v{__version__}", font=self._font(9), **muted_style()).grid(
+            row=1, column=title_column, sticky="nw"
         )
-        self.header_status_label.grid(row=0, column=3, rowspan=2, padx=(12, 10))
-        self._apply_watcher_status_style("Stopped")
         self.update_ready_button = ttk.Button(
             header,
             text="Update ready!",
@@ -282,24 +277,25 @@ class DroidAlertsApp:
             width=13,
             **bootstyle("success"),
         )
-        self.update_ready_button.grid(row=0, column=4, rowspan=2, padx=(0, 10))
+        self.update_ready_button.grid(row=0, column=3, rowspan=2, sticky="e")
         self.update_ready_button.grid_remove()
-        ttk.Label(header, text=f"v{__version__}", **muted_style()).grid(
-            row=0, column=5, rowspan=2, sticky="e"
-        )
 
-        def style_tabs() -> None:
+        def hide_native_tabs() -> None:
+            # The tab strip is replaced by the pill-button bar below; an empty
+            # element layout is the only reliable way to remove it in ttk.
             try:
                 style = ttk.Style()
-                style.configure("TNotebook.Tab", font=self._font(11, "bold"), padding=(32, 12))
-                style.configure("TNotebook", borderwidth=0)
+                style.layout("TNotebook.Tab", [])
+                style.configure("TNotebook", borderwidth=0, tabmargins=0)
             except Exception:
                 pass
 
-        style_tabs()
+        hide_native_tabs()
+        tab_bar = ttk.Frame(outer)
+        tab_bar.grid(row=1, column=0, sticky="ew", pady=(0, 14))
         self.notebook = ttk.Notebook(outer)
-        self.notebook.grid(row=1, column=0, sticky="nsew")
-        self.root.after_idle(style_tabs)
+        self.notebook.grid(row=2, column=0, sticky="nsew")
+        self.root.after_idle(hide_native_tabs)
 
         self.dashboard_tab = ttk.Frame(self.notebook, padding=14)
         self.logs_tab = ttk.Frame(self.notebook, padding=14)
@@ -310,6 +306,34 @@ class DroidAlertsApp:
         self.notebook.add(self.files_tab, text="Diagnostics")
         self.notebook.add(self.settings_tab, text="Settings")
 
+        self.tab_buttons: list[tuple[object, object]] = []
+        for text, tab in (
+            ("Dashboard", self.dashboard_tab),
+            ("History", self.logs_tab),
+            ("Diagnostics", self.files_tab),
+            ("Settings", self.settings_tab),
+        ):
+            button = ttk.Button(
+                tab_bar,
+                text=text,
+                command=lambda selected=tab: self.notebook.select(selected),
+                **bootstyle("dark"),
+            )
+            button.pack(side="left", padx=(0, 8))
+            self.tab_buttons.append((button, tab))
+        ttk.Separator(tab_bar, orient="vertical").pack(side="left", fill="y", padx=(8, 16), pady=3)
+        self.header_status_label = ttk.Label(
+            tab_bar,
+            textvariable=self.status_var,
+            font=self._font(11, "bold"),
+            padding=(16, 6),
+            **bootstyle("danger-inverse"),
+        )
+        self.header_status_label.pack(side="left")
+        self._apply_watcher_status_style("Stopped")
+        self.notebook.bind("<<NotebookTabChanged>>", self._highlight_active_tab, add="+")
+        self._highlight_active_tab()
+
         self._build_dashboard_tab()
         self._build_logs_tab()
         self._build_files_tab()
@@ -317,7 +341,7 @@ class DroidAlertsApp:
         self._wire_macos_repaint_workaround()
 
         footer = ttk.Frame(outer, padding=(4, 8, 4, 0))
-        footer.grid(row=2, column=0, sticky="ew")
+        footer.grid(row=3, column=0, sticky="ew")
         footer.columnconfigure(0, weight=1)
         ttk.Label(footer, textvariable=self.detail_var, anchor="w", **muted_style()).grid(
             row=0, column=0, sticky="ew"
@@ -365,37 +389,37 @@ class DroidAlertsApp:
             **muted_style(),
         )
         watcher_detail.grid(row=1, column=0, sticky="w", pady=(3, 2))
+        self._autowrap(watcher_detail, hero)
+
+        controls_row = ttk.Frame(hero)
+        controls_row.grid(row=2, column=0, sticky="ew", pady=(16, 0))
+        controls_row.columnconfigure(1, weight=1)
         self.watch_button = ttk.Button(
-            hero,
+            controls_row,
             text="Start Watching",
-            width=19,
+            width=24,
             command=self.toggle_watcher,
             **bootstyle("success"),
         )
-        self.watch_button.grid(row=0, column=1, rowspan=3, sticky="e", padx=(18, 0))
-        self._autowrap(watcher_detail, hero, pad=240)
-
-        display_row = ttk.Frame(hero)
-        display_row.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(16, 0))
-        display_row.columnconfigure(1, weight=1)
-        ttk.Label(display_row, text="Game display", font=self._font(10, "bold")).grid(
-            row=0, column=0, sticky="w", padx=(0, 10)
+        self.watch_button.grid(row=0, column=0, sticky="w", ipady=4)
+        ttk.Label(controls_row, text="Game display", font=self._font(10, "bold")).grid(
+            row=0, column=2, sticky="e", padx=(24, 10)
         )
         self.monitor_combobox = ttk.Combobox(
-            display_row,
+            controls_row,
             textvariable=self.monitor_display_var,
             state="readonly",
-            width=44,
+            width=34,
             postcommand=self.refresh_monitor_choices,
         )
-        self.monitor_combobox.grid(row=0, column=1, sticky="ew")
+        self.monitor_combobox.grid(row=0, column=3, sticky="e")
         self.monitor_combobox.bind("<<ComboboxSelected>>", self.on_monitor_selected)
         ttk.Button(
-            display_row,
+            controls_row,
             text="Identify Displays",
             command=self.identify_displays,
             **bootstyle("info-outline"),
-        ).grid(row=0, column=2, padx=(10, 0))
+        ).grid(row=0, column=4, padx=(10, 0))
         self.refresh_monitor_choices()
 
         alerts_panel = ttk.Frame(page)
@@ -419,13 +443,25 @@ class DroidAlertsApp:
                 row=row, column=1, sticky="e", pady=3
             )
         self.setting_vars["droid_timers_enabled"] = BooleanVar(value=False)
+        self.setting_vars["timer_reminders_enabled"] = BooleanVar(value=False)
         ttk.Checkbutton(
             glance,
             text="Show Droid Timers overlay",
             variable=self.setting_vars["droid_timers_enabled"],
             command=self.on_droid_timers_toggle,
             **bootstyle("round-toggle"),
-        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 2))
+        ).grid(row=4, column=0, sticky="w", pady=(8, 2))
+        self._link_label(glance, "Adjust Timer Position", self.adjust_droid_timers).grid(
+            row=4, column=1, sticky="e", pady=(8, 2)
+        )
+        self.timer_reminders_check = ttk.Checkbutton(
+            glance,
+            text="Timer reminder sound",
+            variable=self.setting_vars["timer_reminders_enabled"],
+            **bootstyle("round-toggle"),
+        )
+        self.timer_reminders_check.grid(row=5, column=0, columnspan=2, sticky="w", padx=(18, 0), pady=(2, 0))
+        self.timer_reminders_check.grid_remove()
 
         session_outer, session = self._labeled_section(right_panel, "SESSION")
         session_outer.grid(row=1, column=0, sticky="new")
@@ -729,25 +765,33 @@ class DroidAlertsApp:
         behavior_outer.grid(row=1, column=0, sticky="ew", pady=(0, 26))
         behavior.columnconfigure(0, weight=1)
         basic_settings = (
-            ("timer_reminders_enabled", "Timer reminder sound", None),
             ("extra_checks", "Improve detection with HDR / washed-out colours", None),
             ("start_watcher_on_launch", "Start watching when Droid Alerts opens", None),
             ("update_check_enabled", "Check for updates automatically", None),
         )
         for key, _label, _command in basic_settings:
             self.setting_vars[key] = BooleanVar(value=False)
+        behavior_settings = ttk.Frame(behavior)
+        behavior_settings.grid(row=0, column=0, sticky="nw")
         for row, (key, label, command) in enumerate(basic_settings):
             ttk.Checkbutton(
-                behavior,
+                behavior_settings,
                 text=label,
                 variable=self.setting_vars[key],
                 command=command,
                 **bootstyle("round-toggle"),
             ).grid(row=row, column=0, sticky="w", pady=5)
         actions = ttk.Frame(behavior)
-        actions.grid(row=0, column=1, rowspan=len(basic_settings), sticky="ne", padx=(24, 0))
-        ttk.Button(actions, text="Adjust Timers", command=self.adjust_droid_timers).grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        ttk.Button(actions, text="What is shared?", command=self.show_privacy_details).grid(row=1, column=0, sticky="ew")
+        actions.grid(row=0, column=1, sticky="ne", padx=(24, 0))
+        ttk.Button(actions, text="What is shared?", command=self.show_privacy_details).grid(
+            row=0, column=0, sticky="ew", pady=(0, 6)
+        )
+        ttk.Button(actions, text="FAQ", command=self.show_faq).grid(row=1, column=0, sticky="ew")
+        ttk.Button(
+            actions,
+            text="Discord & Support",
+            command=lambda: webbrowser.open("https://discord.gg/ZmFPjS4784"),
+        ).grid(row=2, column=0, sticky="ew", pady=(6, 0))
 
         self.advanced_container = ttk.Frame(content)
         self.advanced_container.grid(row=3, column=0, sticky="ew")
@@ -884,6 +928,17 @@ class DroidAlertsApp:
         self.root.bind_all("<Button-4>", self._on_options_mousewheel, add="+")
         self.root.bind_all("<Button-5>", self._on_options_mousewheel, add="+")
 
+    def _highlight_active_tab(self, _event=None) -> None:
+        try:
+            selected = self.root.nametowidget(self.notebook.select())
+        except Exception:
+            return
+        for button, tab in self.tab_buttons:
+            if BOOTSTRAP:
+                button.configure(bootstyle="info" if tab is selected else "dark")
+            else:
+                button.state(["pressed"] if tab is selected else ["!pressed"])
+
     def _wire_macos_repaint_workaround(self) -> None:
         # Tk's Aqua backend defers repainting remapped widgets, so freshly
         # selected notebook tabs keep showing stale content for up to a
@@ -955,10 +1010,21 @@ class DroidAlertsApp:
             self.share_debug_detections_check.grid_remove()
 
     def on_droid_timers_toggle(self) -> None:
-        if bool(self._value("droid_timers_enabled")):
+        enabled = bool(self._value("droid_timers_enabled"))
+        if enabled:
             self.show_droid_timers()
         else:
+            self._set_var("timer_reminders_enabled", False)
             self.hide_droid_timers()
+        self._apply_timer_reminder_visibility(enabled)
+
+    def _apply_timer_reminder_visibility(self, timers_enabled: bool) -> None:
+        if self.timer_reminders_check is None:
+            return
+        if timers_enabled:
+            self.timer_reminders_check.grid()
+        else:
+            self.timer_reminders_check.grid_remove()
 
     def show_droid_timers(self) -> None:
         if self.droid_timers is not None and self.droid_timers.alive:
@@ -974,7 +1040,7 @@ class DroidAlertsApp:
                 top_y_ratio=config.droid_timers_top_y,
                 on_layout_change=self._save_droid_timers_layout,
                 monitor=self._current_monitor_info(),
-                reminders_enabled=config.timer_reminders_enabled,
+                reminders_enabled=bool(self._value("timer_reminders_enabled")),
                 reminder_seconds=config.timer_reminder_seconds,
                 offset_seconds=config.timer_offset_seconds,
                 on_reminder=self._on_timer_reminder,
@@ -997,6 +1063,7 @@ class DroidAlertsApp:
         around / resize it; Done on the strip saves the layout."""
         if not bool(self._value("droid_timers_enabled")):
             self._set_var("droid_timers_enabled", True)
+            self._apply_timer_reminder_visibility(True)
         self.show_droid_timers()
         if self.droid_timers is not None:
             self.droid_timers.enter_edit_mode()
@@ -1155,6 +1222,10 @@ class DroidAlertsApp:
             self._set_var("max_storage_mb", self.config.max_storage_mb)
             self._set_var("timer_reminder_seconds", self.config.timer_reminder_seconds)
             self._set_var("timer_offset_seconds", self.config.timer_offset_seconds)
+            timers_enabled = bool(self.config.droid_timers_enabled)
+            if not timers_enabled:
+                self._set_var("timer_reminders_enabled", False)
+            self._apply_timer_reminder_visibility(timers_enabled)
             if not self.config.save_debug_screenshots:
                 self._set_var("share_debug_detections", False)
             self._set_var("advanced_mode", self.config.advanced_mode)
@@ -1337,6 +1408,39 @@ class DroidAlertsApp:
                 "That data includes the app version and detected droid/rarity, but never chat text, player or machine names, credentials, or screenshots.",
                 "Screenshots stay on this PC unless a notification attachment or the separate debug-sharing option is explicitly enabled.",
                 "Support bundles redact notification topics and never include webhook or API credentials.",
+            ),
+            ok_text="Close",
+            cancel_text="",
+        )
+
+    def show_faq(self) -> None:
+        if sys.platform == "win32":
+            clock_help = (
+                "Timers out of sync? Open Windows Settings → Time & language → Date & time. "
+                "Turn on Set time automatically, then press Sync now. The timers update immediately."
+            )
+        elif sys.platform == "darwin":
+            clock_help = (
+                "Timers out of sync? Open System Settings → General → Date & Time, then turn on "
+                "Set time and date automatically. The timers update immediately."
+            )
+        else:
+            clock_help = (
+                "Timers out of sync? Enable automatic date and time in your system settings. "
+                "The timers update immediately when the system clock changes."
+            )
+        self._setup_dialog(
+            "FAQ",
+            steps=(
+                clock_help,
+                "Still slightly out of sync? Enable Advanced settings and adjust Timer schedule offset. "
+                "Use a negative value when the timers are early and a positive value when they are late.",
+                "No detections? Check Game display on the Dashboard, then use Show Chat Region in "
+                "Diagnostics to confirm the box covers Fortnite's chat alerts.",
+                "No alert sound? Make sure Sound is enabled, choose System beeps or a WAV file, then "
+                "use Test All Alerts on the Dashboard.",
+                "Need help? Create a Support Bundle in Diagnostics. It includes logs and settings but "
+                "removes notification credentials.",
             ),
             ok_text="Close",
             cancel_text="",
@@ -1630,7 +1734,9 @@ class DroidAlertsApp:
         config.update_check_enabled = bool(self._value("update_check_enabled"))
         config.extra_checks = bool(self._value("extra_checks"))
         config.start_watcher_on_launch = bool(self._value("start_watcher_on_launch"))
-        config.timer_reminders_enabled = bool(self._value("timer_reminders_enabled"))
+        config.timer_reminders_enabled = config.droid_timers_enabled and bool(
+            self._value("timer_reminders_enabled")
+        )
         config.popup_position = str(self._value("popup_position")).strip().lower().replace(" ", "_")
         if config.popup_position not in {"top_center", "top_left", "top_right", "bottom_left", "bottom_right"}:
             config.popup_position = "top_center"
