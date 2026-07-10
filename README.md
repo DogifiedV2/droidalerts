@@ -13,9 +13,10 @@ Out of the box it alerts on the five spawns worth dropping everything for:
 - **Beskar Legendary**
 - **Beskar Epic**
 
-It works on most PCs. It finds the chat box by itself, no setup needed.
-Everything it saves stays inside its own folder, and the screenshots it takes
-of the chat corner never leave your PC.
+It works on most PCs and starts with a recommended chat region. Everything it
+saves stays inside its own folder. Screenshots remain local unless you
+explicitly enable a phone-notification attachment or **Share alert debug
+screenshots with the developer** in Advanced settings.
 
 ## How to install (Windows)
 
@@ -23,9 +24,22 @@ of the chat corner never leave your PC.
 2. Unzip it anywhere you like. Your Desktop is fine.
 3. Open the `Droid Alerts` folder and double-click `Droid Alerts.exe`.
 
-That's it. Click **Start** in the app, go play, and it will ping you when
-something good spawns. Use the **Test Alert** button any time to hear and see
-what an alert looks like.
+That's it. Choose the display with Fortnite, click **Start Watching**, go play,
+and it will ping you when something good spawns. Use the **Test Alert** button
+any time to hear and see what an alert looks like.
+
+The Dashboard shows the selected monitor, priority-alert choices, alert-channel
+controls, current timers, and session counts. **Show Chat Region** and **Move
+Chat Box** are under Diagnostics; moving the box never resizes it. Alert
+appearance plus less common detection, debug, notification-detail, and storage
+controls stay behind the **Advanced settings** toggle in Settings.
+
+Optional behaviour includes automatic watcher startup and pausing while
+Fortnite is closed. Diagnostics can create a redacted support ZIP, show or
+reposition the chat region, report local disk usage, and clear debug captures
+or history. With automatic update checks enabled, the app checks every 15
+minutes and shows a clickable **Update ready!** beside the version when a new
+release is available.
 
 If there is no release zip yet, use the source version instead:
 
@@ -68,22 +82,26 @@ Discord channel. The **Set Up Discord** button walks you through that too.
 
 ## Anonymous watcher count
 
-Droid Alerts has a **Share anonymous data** option, enabled by default. While the
-watcher is running it sends a small heartbeat to `gonk.tools` so the site can
-show how many people are currently watching droids. The heartbeat contains only
-a random anonymous install ID, a per-run session ID, and the app version.
+Droid Alerts sends a small anonymous heartbeat to `gonk.tools` while the
+watcher is running so the site can show how many people are currently watching
+droids. It contains only a random anonymous install ID, a per-run session ID,
+and the app version. The random IDs group counts from the same installation and
+watching session without identifying the user.
 
-When a priority alert fires, the same anonymous-data setting also sends the
-timestamp plus the detected droid/rarity combo so the site can track which rare
-droids are being found. It still does **not** send screenshots, player names,
-notification settings, machine names, or chat text. Turn it off any time in
-**Settings → Options**.
+When a priority alert fires, it also sends the timestamp plus the detected
+droid/rarity combo so the site can count which rare droids are being found. It
+does **not** send screenshots, player names, notification settings, machine
+names, credentials, or chat text.
 
-Debug mode also has a separate **Share detections with the developer** option.
+Debug mode also has a separate **Share alert debug screenshots with the
+developer** option.
 It is off by default and only appears while debug mode is enabled. If you turn it
 on, alert detections upload the two debug screenshots for that alert, the
 anonymous install/session IDs, app version, detected droid/rarity, monitor
 resolution, capture region, and detector scale metadata to help fix false flags.
+The separate ntfy and Pushover attachment switches send only the matching alert
+crop to that notification provider; both are clearly labelled in Advanced
+settings.
 
 ## Something not working?
 

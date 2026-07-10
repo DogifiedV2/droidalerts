@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 
 from .classifier import Detection
+from .capture import MonitorInfo
 from .config import AppConfig, assets_dir
 
 try:
@@ -135,6 +136,10 @@ def show_popup(
     *,
     icon_path: Path | None = None,
     parent: "tk.Misc | None" = None,
+    monitor: MonitorInfo | None = None,
+    position: str = "top_center",
+    scale: float = 1.0,
+    opacity: float = 1.0,
 ) -> None:
     if tk is None:
         return
@@ -142,6 +147,10 @@ def show_popup(
     def create_popup(window, *, owns_mainloop: bool) -> None:
         window.overrideredirect(True)
         window.attributes("-topmost", True)
+        try:
+            window.attributes("-alpha", min(1.0, max(0.55, float(opacity))))
+        except Exception:
+            pass
         transparent = "#010203"
         window.configure(bg=transparent)
         tk_transparency = False
@@ -158,11 +167,14 @@ def show_popup(
             window.configure(bg=CARD_BG)
             canvas_bg = CARD_BG
 
-        screen_w = window.winfo_screenwidth()
-        screen_h = window.winfo_screenheight()
+        screen_w = monitor.width if monitor is not None else window.winfo_screenwidth()
+        screen_h = monitor.height if monitor is not None else window.winfo_screenheight()
+        screen_left = monitor.left if monitor is not None else 0
+        screen_top = monitor.top if monitor is not None else 0
+        ui_scale = min(1.5, max(0.7, float(scale)))
         # Native 128px icon looks crisp; 2x zoom was blurry. 1.5x via
         # zoom(3)/subsample(2) if a bigger character is ever wanted again.
-        panel_height = min(185, max(150, screen_h - 160))
+        panel_height = int(min(185, max(150, screen_h - 160)) * ui_scale)
         icon = None
         has_icon = bool(icon_path and icon_path.exists())
         if has_icon:
@@ -183,19 +195,31 @@ def show_popup(
             hand_x = 34
             hand_y = 50
             hand_drop = 10
-            panel_width = min(880, max(620, screen_w - icon.width() - 90 + hand_x))
+            panel_width = int(min(880, max(620, screen_w - icon.width() - 90 + hand_x)) * ui_scale)
             width = panel_width + icon.width() - hand_x + 22
             height = panel_height + max(0, icon.height() - hand_y + hand_drop) + 10
         else:
-            width = min(1050, max(420, screen_w - 80))
+            width = int(min(1050, max(420, screen_w - 80)) * ui_scale)
             panel_width = width
             height = panel_height
 
-        x = max(0, (screen_w - width) // 2)
-        # Keep the alert card below the Droid Timers strip (top-center,
-        # y=8 + 72px tall), never overlapping it.
-        y = max(92, min(130, screen_h - height - 20))
-        window.geometry(f"{width}x{height}+{x}+{y}")
+        margin = max(16, int(24 * ui_scale))
+        width = min(width, max(220, screen_w - margin * 2))
+        height = min(height, max(120, screen_h - margin * 2))
+        panel_width = min(panel_width, width)
+        if position.endswith("left"):
+            x = screen_left + margin
+        elif position.endswith("right"):
+            x = screen_left + max(margin, screen_w - width - margin)
+        else:
+            x = screen_left + max(0, (screen_w - width) // 2)
+        if position.startswith("bottom"):
+            y = screen_top + max(margin, screen_h - height - margin)
+        else:
+            # Keep top alerts below the default timer-strip position.
+            available_y = max(margin, screen_h - height - margin)
+            y = screen_top + min(max(92, margin), available_y)
+        window.geometry(f"{width}x{height}{x:+d}{y:+d}")
 
         canvas = tk.Canvas(window, width=width, height=height, bg=canvas_bg, highlightthickness=0)
         canvas.pack(fill="both", expand=True)
@@ -215,8 +239,12 @@ def show_popup(
         canvas.create_rectangle(6, 40, panel_width - 7, 56, fill=CARD_BG_SOFT, outline="")
 
         center_x = panel_width // 2
-        caption_font = tkfont.Font(root=window, family="Segoe UI", size=13, weight="bold")
-        title_font = tkfont.Font(root=window, family="Segoe UI Black", size=32)
+        caption_font = tkfont.Font(
+            root=window, family="Segoe UI", size=max(9, int(13 * ui_scale)), weight="bold"
+        )
+        title_font = tkfont.Font(
+            root=window, family="Segoe UI Black", size=max(20, int(32 * ui_scale))
+        )
 
         caption = "PRIORITY SPAWN" if detection.is_priority else "DROID SPAWN"
         canvas.create_text(

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 from .config import data_dir
+
+
+EVENT_LOG_LOCK = threading.RLock()
 
 
 def logs_dir() -> Path:
@@ -26,6 +30,7 @@ def timestamp() -> str:
 
 def append_event(event: dict[str, Any], *, filename: str = "events.jsonl") -> None:
     path = logs_dir() / filename
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(event) + "\n")
+    with EVENT_LOG_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event) + "\n")

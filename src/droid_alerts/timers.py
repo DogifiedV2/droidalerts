@@ -6,6 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 
+from .capture import MonitorInfo
 from .popup import CARD_BG, CARD_BG_SOFT, RAINBOW_LETTERS, RARITY_COLORS, _rounded_rect
 
 try:
@@ -33,10 +34,10 @@ DEFAULT_CENTER_X_RATIO = 0.5
 DEFAULT_TOP_Y_RATIO = 0.006
 
 
-def seconds_until_next(kind: str) -> int:
+def seconds_until_next(kind: str, offset_seconds: int = 0) -> int:
     """Seconds until the next spawn mark for a timer, from local wall clock."""
     lt = time.localtime()
-    sec_into_hour = lt.tm_min * 60 + lt.tm_sec
+    sec_into_hour = (lt.tm_min * 60 + lt.tm_sec + int(offset_seconds)) % 3600
     if kind == "beskar":
         return 1200 - (sec_into_hour % 1200)
     if kind == "rainbow":
@@ -98,11 +99,22 @@ class DroidTimersOverlay:
         center_x_ratio: float = DEFAULT_CENTER_X_RATIO,
         top_y_ratio: float = DEFAULT_TOP_Y_RATIO,
         on_layout_change: Callable[[float, float, float], None] | None = None,
+        monitor: MonitorInfo | None = None,
+        reminders_enabled: bool = False,
+        reminder_seconds: int = 60,
+        offset_seconds: int = 0,
+        on_reminder: Callable[[str, int], None] | None = None,
     ) -> None:
         if tk is None:
             raise RuntimeError("tkinter is not available")
         self._stop_event = stop_event
         self._on_layout_change = on_layout_change
+        self._monitor = monitor
+        self._reminders_enabled = bool(reminders_enabled)
+        self._reminder_seconds = max(1, int(reminder_seconds))
+        self._offset_seconds = int(offset_seconds)
+        self._on_reminder = on_reminder
+        self._reminded_targets: dict[str, int] = {}
         self._after_id: str | None = None
         self._time_items: dict[str, int] = {}
         self._drag_offset: tuple[int, int] | None = None
@@ -150,22 +162,26 @@ class DroidTimersOverlay:
 
     def _apply_geometry(self) -> None:
         window = self.window
-        screen_w = window.winfo_screenwidth()
-        screen_h = window.winfo_screenheight()
+        screen_w = self._monitor.width if self._monitor is not None else window.winfo_screenwidth()
+        screen_h = self._monitor.height if self._monitor is not None else window.winfo_screenheight()
+        screen_left = self._monitor.left if self._monitor is not None else 0
+        screen_top = self._monitor.top if self._monitor is not None else 0
         width, height = self._window_size()
         x = int(self.center_x_ratio * screen_w - width / 2)
         y = int(self.top_y_ratio * screen_h)
         x = max(0, min(screen_w - width, x))
         y = max(0, min(screen_h - height, y))
-        window.geometry(f"{width}x{height}+{x}+{y}")
+        window.geometry(f"{width}x{height}{screen_left + x:+d}{screen_top + y:+d}")
 
     def _store_position_from_window(self) -> None:
         window = self.window
-        screen_w = max(1, window.winfo_screenwidth())
-        screen_h = max(1, window.winfo_screenheight())
+        screen_w = max(1, self._monitor.width if self._monitor is not None else window.winfo_screenwidth())
+        screen_h = max(1, self._monitor.height if self._monitor is not None else window.winfo_screenheight())
+        screen_left = self._monitor.left if self._monitor is not None else 0
+        screen_top = self._monitor.top if self._monitor is not None else 0
         width, _height = self._window_size()
-        self.center_x_ratio = (window.winfo_x() + width / 2) / screen_w
-        self.top_y_ratio = window.winfo_y() / screen_h
+        self.center_x_ratio = (window.winfo_x() - screen_left + width / 2) / screen_w
+        self.top_y_ratio = (window.winfo_y() - screen_top) / screen_h
 
     # ------------------------------------------------------------------
     # Drawing
@@ -250,7 +266,27 @@ class DroidTimersOverlay:
 
     def _refresh_times(self) -> None:
         for kind, item in self._time_items.items():
-            self.canvas.itemconfigure(item, text=format_countdown(seconds_until_next(kind)))
+            remaining = seconds_until_next(kind, self._offset_seconds)
+            self.canvas.itemconfigure(item, text=format_countdown(remaining))
+            self._maybe_remind(kind, remaining)
+
+    def _maybe_remind(self, kind: str, remaining: int) -> None:
+        if not self._reminders_enabled or remaining > self._reminder_seconds:
+            return
+        target = int((time.time() + self._offset_seconds + remaining) // 60)
+        if self._reminded_targets.get(kind) == target:
+            return
+        self._reminded_targets[kind] = target
+        if self._on_reminder is not None:
+            try:
+                self._on_reminder(kind, remaining)
+                return
+            except Exception as exc:
+                print(f"[TIMERS] Reminder callback failed: {exc}")
+        try:
+            self.window.bell()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Edit mode (move + resize)
@@ -297,12 +333,14 @@ class DroidTimersOverlay:
             return
         x = event.x_root - self._drag_offset[0]
         y = event.y_root - self._drag_offset[1]
-        screen_w = self.window.winfo_screenwidth()
-        screen_h = self.window.winfo_screenheight()
+        screen_w = self._monitor.width if self._monitor is not None else self.window.winfo_screenwidth()
+        screen_h = self._monitor.height if self._monitor is not None else self.window.winfo_screenheight()
+        screen_left = self._monitor.left if self._monitor is not None else 0
+        screen_top = self._monitor.top if self._monitor is not None else 0
         width, height = self._window_size()
-        x = max(0, min(screen_w - width, x))
-        y = max(0, min(screen_h - height, y))
-        self.window.geometry(f"+{x}+{y}")
+        x = max(screen_left, min(screen_left + screen_w - width, x))
+        y = max(screen_top, min(screen_top + screen_h - height, y))
+        self.window.geometry(f"{x:+d}{y:+d}")
 
     def _on_release(self, _event: "tk.Event") -> None:
         self._drag_offset = None
@@ -348,6 +386,10 @@ def start_droid_timers_thread(
     scale: float = 1.0,
     center_x_ratio: float = DEFAULT_CENTER_X_RATIO,
     top_y_ratio: float = DEFAULT_TOP_Y_RATIO,
+    monitor: MonitorInfo | None = None,
+    reminders_enabled: bool = False,
+    reminder_seconds: int = 60,
+    offset_seconds: int = 0,
 ) -> threading.Thread:
     """Standalone overlay for the CLI watcher (no GUI mainloop to attach to)."""
 
@@ -358,6 +400,10 @@ def start_droid_timers_thread(
                 scale=scale,
                 center_x_ratio=center_x_ratio,
                 top_y_ratio=top_y_ratio,
+                monitor=monitor,
+                reminders_enabled=reminders_enabled,
+                reminder_seconds=reminder_seconds,
+                offset_seconds=offset_seconds,
             )
             overlay.window.mainloop()
         except Exception as exc:
