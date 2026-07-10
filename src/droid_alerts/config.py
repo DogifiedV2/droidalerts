@@ -131,7 +131,6 @@ class AppConfig:
     advanced_mode: bool = False
     extra_checks: bool = False
     start_watcher_on_launch: bool = False
-    pause_when_game_closed: bool = False
     retention_days: int = 30
     max_storage_mb: int = 500
     timer_reminders_enabled: bool = False
@@ -207,7 +206,6 @@ class AppConfig:
             advanced_mode=bool(data.get("advanced_mode", False)),
             extra_checks=bool(data.get("extra_checks", False)),
             start_watcher_on_launch=bool(data.get("start_watcher_on_launch", False)),
-            pause_when_game_closed=bool(data.get("pause_when_game_closed", False)),
             retention_days=int(data.get("retention_days", 30)),
             max_storage_mb=int(data.get("max_storage_mb", 500)),
             timer_reminders_enabled=bool(data.get("timer_reminders_enabled", False)),
@@ -284,7 +282,6 @@ class AppConfig:
             "advanced_mode": self.advanced_mode,
             "extra_checks": self.extra_checks,
             "start_watcher_on_launch": self.start_watcher_on_launch,
-            "pause_when_game_closed": self.pause_when_game_closed,
             "retention_days": self.retention_days,
             "max_storage_mb": self.max_storage_mb,
             "timer_reminders_enabled": self.timer_reminders_enabled,

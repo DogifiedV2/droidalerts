@@ -67,7 +67,6 @@ from .notifications import (
 )
 from .popup import popup_icon_path, show_popup
 from .region import Calibration, RegionResolver
-from .game_status import is_game_running
 from .timers import format_countdown, seconds_until_next
 from .watcher import run_watch
 
@@ -144,12 +143,8 @@ class DroidAlertsApp:
         self.session_alert_count = 0
         self.session_monitoring_seconds = 0.0
         self._watch_segment_started: float | None = None
-        self.last_game_running: bool | None = None
-        self._game_check_running = False
-        self._game_check_after_id: str | None = None
         self._dashboard_timer_after_id: str | None = None
         self._storage_after_id: str | None = None
-        self._resume_when_game_opens = False
         self.history_rows_by_item: dict[str, dict[str, object]] = {}
         self._last_cleanup_at = 0.0
 
@@ -161,7 +156,6 @@ class DroidAlertsApp:
         self.last_scan_var = StringVar(value="No scans yet")
         self.last_alert_var = StringVar(value="No priority alerts this session")
         self.session_stats_var = StringVar(value="0 detections · 0 alerts")
-        self.game_status_var = StringVar(value="Fortnite status unavailable")
         self.storage_status_var = StringVar(value="Calculating storage…")
         self.channel_status_vars = {
             "Popup": StringVar(value="Ready"),
@@ -371,9 +365,6 @@ class DroidAlertsApp:
             **muted_style(),
         )
         watcher_detail.grid(row=1, column=0, sticky="w", pady=(3, 2))
-        ttk.Label(hero, textvariable=self.game_status_var, **muted_style()).grid(
-            row=2, column=0, sticky="w"
-        )
         self.watch_button = ttk.Button(
             hero,
             text="Start Watching",
@@ -769,7 +760,6 @@ class DroidAlertsApp:
             "share_debug_detections",
             "ntfy_include_attachment",
             "phone_include_attachment",
-            "pause_when_game_closed",
         )
         for key in advanced_bool_keys:
             self.setting_vars[key] = BooleanVar(value=False)
@@ -830,9 +820,6 @@ class DroidAlertsApp:
             ).grid(
                 row=row, column=1, sticky="w", padx=(12, 24), pady=4
             )
-        ttk.Checkbutton(detector, text="Pause watcher when Fortnite closes", variable=self.setting_vars["pause_when_game_closed"], **bootstyle("round-toggle")).grid(
-            row=0, column=2, sticky="w", pady=4
-        )
         data_outer, data = self._labeled_section(content, "STORAGE & DEBUG")
         data_outer.grid(row=2, column=0, sticky="ew", pady=(0, 26))
         data.columnconfigure(1, weight=1)
@@ -1139,7 +1126,6 @@ class DroidAlertsApp:
                 "save_debug_screenshots",
                 "share_debug_detections",
                 "start_watcher_on_launch",
-                "pause_when_game_closed",
                 "timer_reminders_enabled",
             ):
                 var = self.setting_vars.get(key)
@@ -1362,12 +1348,6 @@ class DroidAlertsApp:
     def toggle_watcher(self) -> None:
         if self.is_watching():
             self.stop_watcher()
-        elif self._resume_when_game_opens:
-            self._resume_when_game_opens = False
-            self._set_watcher_state("Stopped")
-            self.watcher_status_var.set("Ready to watch")
-            self.watcher_detail_var.set("Automatic start cancelled.")
-            self.detail_var.set("Automatic watcher start cancelled")
         else:
             self.start_watcher()
 
@@ -1428,8 +1408,6 @@ class DroidAlertsApp:
         self._apply_watcher_status_style(state)
         if state in {"Running", "Warning"} or self.is_watching():
             self.watch_button.configure(text="Stop Watching", state="normal", **bootstyle("danger"))
-        elif state == "Paused" and self._resume_when_game_opens:
-            self.watch_button.configure(text="Cancel Auto-start", state="normal", **bootstyle("warning"))
         else:
             self.watch_button.configure(text="Start Watching", state="normal", **bootstyle("success"))
 
@@ -1479,54 +1457,8 @@ class DroidAlertsApp:
 
     def _start_runtime_features(self) -> None:
         self.config = load_config()
-        self._check_game_status(initial=True)
-
-    def _schedule_game_check(self) -> None:
-        self._game_check_after_id = self.root.after(5000, self._check_game_status)
-
-    def _check_game_status(self, *, initial: bool = False) -> None:
-        if sys.platform != "win32":
-            self._game_status_ready(None, initial)
-            return
-        if self._game_check_running:
-            return
-        self._game_check_running = True
-
-        def worker() -> None:
-            game = is_game_running()
-            self._post_to_ui(lambda: self._game_status_ready(game, initial))
-
-        threading.Thread(target=worker, name="DroidAlertsGameStatus", daemon=True).start()
-
-    def _game_status_ready(self, game: bool | None, initial: bool) -> None:
-        self._game_check_running = False
-        self.last_game_running = game
-        self._update_game_status_text(game)
-        config = self.config
-        if initial and config.start_watcher_on_launch:
-            if config.pause_when_game_closed and game is False:
-                self._resume_when_game_opens = True
-                self.watcher_status_var.set("Paused until Fortnite opens")
-                self._set_watcher_state("Paused")
-            else:
-                self.start_watcher()
-        elif config.pause_when_game_closed:
-            if game is False and self.is_watching():
-                self._resume_when_game_opens = True
-                self.stop_watcher(reason="game_closed")
-            elif game is True and self._resume_when_game_opens and not self.is_watching():
-                self._resume_when_game_opens = False
-                self.start_watcher()
-        if sys.platform == "win32":
-            self._schedule_game_check()
-
-    def _update_game_status_text(self, game: bool | None) -> None:
-        if game is True:
-            self.game_status_var.set("Fortnite is running")
-        elif game is False:
-            self.game_status_var.set("Fortnite is not running")
-        else:
-            self.game_status_var.set("Fortnite status is available in the Windows build")
+        if self.config.start_watcher_on_launch and not self.is_watching():
+            self.start_watcher()
 
     def _set_var(self, key: str, value: object) -> None:
         var = self.setting_vars.get(key)
@@ -1698,7 +1630,6 @@ class DroidAlertsApp:
         config.update_check_enabled = bool(self._value("update_check_enabled"))
         config.extra_checks = bool(self._value("extra_checks"))
         config.start_watcher_on_launch = bool(self._value("start_watcher_on_launch"))
-        config.pause_when_game_closed = bool(self._value("pause_when_game_closed"))
         config.timer_reminders_enabled = bool(self._value("timer_reminders_enabled"))
         config.popup_position = str(self._value("popup_position")).strip().lower().replace(" ", "_")
         if config.popup_position not in {"top_center", "top_left", "top_right", "bottom_left", "bottom_right"}:
@@ -2247,14 +2178,6 @@ class DroidAlertsApp:
         config = self.save_settings()
         if config is None:
             return
-        game = self.last_game_running if config.pause_when_game_closed else None
-        if config.pause_when_game_closed and game is False:
-            self._resume_when_game_opens = True
-            self._set_watcher_state("Paused")
-            self.watcher_status_var.set("Paused until Fortnite opens")
-            self.watcher_detail_var.set("Monitoring will start automatically when the game starts.")
-            self.detail_var.set("Waiting for Fortnite before starting the watcher")
-            return
         self.stop_event = threading.Event()
         self._watch_stop_reason = ""
         self._watch_segment_started = time.monotonic()
@@ -2290,16 +2213,10 @@ class DroidAlertsApp:
         self.watch_thread = None
         self.stop_event = None
         if exc is None:
-            if reason == "game_closed":
-                self._set_watcher_state("Paused")
-                self.watcher_status_var.set("Paused until Fortnite opens")
-                self.watcher_detail_var.set("Monitoring will resume automatically when the game starts.")
-                self.detail_var.set("Watcher paused because Fortnite closed")
-            else:
-                self._set_watcher_state("Stopped")
-                self.watcher_status_var.set("Ready to watch")
-                self.watcher_detail_var.set("Choose the display with Fortnite, then start watching.")
-                self.detail_var.set("Watcher stopped")
+            self._set_watcher_state("Stopped")
+            self.watcher_status_var.set("Ready to watch")
+            self.watcher_detail_var.set("Choose the display with Fortnite, then start watching.")
+            self.detail_var.set("Watcher stopped")
         else:
             self._set_watcher_state("Error")
             self.watcher_status_var.set("Monitoring stopped unexpectedly")
@@ -2311,11 +2228,9 @@ class DroidAlertsApp:
     def stop_watcher(self, *, reason: str = "manual") -> None:
         if self.stop_event is not None:
             self._watch_stop_reason = reason
-            if reason == "manual":
-                self._resume_when_game_opens = False
             self.stop_event.set()
             self.watch_button.configure(text="Stopping…", state="disabled")
-            self.detail_var.set("Pausing watcher…" if reason == "game_closed" else "Stopping watcher…")
+            self.detail_var.set("Stopping watcher…")
         else:
             self.detail_var.set("Watcher is not running")
 
@@ -3000,7 +2915,6 @@ class DroidAlertsApp:
             self.save_settings(interactive=False, update_detail=False)
         for after_id in (
             self._log_refresh_after_id,
-            self._game_check_after_id,
             self._dashboard_timer_after_id,
             self._storage_after_id,
             self._update_poll_after_id,
