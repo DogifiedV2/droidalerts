@@ -45,14 +45,23 @@ def main() -> int:
     if AlertPolicy(disabled_config).should_alert(priority, "disabled-row"):
         failures.append("disabled target should not fire")
 
+    rainbow_epic = _detection("Rainbow", "Epic")
+    if not rainbow_epic.should_alert:
+        failures.append("Rainbow Epic should be an alertable priority combo")
     rainbow_legendary = _detection("Rainbow", "Legendary")
     if not rainbow_legendary.should_alert:
         failures.append("Rainbow Legendary should be an alertable priority combo")
     default_config = AppConfig()
+    if ("Rainbow", "Epic") in default_config.targets:
+        failures.append("Rainbow Epic should be disabled by default")
     if ("Rainbow", "Legendary") in default_config.targets:
         failures.append("Rainbow Legendary should be disabled by default")
-    if ALERT_COMBOS[0] != ("Rainbow", "Legendary"):
-        failures.append("Rainbow Legendary should occupy the first toggle slot")
+    expected_first_slots = (("Rainbow", "Epic"), ("Rainbow", "Legendary"), ("Beskar", "Epic"))
+    if ALERT_COMBOS[:3] != expected_first_slots:
+        failures.append("Rainbow Epic and Legendary should occupy the first two toggle slots")
+    enabled_epic_config = AppConfig(alert_targets=[["Rainbow", "Epic"]])
+    if not AlertPolicy(enabled_epic_config).should_alert(rainbow_epic, "rainbow-epic-row"):
+        failures.append("enabled Rainbow Epic target should fire")
     enabled_config = AppConfig(alert_targets=[["Rainbow", "Legendary"]])
     if not AlertPolicy(enabled_config).should_alert(rainbow_legendary, "rainbow-legendary-row"):
         failures.append("enabled Rainbow Legendary target should fire")
