@@ -46,18 +46,17 @@ def load_or_create_anonymous_install_id() -> str:
 
 
 class AnonymousTelemetryClient:
-    """Best-effort anonymous active-watcher and opt-in debug upload client.
+    """Best-effort anonymous active-watcher and alert-count client.
 
     The active-watcher heartbeat sends only random UUIDs and the app version.
-    Priority alert reports share the same share_anonymous_data opt-in and send
-    only the anonymous IDs, app version, timestamp, and the droid/rarity combo.
+    Priority alert reports send only the anonymous IDs, app version, timestamp,
+    and the droid/rarity combo.
     Debug detection sharing is a separate explicit opt-in that can upload the
     two debug PNGs for alert detections while debug mode is enabled.
     """
 
     def __init__(self, config: AppConfig) -> None:
         self._lock = threading.Lock()
-        self._enabled = bool(config.share_anonymous_data)
         self._endpoint_url = config.anonymous_stats_url.strip()
         self._detection_report_url = config.anonymous_detection_url.strip()
         self._debug_upload_enabled = bool(config.share_debug_detections)
@@ -70,25 +69,23 @@ class AnonymousTelemetryClient:
 
     def start(self) -> None:
         with self._lock:
-            if not self._enabled or not self._endpoint_url or self._thread is not None:
+            if not self._endpoint_url or self._thread is not None:
                 return
             self._stop_event = threading.Event()
             self._thread = threading.Thread(target=self._run, name="DroidAlertsAnonymousTelemetry", daemon=True)
             self._thread.start()
 
     def apply_config(self, config: AppConfig) -> None:
-        enabled = bool(config.share_anonymous_data)
         endpoint_url = config.anonymous_stats_url.strip()
         should_start = False
         should_stop = False
         with self._lock:
-            self._enabled = enabled
             self._endpoint_url = endpoint_url
             self._detection_report_url = config.anonymous_detection_url.strip()
             self._debug_upload_enabled = bool(config.share_debug_detections)
             self._debug_upload_url = config.debug_detection_upload_url.strip()
-            should_stop = (not enabled or not endpoint_url) and self._thread is not None
-            should_start = enabled and bool(endpoint_url) and self._thread is None
+            should_stop = not endpoint_url and self._thread is not None
+            should_start = bool(endpoint_url) and self._thread is None
 
         if should_stop:
             self.stop()
@@ -108,9 +105,8 @@ class AnonymousTelemetryClient:
 
     def submit_alert_detection(self, *, detection, detected_at: str) -> None:
         with self._lock:
-            enabled = self._enabled
             endpoint_url = self._detection_report_url
-        if not enabled or not endpoint_url:
+        if not endpoint_url:
             return
 
         threading.Thread(

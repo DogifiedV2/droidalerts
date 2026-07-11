@@ -48,9 +48,9 @@ Share the zip with normal users. They only need to unzip it and double-click
    percent-of-screen band with left 0%, width 33%, and height 16%. Standard
    wide screens use top 47%. Ultrawide screens (aspect >= 2.20, e.g.
    3440x1392 and 3440x1440) use top 40%. Compact screens (aspect <= 1.50,
-   e.g. 1440x1040) use top 36% because the alert rows sit higher. Manual calibration is stored as
-   *percent ratios* in `config/calibration.json`, so it survives resolution
-   changes.
+   e.g. 1440x1040) use top 36% because the alert rows sit higher. Manual
+   calibration is stored per display as *percent ratios* in
+   `config/calibration.json`, so it survives resolution changes.
 2. **Scale normalization** (`normalize.py`): the captured band is resized so
    alert rows are 44px tall, which is the reference scale the templates and
    column constants were measured at. The game fits its HUD to a 16:9 box, so the
@@ -63,29 +63,31 @@ Share the zip with normal users. They only need to unzip it and double-click
    text-colored component analysis that can override sand-inflated "Common"
    reads. Mythic alerts additionally require a rarity-specific word-shape
    match, which is what keeps background false positives out.
-5. **Alerts** (`alerts.py`): per-combo score gates, cooldown, and row-hash
-   dedupe; sound comes from `assets/sounds/*.wav` (first file found) or a
-   system beep.
+5. **Alerts** (`alerts.py`): fixed priority targets, cooldown, and row-hash
+   dedupe; sound comes from a GUI-selected WAV file or a system beep.
 
 While watching, each unique non-alert spawn prints once as `[DETECTED]`.
 Priority detections that pass the alert policy print as `[ALERT]` and fire the
 enabled channels (sound, popup, ntfy, Pushover, Discord). Debug mode also
 prints non-alert detections as `[SEEN]`.
 
-Debug mode never saves screenshots automatically. Press numpad `+` during
-`watch --debug` to save the current chat-box region plus a candidate-check
-overlay.
+On Windows, debug mode saves a snapshot when numpad `+` is pressed. On macOS,
+where that global hotkey is unreliable, it saves the chat-box region and
+candidate overlay every five seconds. Other platforms log debug detections but
+do not currently offer a global capture hotkey.
 
 ## Testing
 
 `python main.py test` runs every fixture in `tests/fixtures/` and writes a
-scored report to `tests/results/`. Current private baseline: **51/51 labeled
-fixtures pass with zero false positives and zero false negatives**, including
+scored report to `tests/results/`. The current manifest contains **65 labeled
+fixtures plus one unlabeled review fixture**, including
 synthetic 1920x1080 / 2560x1440 / 3440x1440 stress renders and real 4:3
 (1440x1040) captures.
 
 `python tests/test_paths_guard.py` asserts the tool never references OS
-user-data paths.
+user-data paths. `python tests/test_runtime_ux.py` covers config recovery,
+per-display calibration, retention cleanup, timer boundaries, delivery retry
+classification, and safe update extraction.
 
 ## Adding new training captures
 

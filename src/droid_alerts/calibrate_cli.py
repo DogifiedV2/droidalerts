@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import tkinter as tk
 
-from .capture import set_dpi_awareness
+from .capture import monitor_key_from_mapping, set_dpi_awareness
 from .region import Calibration, calibration_path
 
 MIN_SIZE = 20
@@ -55,7 +55,8 @@ class RegionSelector:
 
         self.root.title("Droid Alerts: Select Alert Region")
         self.root.geometry(
-            f"{self.virtual['width']}x{self.virtual['height']}+{self.virtual['left']}+{self.virtual['top']}"
+            f"{self.virtual['width']}x{self.virtual['height']}"
+            f"{self.virtual['left']:+d}{self.virtual['top']:+d}"
         )
         self.root.overrideredirect(True)
         self.root.deiconify()
@@ -149,6 +150,10 @@ class RegionSelector:
             self.canvas.itemconfig(self.coord_text, text="Region too small. Drag a larger box.", fill="#ff4040")
             return
         monitor = _monitor_for_region(self.region, self.monitors)
+        monitor_index = next(
+            (index for index, candidate in enumerate(self.monitors, start=1) if candidate == monitor),
+            1,
+        )
         mon_left, mon_top = int(monitor["left"]), int(monitor["top"])
         mon_w, mon_h = int(monitor["width"]), int(monitor["height"])
         calibration = Calibration(
@@ -161,7 +166,7 @@ class RegionSelector:
             },
             monitor_signature={"width": mon_w, "height": mon_h},
         )
-        calibration.save()
+        calibration.save(monitor_key_from_mapping(monitor, monitor_index))
         print("Saved calibration (percent ratios are the source of truth):")
         print(f"  {calibration.to_dict()}")
         print(f"  -> {calibration_path()}")
@@ -185,8 +190,7 @@ class RegionSelector:
 def run_calibrate(*, capture_delay: float = 0.0, reset: bool = False) -> None:
     set_dpi_awareness()
     if reset:
-        calibration = Calibration()
-        calibration.save()
+        calibration_path().unlink(missing_ok=True)
         print("Calibration reset to auto region detection.")
         return
     RegionSelector(capture_delay=capture_delay).run()

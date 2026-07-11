@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,6 +51,11 @@ def sounds_dir() -> Path:
     return assets_dir() / "sounds"
 
 
+def user_sounds_dir() -> Path:
+    """Writable folder for sounds added from the GUI."""
+    return data_dir() / "sounds"
+
+
 def assets_dir() -> Path:
     bundled = bundled_root() / "assets"
     return bundled if bundled.exists() else project_root() / "assets"
@@ -75,6 +81,7 @@ class Thresholds:
 
 @dataclass
 class AppConfig:
+    config_version: int = 2
     monitor_index: int = 1
     capture_interval_seconds: float = 0.25
     dedupe_seconds: float = 12.0
@@ -89,7 +96,11 @@ class AppConfig:
     droid_timers_top_y: float = 0.006
     popup_seconds: float = 8.0
     popup_icon_file: str = "signals_icon.png"
-    save_alert_samples: bool = True
+    popup_position: str = "top_center"
+    popup_scale: float = 1.0
+    popup_opacity: float = 1.0
+    sound_file: str = ""
+    save_alert_samples: bool = False
     save_debug_screenshots: bool = False
     discord_enabled: bool = False
     discord_webhook_file: str = "discord_webhook.txt"
@@ -105,14 +116,16 @@ class AppConfig:
     ntfy_include_attachment: bool = False
     notification_setup_prompted: bool = False
     intro_shown: bool = False
-    phone_alerts_enabled: bool = True
+    # Fresh 1.3.0 installs must not see the community prompt. Older configs do
+    # not contain this key, so from_dict treats a missing value as not prompted.
+    discord_community_prompted: bool = True
+    phone_alerts_enabled: bool = False
     phone_credentials_file: str = "phone_alerts.json"
     phone_env_token: str = "DROIDWATCHER_PHONE_ALERTS_TOKEN"
     phone_env_user: str = "DROIDWATCHER_PHONE_ALERTS_USER"
     phone_sound: str = "siren"
-    phone_include_attachment: bool = True
+    phone_include_attachment: bool = False
     update_check_enabled: bool = True
-    share_anonymous_data: bool = True
     anonymous_stats_url: str = "https://gonk.tools/api/droid-alerts/heartbeat"
     anonymous_detection_url: str = "https://gonk.tools/api/droid-alerts/detections"
     share_debug_detections: bool = False
@@ -120,6 +133,12 @@ class AppConfig:
     update_repo: str = "DogifiedV2/droidalerts"
     advanced_mode: bool = False
     extra_checks: bool = False
+    start_watcher_on_launch: bool = False
+    retention_days: int = 30
+    max_storage_mb: int = 500
+    timer_reminders_enabled: bool = False
+    timer_reminder_seconds: int = 60
+    timer_offset_seconds: int = 0
     validation_failures_before_calibration_prompt: int = 30
     thresholds: Thresholds = field(default_factory=Thresholds)
     alert_targets: list[list[str]] = field(
@@ -136,6 +155,7 @@ class AppConfig:
     def from_dict(cls, data: dict[str, Any]) -> "AppConfig":
         thresholds = data.get("thresholds") or {}
         config = cls(
+            config_version=max(2, int(data.get("config_version", 1))),
             monitor_index=int(data.get("monitor_index", 1)),
             capture_interval_seconds=float(data.get("capture_interval_seconds", 0.25)),
             dedupe_seconds=float(data.get("dedupe_seconds", 12.0)),
@@ -148,7 +168,11 @@ class AppConfig:
             droid_timers_top_y=float(data.get("droid_timers_top_y", 0.006)),
             popup_seconds=float(data.get("popup_seconds", 8.0)),
             popup_icon_file=str(data.get("popup_icon_file", "signals_icon.png")),
-            save_alert_samples=bool(data.get("save_alert_samples", True)),
+            popup_position=str(data.get("popup_position", "top_center")),
+            popup_scale=float(data.get("popup_scale", 1.0)),
+            popup_opacity=float(data.get("popup_opacity", 1.0)),
+            sound_file=str(data.get("sound_file", "")),
+            save_alert_samples=bool(data.get("save_alert_samples", False)),
             save_debug_screenshots=bool(data.get("save_debug_screenshots", False)),
             discord_enabled=bool(data.get("discord_enabled", False)),
             discord_webhook_file=str(data.get("discord_webhook_file", "discord_webhook.txt")),
@@ -164,14 +188,14 @@ class AppConfig:
             ntfy_include_attachment=bool(data.get("ntfy_include_attachment", False)),
             notification_setup_prompted=bool(data.get("notification_setup_prompted", False)),
             intro_shown=bool(data.get("intro_shown", False)),
-            phone_alerts_enabled=bool(data.get("phone_alerts_enabled", True)),
+            discord_community_prompted=bool(data.get("discord_community_prompted", False)),
+            phone_alerts_enabled=bool(data.get("phone_alerts_enabled", False)),
             phone_credentials_file=str(data.get("phone_credentials_file", "phone_alerts.json")),
             phone_env_token=str(data.get("phone_env_token", "DROIDWATCHER_PHONE_ALERTS_TOKEN")),
             phone_env_user=str(data.get("phone_env_user", "DROIDWATCHER_PHONE_ALERTS_USER")),
             phone_sound=str(data.get("phone_sound", "siren")),
-            phone_include_attachment=bool(data.get("phone_include_attachment", True)),
+            phone_include_attachment=bool(data.get("phone_include_attachment", False)),
             update_check_enabled=bool(data.get("update_check_enabled", True)),
-            share_anonymous_data=bool(data.get("share_anonymous_data", True)),
             anonymous_stats_url=str(
                 data.get("anonymous_stats_url", "https://gonk.tools/api/droid-alerts/heartbeat")
             ),
@@ -185,6 +209,12 @@ class AppConfig:
             update_repo=str(data.get("update_repo", "DogifiedV2/droidalerts")),
             advanced_mode=bool(data.get("advanced_mode", False)),
             extra_checks=bool(data.get("extra_checks", False)),
+            start_watcher_on_launch=bool(data.get("start_watcher_on_launch", False)),
+            retention_days=int(data.get("retention_days", 30)),
+            max_storage_mb=int(data.get("max_storage_mb", 500)),
+            timer_reminders_enabled=bool(data.get("timer_reminders_enabled", False)),
+            timer_reminder_seconds=int(data.get("timer_reminder_seconds", 60)),
+            timer_offset_seconds=int(data.get("timer_offset_seconds", 0)),
             validation_failures_before_calibration_prompt=int(
                 data.get("validation_failures_before_calibration_prompt", 30)
             ),
@@ -196,11 +226,19 @@ class AppConfig:
             ),
         )
         if isinstance(data.get("alert_targets"), list):
-            config.alert_targets = [list(pair) for pair in data["alert_targets"]]
+            raw_targets = data["alert_targets"]
+            pairs = [
+                [str(pair[0]), str(pair[1])]
+                for pair in raw_targets
+                if isinstance(pair, (list, tuple)) and len(pair) == 2
+            ]
+            if pairs or not raw_targets:
+                config.alert_targets = pairs
         return config
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "config_version": max(2, self.config_version),
             "monitor_index": self.monitor_index,
             "capture_interval_seconds": self.capture_interval_seconds,
             "dedupe_seconds": self.dedupe_seconds,
@@ -213,6 +251,10 @@ class AppConfig:
             "droid_timers_top_y": self.droid_timers_top_y,
             "popup_seconds": self.popup_seconds,
             "popup_icon_file": self.popup_icon_file,
+            "popup_position": self.popup_position,
+            "popup_scale": self.popup_scale,
+            "popup_opacity": self.popup_opacity,
+            "sound_file": self.sound_file,
             "save_alert_samples": self.save_alert_samples,
             "save_debug_screenshots": self.save_debug_screenshots,
             "discord_enabled": self.discord_enabled,
@@ -229,6 +271,7 @@ class AppConfig:
             "ntfy_include_attachment": self.ntfy_include_attachment,
             "notification_setup_prompted": self.notification_setup_prompted,
             "intro_shown": self.intro_shown,
+            "discord_community_prompted": self.discord_community_prompted,
             "phone_alerts_enabled": self.phone_alerts_enabled,
             "phone_credentials_file": self.phone_credentials_file,
             "phone_env_token": self.phone_env_token,
@@ -236,7 +279,6 @@ class AppConfig:
             "phone_sound": self.phone_sound,
             "phone_include_attachment": self.phone_include_attachment,
             "update_check_enabled": self.update_check_enabled,
-            "share_anonymous_data": self.share_anonymous_data,
             "anonymous_stats_url": self.anonymous_stats_url,
             "anonymous_detection_url": self.anonymous_detection_url,
             "share_debug_detections": self.share_debug_detections,
@@ -244,6 +286,12 @@ class AppConfig:
             "update_repo": self.update_repo,
             "advanced_mode": self.advanced_mode,
             "extra_checks": self.extra_checks,
+            "start_watcher_on_launch": self.start_watcher_on_launch,
+            "retention_days": self.retention_days,
+            "max_storage_mb": self.max_storage_mb,
+            "timer_reminders_enabled": self.timer_reminders_enabled,
+            "timer_reminder_seconds": self.timer_reminder_seconds,
+            "timer_offset_seconds": self.timer_offset_seconds,
             "validation_failures_before_calibration_prompt": self.validation_failures_before_calibration_prompt,
             "thresholds": {
                 "rarity_threshold": self.thresholds.rarity_threshold,
@@ -265,11 +313,43 @@ def load_config() -> AppConfig:
         config = AppConfig()
         save_config(config)
         return config
-    data = json.loads(path.read_text(encoding="utf-8-sig"))
-    return AppConfig.from_dict(data)
+
+    def parse(candidate: Path) -> AppConfig:
+        data = json.loads(candidate.read_text(encoding="utf-8-sig"))
+        if not isinstance(data, dict):
+            raise ValueError("Config must contain a JSON object")
+        return AppConfig.from_dict(data)
+
+    try:
+        return parse(path)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        backup = path.with_suffix(path.suffix + ".bak")
+        try:
+            return parse(backup)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            # Keep the broken file for support instead of preventing the app
+            # from opening. Atomic saves will rebuild a valid config below.
+            corrupt = path.with_suffix(path.suffix + ".corrupt")
+            try:
+                if path.exists():
+                    shutil.copy2(path, corrupt)
+            except OSError:
+                pass
+            config = AppConfig()
+            save_config(config)
+            return config
 
 
 def save_config(config: AppConfig) -> None:
     path = config_dir() / CONFIG_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
+    temp = path.with_suffix(path.suffix + ".tmp")
+    backup = path.with_suffix(path.suffix + ".bak")
+    temp.write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
+    if path.exists():
+        try:
+            json.loads(path.read_text(encoding="utf-8-sig"))
+            shutil.copy2(path, backup)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    temp.replace(path)

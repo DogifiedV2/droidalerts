@@ -118,7 +118,7 @@ class Calibration:
     monitor_signature: dict[str, int] = field(default_factory=dict)
 
     @classmethod
-    def load(cls) -> "Calibration":
+    def load(cls, monitor_key: str | None = None) -> "Calibration":
         path = calibration_path()
         if not path.exists():
             return cls()
@@ -126,6 +126,12 @@ class Calibration:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
         except Exception:
             return cls()
+        profiles = data.get("profiles")
+        if isinstance(profiles, dict):
+            profile = profiles.get(monitor_key or "default") or profiles.get("default")
+            if profile is None and monitor_key is None and profiles:
+                profile = next(iter(profiles.values()))
+            data = profile if isinstance(profile, dict) else {}
         ratios = data.get("ratios") or {}
         calibration = cls(
             mode=str(data.get("mode", "auto")),
@@ -137,10 +143,28 @@ class Calibration:
             calibration.mode = "auto"
         return calibration
 
-    def save(self) -> None:
+    def save(self, monitor_key: str | None = None) -> None:
         path = calibration_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.to_dict(), indent=2) + "\n", encoding="utf-8")
+        profiles: dict[str, Any] = {}
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8-sig"))
+            except Exception:
+                existing = {}
+            if isinstance(existing.get("profiles"), dict):
+                profiles = dict(existing["profiles"])
+            elif isinstance(existing, dict) and existing.get("ratios"):
+                profiles["default"] = {
+                    key: existing[key]
+                    for key in ("mode", "ratios", "monitor_signature")
+                    if key in existing
+                }
+        profiles[monitor_key or "default"] = self.to_dict()
+        payload = {"version": 2, "profiles": profiles}
+        temp = path.with_suffix(path.suffix + ".tmp")
+        temp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        temp.replace(path)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -171,11 +195,19 @@ class RegionResolver:
     changes; the monitor signature only marks when re-validation is due.
     """
 
-    def __init__(self, screen_width: int, screen_height: int, *, max_failures: int = 30) -> None:
+    def __init__(
+        self,
+        screen_width: int,
+        screen_height: int,
+        *,
+        max_failures: int = 30,
+        monitor_key: str | None = None,
+    ) -> None:
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.max_failures = max_failures
-        self.calibration = Calibration.load()
+        self.monitor_key = monitor_key
+        self.calibration = Calibration.load(monitor_key)
         self.consecutive_failures = 0
         self.signature_changed = self._signature_changed()
 
@@ -209,7 +241,7 @@ class RegionResolver:
                     "width": self.screen_width,
                     "height": self.screen_height,
                 }
-                self.calibration.save()
+                self.calibration.save(self.monitor_key)
                 self.signature_changed = False
             return
         self.consecutive_failures += 1

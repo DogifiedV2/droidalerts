@@ -19,4 +19,8 @@ config/discord_webhook.txt
 config/ntfy_token.txt
 config/phone_alerts.json
 config/anonymous_install_id.txt
+config/config.json.bak
+config/config.json.tmp
+config/config.json.corrupt
 /.idea/
+.DS_Store

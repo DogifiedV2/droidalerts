@@ -50,6 +50,8 @@ def download_and_install_update(
     """
     if not zip_url:
         raise RuntimeError("The GitHub release is missing a downloadable update zip")
+    if not zip_url.lower().startswith("https://"):
+        raise RuntimeError("Updates must be downloaded over HTTPS")
 
     def report(text: str) -> None:
         if progress is not None:
@@ -68,7 +70,7 @@ def download_and_install_update(
 
     report("Unpacking...")
     with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(extract_dir)
+        _safe_extract(zf, extract_dir)
 
     # GitHub archives wrap everything in a single "<repo>-<tag>/" folder.
     roots = [path for path in extract_dir.iterdir() if path.is_dir()]
@@ -94,6 +96,21 @@ def download_and_install_update(
     zip_path.unlink(missing_ok=True)
     report(f"Installed {updated} updated files")
     return UpdateInstallResult(updated_files=updated)
+
+
+def _safe_extract(archive: zipfile.ZipFile, destination: Path) -> None:
+    """Reject path traversal and implausibly large release archives."""
+    destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
+    total_size = 0
+    for member in archive.infolist():
+        total_size += max(0, member.file_size)
+        if total_size > 1_500_000_000:
+            raise RuntimeError("The downloaded update is unexpectedly large")
+        target = (destination / member.filename).resolve()
+        if target != root and root not in target.parents:
+            raise RuntimeError("The downloaded update contains an unsafe file path")
+    archive.extractall(destination)
 
 
 def _copy_update_files(source_root: Path, target_root: Path) -> int:

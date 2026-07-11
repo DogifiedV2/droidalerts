@@ -20,6 +20,7 @@ from .config import (
 )
 from .logging_io import alert_samples_dir, append_event, debug_dir, timestamp
 from .notifications import (
+    DeliveryResult,
     load_discord_webhook,
     load_phone_alert_credentials,
     ntfy_configured,
@@ -39,7 +40,16 @@ def run_watch(
     config: AppConfig | None = None,
     stop_event=None,
     popup_parent=None,
+    status_callback: Callable[[dict[str, object]], None] | None = None,
 ) -> None:
+    def emit(event_type: str, **data: object) -> None:
+        if status_callback is None:
+            return
+        try:
+            status_callback({"type": event_type, **data})
+        except Exception:
+            pass
+
     set_dpi_awareness()
     config = config or load_config()
     capture = create_capture(monitor_index=config.monitor_index)
@@ -49,6 +59,7 @@ def run_watch(
         screen_w,
         screen_h,
         max_failures=config.validation_failures_before_calibration_prompt,
+        monitor_key=getattr(getattr(capture, "monitor", None), "key", None),
     )
     box, region_source = resolver.resolve()
     pipeline = Pipeline(templates_dir(), config.thresholds, extra_checks=config.extra_checks)
@@ -71,6 +82,10 @@ def run_watch(
             scale=config.droid_timers_scale,
             center_x_ratio=config.droid_timers_center_x,
             top_y_ratio=config.droid_timers_top_y,
+            monitor=getattr(capture, "monitor", None),
+            reminders_enabled=config.timer_reminders_enabled,
+            reminder_seconds=config.timer_reminder_seconds,
+            offset_seconds=config.timer_offset_seconds,
         )
         print("Droid Timers overlay: ENABLED")
     elif config.droid_timers_enabled:
@@ -125,6 +140,42 @@ def run_watch(
     log_dedupe_seconds = max(12.0, config.dedupe_seconds)
     telemetry = AnonymousTelemetryClient(config)
     telemetry.start()
+    emit(
+        "watcher_ready",
+        monitor_index=config.monitor_index,
+        screen_width=screen_w,
+        screen_height=screen_h,
+        region_source=region_source,
+    )
+    last_scan_status_at = 0.0
+
+    def deliver(target, args: tuple, kwargs: dict, event: dict[str, object]) -> None:
+        result = None
+        attempts = 0
+        for attempts in (1, 2):
+            try:
+                result = target(*args, **kwargs)
+            except Exception as exc:
+                result = DeliveryResult(channel=getattr(target, "__name__", "Alert"), success=False, message=str(exc))
+            if result.success or attempts == 2 or not _delivery_retryable(result.message):
+                break
+            if _wait_or_stop(stop_event, 1.5):
+                break
+        assert result is not None
+        delivery_event = {
+            "ts": timestamp(),
+            "event_type": "delivery",
+            "channel": result.channel,
+            "success": result.success,
+            "detail": result.message + (f" after {attempts} attempts" if attempts > 1 else ""),
+            "droid": event.get("droid", ""),
+            "rarity": event.get("rarity", ""),
+            "alerted": True,
+            "is_priority": True,
+            "score": event.get("score"),
+        }
+        append_event(delivery_event)
+        emit("delivery", result=delivery_event)
 
     # Live settings: the GUI autosaves config.json (and region nudges save
     # calibration.json); watching the file mtimes lets changes apply on the
@@ -185,22 +236,41 @@ def run_watch(
                         screen_w,
                         screen_h,
                         max_failures=config.validation_failures_before_calibration_prompt,
+                        monitor_key=getattr(getattr(capture, "monitor", None), "key", None),
                     )
                     box, region_source = resolver.resolve()
                     print(
                         f"[CONFIG] Settings reloaded: region [{region_source}] "
                         f"targets {sorted(config.targets)}"
                     )
+                    emit(
+                        "config_reloaded",
+                        monitor_index=config.monitor_index,
+                        screen_width=screen_w,
+                        screen_height=screen_h,
+                        region_source=region_source,
+                    )
 
             try:
                 band = capture.grab(box)
             except Exception as exc:
                 print(f"capture error: {exc}")
+                emit("capture_error", message=str(exc))
                 if _wait_or_stop(stop_event, config.capture_interval_seconds):
                     break
                 continue
 
             result = pipeline.detect(band, screen_height=screen_h, screen_width=screen_w, keep_normalized=True)
+            status_now = time.monotonic()
+            if status_now - last_scan_status_at >= 1.0:
+                last_scan_status_at = status_now
+                emit(
+                    "scan",
+                    frame=frame_index,
+                    scanned_at=timestamp(),
+                    detections=len(result.detections),
+                    scale=round(result.scale, 4),
+                )
 
             # Region-health tracking: alert-free stretches are normal (spawns
             # are random), so only frames with phrase-like rows that still
@@ -253,17 +323,27 @@ def run_watch(
                     **detection.to_dict(),
                 }
                 label = f"{detection.droid} {detection.rarity}"
+                sample_paths = None
+                needs_attachment = (
+                    (config.ntfy_enabled and config.ntfy_include_attachment)
+                    or (phone_credentials is not None and config.phone_include_attachment)
+                )
+                if fire and (config.save_alert_samples or needs_attachment) and norm is not None:
+                    try:
+                        sample_paths = _save_sample(norm, detection, label)
+                    except Exception as exc:
+                        print(f"[SAMPLE] Failed to save alert screenshot: {exc}")
+                    else:
+                        event["sample_path"] = str(sample_paths[1])
                 should_log_event = fire or debug or not recently_logged
                 if should_log_event:
                     append_event(event)
+                    emit("alert" if fire else "detection", event=event)
                 if fire:
                     print(f"[ALERT] {event['ts']} {label} score={detection.score:.2f}")
                     logged_spawn_keys[spawn_key] = now
                     policy.notify(detection)
                     telemetry.submit_alert_detection(detection=detection, detected_at=event["ts"])
-                    sample_paths = None
-                    if config.save_alert_samples and norm is not None:
-                        sample_paths = _save_sample(norm, detection, label)
                     if debug and config.share_debug_detections:
                         debug_paths = _save_debug(band, result, reason="shared_alert")
                         append_event(_debug_snapshot_event(frame_index, result, debug_paths, reason="shared_alert"))
@@ -274,11 +354,15 @@ def run_watch(
                             config.popup_seconds,
                             icon_path=popup_icon_path(config),
                             parent=popup_parent,
+                            monitor=getattr(capture, "monitor", None),
+                            position=config.popup_position,
+                            scale=config.popup_scale,
+                            opacity=config.popup_opacity,
                         )
                     if webhook_url:
                         threading.Thread(
-                            target=send_discord_alert,
-                            args=(webhook_url, detection),
+                            target=deliver,
+                            args=(send_discord_alert, (webhook_url, detection), {}, event),
                             daemon=True,
                         ).start()
                     if config.ntfy_enabled and ntfy_configured(config):
@@ -286,9 +370,13 @@ def run_watch(
                         if config.ntfy_include_attachment and sample_paths is not None:
                             attachment_path = sample_paths[1]
                         threading.Thread(
-                            target=send_ntfy_alert,
-                            args=(config, detection),
-                            kwargs={"attachment_path": attachment_path},
+                            target=deliver,
+                            args=(
+                                send_ntfy_alert,
+                                (config, detection),
+                                {"attachment_path": attachment_path},
+                                event,
+                            ),
                             daemon=True,
                         ).start()
                     if phone_credentials:
@@ -296,9 +384,13 @@ def run_watch(
                         if config.phone_include_attachment and sample_paths is not None:
                             attachment_path = sample_paths[1]
                         threading.Thread(
-                            target=send_phone_alert,
-                            args=(phone_credentials, detection),
-                            kwargs={"sound": config.phone_sound, "attachment_path": attachment_path},
+                            target=deliver,
+                            args=(
+                                send_phone_alert,
+                                (phone_credentials, detection),
+                                {"sound": config.phone_sound, "attachment_path": attachment_path},
+                                event,
+                            ),
                             daemon=True,
                         ).start()
                 elif debug:
@@ -366,6 +458,7 @@ def run_watch(
     finally:
         telemetry.stop()
         capture.close()
+        emit("watcher_stopped")
 
 
 def _save_sample(normalized_band, detection, label: str) -> tuple[Path, Path]:
@@ -390,6 +483,18 @@ def _wait_or_stop(stop_event, seconds: float) -> bool:
         time.sleep(seconds)
         return False
     return bool(stop_event.wait(seconds))
+
+
+def _delivery_retryable(message: str) -> bool:
+    """Retry timeouts, rate limits, and server failures once; not bad credentials."""
+    text = str(message).lower()
+    non_retryable = ("http 400", "http 401", "http 403", "http 404", "credential", "unauthorized")
+    if any(marker in text for marker in non_retryable):
+        return False
+    return any(
+        marker in text
+        for marker in ("timeout", "timed out", "tempor", "connection", "http 408", "http 429", "http 5")
+    )
 
 
 def _spawn_key(detection) -> str:

@@ -1,4 +1,4 @@
-"""Guard: ToolV2 must stay fully self-contained under its project folder.
+"""Guard: Droid Alerts must stay fully self-contained under its project folder.
 
 Fails if any source module references OS user-data locations or resolves
 paths outside the project root.
@@ -31,7 +31,7 @@ def main() -> int:
 
     from droid_alerts import config
 
-    for name in ("project_root", "config_dir", "data_dir", "templates_dir", "sounds_dir"):
+    for name in ("project_root", "config_dir", "data_dir", "templates_dir", "sounds_dir", "user_sounds_dir"):
         resolved = getattr(config, name)()
         if BASE_DIR not in [resolved, *resolved.parents]:
             failures.append(f"config.{name}() resolves outside project root: {resolved}")

@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from .classifier import Detection
-from .config import AppConfig, sounds_dir
+from .config import AppConfig, sounds_dir, user_sounds_dir
 
 
 def row_hash(row_bgr: np.ndarray) -> str:
@@ -37,6 +37,7 @@ class AlertPolicy:
         self.cooldown_seconds = config.alert_cooldown_seconds
         self.dedupe_seconds = config.dedupe_seconds
         self.sound_enabled = config.sound_enabled
+        self.sound_file = config.sound_file
 
     def should_alert(self, detection: Detection, row_digest: str) -> bool:
         if (detection.droid, detection.rarity) not in self.targets:
@@ -68,7 +69,7 @@ class AlertPolicy:
         try:
             import winsound
 
-            wav = _alert_wav()
+            wav = _alert_wav(self.sound_file)
             if wav is not None:
                 winsound.PlaySound(str(wav), winsound.SND_FILENAME | winsound.SND_ASYNC)
             else:
@@ -78,10 +79,16 @@ class AlertPolicy:
             pass
 
 
-def _alert_wav() -> Path | None:
-    directory = sounds_dir()
-    if not directory.exists():
+def _alert_wav(preferred: str = "") -> Path | None:
+    directories = (user_sounds_dir(), sounds_dir())
+    if preferred == "System beeps":
         return None
-    for path in sorted(directory.glob("*.wav")):
-        return path
+    if preferred:
+        for directory in directories:
+            selected = directory / Path(preferred).name
+            if selected.is_file() and selected.suffix.lower() == ".wav":
+                return selected
+    for directory in directories:
+        for path in sorted(directory.glob("*.wav")) if directory.exists() else ():
+            return path
     return None

@@ -46,6 +46,9 @@ class MonitorInfo:
     top: int
     width: int
     height: int
+    index: int = 1
+    key: str = "monitor-1"
+    name: str = ""
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,32 @@ class MonitorDescriptor:
     height: int
     is_primary: bool = False
     name: str = ""
+    unique_id: str = ""
+
+    @property
+    def key(self) -> str:
+        return monitor_key_from_mapping(
+            {
+                "left": self.left,
+                "top": self.top,
+                "width": self.width,
+                "height": self.height,
+                "name": self.name,
+                "unique_id": self.unique_id,
+            },
+            self.index,
+        )
+
+
+def monitor_key_from_mapping(monitor: dict[str, object], _index: int) -> str:
+    """Stable-enough key for per-display settings, with geometry fallback."""
+    unique_id = str(monitor.get("unique_id") or "").strip()
+    if unique_id:
+        return f"id:{unique_id}"
+    name = str(monitor.get("name") or monitor.get("output") or "").strip()
+    geometry = "x".join(str(int(monitor.get(key, 0))) for key in ("width", "height"))
+    position = ",".join(str(int(monitor.get(key, 0))) for key in ("left", "top"))
+    return f"display:{name or 'unnamed'}:{geometry}@{position}"
 
 
 def _mss_instance():
@@ -122,6 +151,7 @@ def list_monitors() -> list[MonitorDescriptor]:
             height=int(monitor["height"]),
             is_primary=index == primary_index,
             name=str(monitor.get("name") or monitor.get("output") or "").strip(),
+            unique_id=str(monitor.get("unique_id") or "").strip(),
         )
         for index, monitor in enumerate(raw_monitors, start=1)
     ]
@@ -175,6 +205,9 @@ class MSSCapture:
             top=int(mon["top"]),
             width=int(mon["width"]),
             height=int(mon["height"]),
+            index=self.monitor_index,
+            key=monitor_key_from_mapping(dict(mon), self.monitor_index),
+            name=str(mon.get("name") or mon.get("output") or "").strip(),
         )
 
     def screen_size(self) -> tuple[int, int]:
@@ -204,6 +237,19 @@ class DXCamCapture:
         if self._camera is None:
             raise RuntimeError("dxcam.create returned None")
         self._screen_size = self._camera.width, self._camera.height
+        descriptor = next(
+            (monitor for monitor in list_monitors() if monitor.index == monitor_index),
+            None,
+        )
+        self.monitor = MonitorInfo(
+            left=descriptor.left if descriptor is not None else 0,
+            top=descriptor.top if descriptor is not None else 0,
+            width=self._screen_size[0],
+            height=self._screen_size[1],
+            index=monitor_index,
+            key=descriptor.key if descriptor is not None else f"dxcam:{monitor_index}",
+            name=descriptor.name if descriptor is not None else "",
+        )
 
     def screen_size(self) -> tuple[int, int]:
         return self._screen_size

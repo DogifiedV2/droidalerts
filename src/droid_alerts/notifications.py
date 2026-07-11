@@ -8,6 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,6 +20,17 @@ from .config import AppConfig, config_dir
 APP_NAME = "Droid Alerts"
 UA_NAME = "DroidAlerts"
 USER_AGENT = f"{UA_NAME}/{__version__}"
+
+
+@dataclass(frozen=True)
+class DeliveryResult:
+    channel: str
+    success: bool
+    message: str
+
+
+def _delivery(channel: str, success: bool, message: str) -> DeliveryResult:
+    return DeliveryResult(channel=channel, success=success, message=message)
 
 
 def event_text(detection: Detection) -> str:
@@ -110,14 +122,17 @@ def post_discord(webhook_url: str, detection: Detection) -> None:
             print("[DISCORD] Priority alert sent.")
 
 
-def send_discord_alert(webhook_url: str, detection: Detection) -> None:
+def send_discord_alert(webhook_url: str, detection: Detection) -> DeliveryResult:
     try:
         post_discord(webhook_url, detection)
+        return _delivery("Discord", True, "Delivered")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:300]
         print(f"[DISCORD] HTTP {exc.code}: {body}")
+        return _delivery("Discord", False, f"HTTP {exc.code}: {body}")
     except Exception as exc:
         print(f"[DISCORD] Failed to send alert: {exc}")
+        return _delivery("Discord", False, str(exc))
 
 
 def normalize_ntfy_server_url(value: str) -> str:
@@ -242,7 +257,7 @@ def send_ntfy_alert(
     detection: Detection,
     *,
     attachment_path: Path | None,
-) -> None:
+) -> DeliveryResult:
     try:
         post_ntfy_message(
             config,
@@ -253,11 +268,14 @@ def send_ntfy_alert(
             attachment_path=attachment_path,
             success_log="[NTFY] Priority alert sent.",
         )
+        return _delivery("ntfy", True, "Delivered")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:300]
         print(f"[NTFY] HTTP {exc.code}: {body}")
+        return _delivery("ntfy", False, f"HTTP {exc.code}: {body}")
     except Exception as exc:
         print(f"[NTFY] Failed to send alert: {exc}")
+        return _delivery("ntfy", False, str(exc))
 
 
 def save_phone_credentials(config: AppConfig, token: str, user: str) -> Path:
@@ -396,7 +414,7 @@ def send_phone_alert(
     *,
     sound: str,
     attachment_path: Path | None,
-) -> None:
+) -> DeliveryResult:
     try:
         post_phone_message(
             credentials,
@@ -407,11 +425,14 @@ def send_phone_alert(
             attachment_path=attachment_path,
             success_log="[PHONE] Priority alert sent.",
         )
+        return _delivery("Pushover", True, "Delivered")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:300]
         print(f"[PHONE] HTTP {exc.code}: {body}")
+        return _delivery("Pushover", False, f"HTTP {exc.code}: {body}")
     except Exception as exc:
         print(f"[PHONE] Failed to send alert: {exc}")
+        return _delivery("Pushover", False, str(exc))
 
 
 def version_parts(value: str) -> tuple[int, ...]:
