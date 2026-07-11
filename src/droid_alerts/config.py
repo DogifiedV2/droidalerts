@@ -116,6 +116,9 @@ class AppConfig:
     ntfy_include_attachment: bool = False
     notification_setup_prompted: bool = False
     intro_shown: bool = False
+    # Fresh 1.3.0 installs must not see the community prompt. Older configs do
+    # not contain this key, so from_dict treats a missing value as not prompted.
+    discord_community_prompted: bool = True
     phone_alerts_enabled: bool = False
     phone_credentials_file: str = "phone_alerts.json"
     phone_env_token: str = "DROIDWATCHER_PHONE_ALERTS_TOKEN"
@@ -185,6 +188,7 @@ class AppConfig:
             ntfy_include_attachment=bool(data.get("ntfy_include_attachment", False)),
             notification_setup_prompted=bool(data.get("notification_setup_prompted", False)),
             intro_shown=bool(data.get("intro_shown", False)),
+            discord_community_prompted=bool(data.get("discord_community_prompted", False)),
             phone_alerts_enabled=bool(data.get("phone_alerts_enabled", False)),
             phone_credentials_file=str(data.get("phone_credentials_file", "phone_alerts.json")),
             phone_env_token=str(data.get("phone_env_token", "DROIDWATCHER_PHONE_ALERTS_TOKEN")),
@@ -267,6 +271,7 @@ class AppConfig:
             "ntfy_include_attachment": self.ntfy_include_attachment,
             "notification_setup_prompted": self.notification_setup_prompted,
             "intro_shown": self.intro_shown,
+            "discord_community_prompted": self.discord_community_prompted,
             "phone_alerts_enabled": self.phone_alerts_enabled,
             "phone_credentials_file": self.phone_credentials_file,
             "phone_env_token": self.phone_env_token,

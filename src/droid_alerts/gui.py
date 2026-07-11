@@ -79,6 +79,7 @@ ALERT_COMBOS: tuple[tuple[str, str], ...] = (
     ("Beskar", "Mythic"),
 )
 UPDATE_POLL_INTERVAL_MS = 15 * 60 * 1000
+DISCORD_COMMUNITY_URL = "https://discord.gg/ZmFPjS4784"
 
 
 def bootstyle(value: str) -> dict[str, str]:
@@ -193,6 +194,7 @@ class DroidAlertsApp:
         self.refresh_logs()
         self._schedule_log_refresh()
         self.root.after(700, self.run_first_time_intro)
+        self.root.after(1100, self.offer_discord_community)
         self._update_poll_after_id = self.root.after(1500, self._poll_for_updates)
         self.root.after(200, self._update_dashboard_timers)
         self.root.after(500, self._refresh_storage_status)
@@ -790,7 +792,7 @@ class DroidAlertsApp:
         ttk.Button(
             actions,
             text="Discord & Support",
-            command=lambda: webbrowser.open("https://discord.gg/ZmFPjS4784"),
+            command=lambda: webbrowser.open(DISCORD_COMMUNITY_URL),
         ).grid(row=2, column=0, sticky="ew", pady=(6, 0))
 
         self.advanced_container = ttk.Frame(content)
@@ -1654,6 +1656,24 @@ class DroidAlertsApp:
         self.config = config
 
         self.prompt_notification_setup_if_needed()
+
+    def offer_discord_community(self) -> None:
+        """Offer the community link once to installs carrying a pre-1.3 config."""
+        config = load_config()
+        if __version__ != "1.3.0" or config.discord_community_prompted:
+            return
+
+        # Save before opening the modal/browser so either answer is one-time.
+        config.discord_community_prompted = True
+        save_config(config)
+        self.config = config
+        join = messagebox.askyesno(
+            "Join the Droid Alerts Discord?",
+            "Would you like to join the Discord for update alerts, support, and game leaks?",
+            parent=self.root,
+        )
+        if join:
+            webbrowser.open(DISCORD_COMMUNITY_URL)
 
     def prompt_notification_setup_if_needed(self) -> None:
         config = load_config()
