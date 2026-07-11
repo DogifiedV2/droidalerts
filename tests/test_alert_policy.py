@@ -9,6 +9,7 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 from droid_alerts.alerts import AlertPolicy
 from droid_alerts.classifier import Detection
 from droid_alerts.config import AppConfig
+from droid_alerts.gui import ALERT_COMBOS
 
 
 def _detection(droid: str = "Diamond", rarity: str = "Mythic") -> Detection:
@@ -43,6 +44,18 @@ def main() -> int:
     disabled_config = AppConfig(alert_targets=[])
     if AlertPolicy(disabled_config).should_alert(priority, "disabled-row"):
         failures.append("disabled target should not fire")
+
+    rainbow_legendary = _detection("Rainbow", "Legendary")
+    if not rainbow_legendary.should_alert:
+        failures.append("Rainbow Legendary should be an alertable priority combo")
+    default_config = AppConfig()
+    if ("Rainbow", "Legendary") in default_config.targets:
+        failures.append("Rainbow Legendary should be disabled by default")
+    if ALERT_COMBOS[0] != ("Rainbow", "Legendary"):
+        failures.append("Rainbow Legendary should occupy the first toggle slot")
+    enabled_config = AppConfig(alert_targets=[["Rainbow", "Legendary"]])
+    if not AlertPolicy(enabled_config).should_alert(rainbow_legendary, "rainbow-legendary-row"):
+        failures.append("enabled Rainbow Legendary target should fire")
 
     non_priority = _detection("Diamond", "Legendary")
     if non_priority.should_alert:

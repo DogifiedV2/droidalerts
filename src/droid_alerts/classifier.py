@@ -18,6 +18,7 @@ import numpy as np
 DROID_TYPES = ("Diamond", "Rainbow", "Beskar")
 RARITIES = ("Common", "Rare", "Epic", "Legendary", "Mythic")
 PRIORITY_ALERTS = {
+    ("Rainbow", "Legendary"),
     ("Beskar", "Epic"),
     ("Beskar", "Legendary"),
     ("Beskar", "Mythic"),

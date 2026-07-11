@@ -13,6 +13,9 @@ Out of the box it alerts on the five spawns worth dropping everything for:
 - **Beskar Legendary**
 - **Beskar Epic**
 
+**Rainbow Legendary** is also available as the first priority-alert toggle and
+is off by default.
+
 It works on most PCs and starts with a recommended chat region. Everything it
 saves stays inside its own folder. Screenshots remain local unless you
 explicitly enable a phone-notification attachment or **Share alert debug

@@ -72,6 +72,7 @@ from .watcher import run_watch
 
 
 ALERT_COMBOS: tuple[tuple[str, str], ...] = (
+    ("Rainbow", "Legendary"),
     ("Beskar", "Epic"),
     ("Beskar", "Legendary"),
     ("Diamond", "Mythic"),
