@@ -22,7 +22,14 @@ def create_support_bundle(config: AppConfig) -> Path:
     out_path = out_dir / f"droid_alerts_support_{timestamp()}.zip"
 
     config_data = config.to_dict()
-    for key in ("ntfy_topic", "anonymous_stats_url", "anonymous_detection_url", "debug_detection_upload_url"):
+    for key in (
+        "ntfy_topic",
+        "anonymous_stats_url",
+        "anonymous_detection_url",
+        "anonymous_belt_stats_url",
+        "anonymous_belt_counts_url",
+        "debug_detection_upload_url",
+    ):
         if config_data.get(key):
             config_data[key] = "<redacted>"
     system = {

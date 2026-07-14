@@ -85,6 +85,7 @@ from .notifications import (
 )
 from .popup import popup_icon_path, show_popup
 from .region import Calibration, RegionResolver
+from .telemetry import AnonymousBeltTelemetryClient
 from .timers import format_countdown, seconds_until_next
 from .watcher import run_watch
 
@@ -152,6 +153,7 @@ class DroidAlertsApp:
         self.belt_process = None
         self.belt_stop_event = None
         self.belt_status_queue = None
+        self.belt_telemetry: AnonymousBeltTelemetryClient | None = None
         self._belt_poll_after_id: str | None = None
         self._belt_worker_ready = False
         self._belt_stop_reason = ""
@@ -1864,8 +1866,9 @@ class DroidAlertsApp:
             "Privacy Details",
             intro="Detection runs locally from pixels on the selected display.",
             steps=(
-                "Droid Alerts always sends a small anonymous watcher heartbeat and priority-alert count using random install and session IDs.",
-                "That data includes the app version and detected droid/rarity, but never chat text, player or machine names, credentials, or screenshots.",
+                "Droid Alerts sends a small anonymous chat-watcher heartbeat using random install and session IDs. It also shares which priority alert options are selected when those options change.",
+                "Priority chat alerts share the app version and detected droid/rarity. Belt Tracker uses its own heartbeat while running and periodically shares only confirmed droid names and compact counts.",
+                "It never shares raw Belt Tracker OCR, chat text, player or machine names, credentials, or screenshots.",
                 "Screenshots stay on this PC unless a notification attachment or the separate debug-sharing option is explicitly enabled.",
                 "Support bundles redact notification topics and never include webhook or API credentials.",
             ),
@@ -1971,6 +1974,7 @@ class DroidAlertsApp:
         self._belt_error_message = ""
         self._belt_worker_ready = False
         self._belt_visible_tracks = []
+        self.belt_telemetry = AnonymousBeltTelemetryClient(config)
         self.belt_last_scan_var.set("Waiting for first belt scan…")
         process = context.Process(
             target=run_belt_worker_process,
@@ -2038,6 +2042,8 @@ class DroidAlertsApp:
         event_type = str(event.get("type") or "")
         if event_type == "ready":
             self._belt_worker_ready = True
+            if self.belt_telemetry is not None:
+                self.belt_telemetry.start()
             self._belt_error_message = ""
             self._set_belt_header_state("Running")
             self.belt_status_var.set("Tracking blueprint belt")
@@ -2069,6 +2075,10 @@ class DroidAlertsApp:
             record = event.get("record")
             if isinstance(record, dict):
                 self.refresh_logs(update_detail=False)
+                if str(record.get("event") or "") == "entered":
+                    telemetry = self.belt_telemetry
+                    if telemetry is not None:
+                        telemetry.record_sighting(record.get("droid"))
                 if bool(record.get("alerted")):
                     self._send_belt_alert(record)
         elif event_type == "error":
@@ -2222,6 +2232,10 @@ class DroidAlertsApp:
             and not self._shutting_down
         )
         self._belt_restart_after_stop = False
+        telemetry = getattr(self, "belt_telemetry", None)
+        self.belt_telemetry = None
+        if telemetry is not None:
+            telemetry.stop()
         self.belt_process = None
         self.belt_stop_event = None
         status_queue = self.belt_status_queue
@@ -2289,6 +2303,10 @@ class DroidAlertsApp:
         self.belt_status_var.set("Stopping Belt Tracker…")
 
     def _terminate_belt_process(self) -> None:
+        telemetry = getattr(self, "belt_telemetry", None)
+        self.belt_telemetry = None
+        if telemetry is not None:
+            telemetry.stop()
         if self._belt_poll_after_id is not None:
             try:
                 self.root.after_cancel(self._belt_poll_after_id)

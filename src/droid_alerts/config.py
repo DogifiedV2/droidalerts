@@ -128,6 +128,8 @@ class AppConfig:
     update_check_enabled: bool = True
     anonymous_stats_url: str = "https://gonk.tools/api/droid-alerts/heartbeat"
     anonymous_detection_url: str = "https://gonk.tools/api/droid-alerts/detections"
+    anonymous_belt_stats_url: str = "https://gonk.tools/api/droid-alerts/belt-heartbeat"
+    anonymous_belt_counts_url: str = "https://gonk.tools/api/droid-alerts/belt-counts"
     share_debug_detections: bool = False
     debug_detection_upload_url: str = "https://gonk.tools/api/droid-alerts/debug-detections"
     update_repo: str = "DogifiedV2/droidalerts"
@@ -216,6 +218,18 @@ class AppConfig:
             anonymous_detection_url=str(
                 data.get("anonymous_detection_url", "https://gonk.tools/api/droid-alerts/detections")
             ),
+            anonymous_belt_stats_url=str(
+                data.get(
+                    "anonymous_belt_stats_url",
+                    "https://gonk.tools/api/droid-alerts/belt-heartbeat",
+                )
+            ),
+            anonymous_belt_counts_url=str(
+                data.get(
+                    "anonymous_belt_counts_url",
+                    "https://gonk.tools/api/droid-alerts/belt-counts",
+                )
+            ),
             share_debug_detections=bool(data.get("share_debug_detections", False)),
             debug_detection_upload_url=str(
                 data.get("debug_detection_upload_url", "https://gonk.tools/api/droid-alerts/debug-detections")
@@ -303,6 +317,8 @@ class AppConfig:
             "update_check_enabled": self.update_check_enabled,
             "anonymous_stats_url": self.anonymous_stats_url,
             "anonymous_detection_url": self.anonymous_detection_url,
+            "anonymous_belt_stats_url": self.anonymous_belt_stats_url,
+            "anonymous_belt_counts_url": self.anonymous_belt_counts_url,
             "share_debug_detections": self.share_debug_detections,
             "debug_detection_upload_url": self.debug_detection_upload_url,
             "update_repo": self.update_repo,

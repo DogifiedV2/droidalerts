@@ -412,6 +412,26 @@ class IndependentLifecycleTests(unittest.TestCase):
 
 
 class BeltAlertDeliveryTests(unittest.TestCase):
+    def test_every_confirmed_belt_entry_is_counted_even_when_not_an_alert_target(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.belt_telemetry = Mock()
+        app.refresh_logs = Mock()
+
+        DroidAlertsApp._handle_belt_status(
+            app,
+            {
+                "type": "track_event",
+                "record": {
+                    "event": "entered",
+                    "droid": "GONK",
+                    "alerted": False,
+                },
+            },
+        )
+
+        app.belt_telemetry.record_sighting.assert_called_once_with("GONK")
+        app.refresh_logs.assert_called_once_with(update_detail=False)
+
     def test_belt_faq_explains_region_selection_and_overlay_check(self):
         app = DroidAlertsApp.__new__(DroidAlertsApp)
         app._setup_dialog = Mock()
