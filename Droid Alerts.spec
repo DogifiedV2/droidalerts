@@ -12,6 +12,10 @@ datas = [
     (str(ROOT / "templates"), "templates"),
 ]
 datas += collect_data_files("ttkbootstrap")
+datas += collect_data_files(
+    "rapidocr",
+    includes=["config.yaml", "default_models.yaml", "models/*.onnx"],
+)
 
 a = Analysis(
     ["main.py"],
@@ -21,12 +25,21 @@ a = Analysis(
     hiddenimports=[
         "droid_alerts.timers",
         "PIL._tkinter_finder",
+        "rapidocr.inference_engine.onnxruntime",
         "ttkbootstrap",
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        "onnxruntime.quantization",
+        "onnxruntime.tools",
+        "onnxruntime.transformers",
+        "rapidocr.inference_engine.mnn",
+        "rapidocr.inference_engine.openvino",
+        "rapidocr.inference_engine.paddle",
+        "rapidocr.inference_engine.pytorch",
+        "rapidocr.inference_engine.tensorrt",
         "tests",
         "training_data",
     ],

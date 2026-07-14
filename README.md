@@ -37,6 +37,24 @@ Chat Box** are under Diagnostics; moving the box never resizes it. Alert
 appearance plus less common detection, debug, notification-detail, and storage
 controls stay behind the **Advanced settings** toggle in Settings.
 
+## Belt Tracker
+
+The **Belt Tracker** tab watches the moving blueprint belt and logs selected
+droid names. It can run at the same time as chat alerts.
+
+1. Choose the Fortnite display once on the Dashboard.
+2. Open Belt Tracker and click **Select Belt Region**.
+3. Drag around the whole belt card path, including complete cards and their
+   nameplates but excluding HUD text and menus, then press Enter.
+4. Optionally choose **Target Droids**. No selection means all 62 droids.
+5. Click **Start Tracking**.
+
+The detector reads exact card names and checks the surrounding card artwork and
+nameplate. A card is reported as soon as four of its latest five reads agree;
+it does not need to cross a boundary. Rarity is not detected. Saved Belt Tracker
+regions are separate for each display, and its event log is stored at
+`data/logs/belt_events.jsonl`.
+
 Optional behaviour includes automatic watcher startup and pausing while
 Fortnite is closed. Diagnostics can create a redacted support ZIP, show or
 reposition the chat region, report local disk usage, and clear debug captures

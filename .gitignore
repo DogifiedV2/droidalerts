@@ -15,6 +15,7 @@ tests/fixtures/
 tests/results/
 assets/sounds/
 config/calibration.json
+config/belt_regions.json
 config/discord_webhook.txt
 config/ntfy_token.txt
 config/phone_alerts.json

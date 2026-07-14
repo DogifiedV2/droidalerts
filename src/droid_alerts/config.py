@@ -134,6 +134,9 @@ class AppConfig:
     advanced_mode: bool = False
     extra_checks: bool = False
     start_watcher_on_launch: bool = False
+    belt_overlay_enabled: bool = True
+    # Empty means every known blueprint name.
+    belt_target_names: list[str] = field(default_factory=list)
     retention_days: int = 30
     max_storage_mb: int = 500
     timer_reminders_enabled: bool = False
@@ -154,6 +157,15 @@ class AppConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AppConfig":
         thresholds = data.get("thresholds") or {}
+        belt_target_names: list[str] = []
+        raw_belt_targets = data.get("belt_target_names")
+        if isinstance(raw_belt_targets, (list, tuple)):
+            for value in raw_belt_targets:
+                if not isinstance(value, str):
+                    continue
+                name = value.strip().upper()
+                if name and name not in belt_target_names:
+                    belt_target_names.append(name)
         config = cls(
             config_version=max(2, int(data.get("config_version", 1))),
             monitor_index=int(data.get("monitor_index", 1)),
@@ -210,6 +222,8 @@ class AppConfig:
             advanced_mode=bool(data.get("advanced_mode", False)),
             extra_checks=bool(data.get("extra_checks", False)),
             start_watcher_on_launch=bool(data.get("start_watcher_on_launch", False)),
+            belt_overlay_enabled=bool(data.get("belt_overlay_enabled", True)),
+            belt_target_names=belt_target_names,
             retention_days=int(data.get("retention_days", 30)),
             max_storage_mb=int(data.get("max_storage_mb", 500)),
             timer_reminders_enabled=bool(data.get("timer_reminders_enabled", False)),
@@ -287,6 +301,8 @@ class AppConfig:
             "advanced_mode": self.advanced_mode,
             "extra_checks": self.extra_checks,
             "start_watcher_on_launch": self.start_watcher_on_launch,
+            "belt_overlay_enabled": self.belt_overlay_enabled,
+            "belt_target_names": self.belt_target_names,
             "retention_days": self.retention_days,
             "max_storage_mb": self.max_storage_mb,
             "timer_reminders_enabled": self.timer_reminders_enabled,
