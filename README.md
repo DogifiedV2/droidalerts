@@ -105,12 +105,12 @@ Discord channel. The **Set Up Discord** button walks you through that too.
 
 ## Anonymous stats telemetry
 
-Droid Alerts sends a small anonymous chat-watcher heartbeat to `gonk.tools`
-while the watcher is running so the site can show how many people are currently
-watching droids. It contains a random anonymous install ID, a per-run session
-ID, the app version, and the selected priority-alert combinations. The selected
-combinations are included on the first heartbeat and only sent again after they
-change.
+Droid Alerts sends a small anonymous app heartbeat to `gonk.tools` while the
+program is open so the site can total usage time. It contains a random anonymous
+install ID, a per-run session ID, and the app version. The chat watcher has a
+separate heartbeat while it is running so the site can show how many people are
+currently watching droids. Its selected priority-alert combinations are included
+on the first heartbeat and only sent again after they change.
 
 When a priority alert fires, it also sends the timestamp plus the detected
 droid/rarity combo so the site can count which rare droids are being found. Belt
@@ -121,6 +121,11 @@ not uploaded. Failed belt-count uploads stay in a small local retry file.
 
 Normal telemetry does **not** send screenshots, player names, notification
 credentials, machine names, chat text, or raw Belt Tracker OCR.
+
+In **Settings**, **Identify This Install** shows the random install ID and links
+to <https://gonk.tools/identify>. Identification is optional and requires a
+Discord login plus a username chosen by the user. It is visible only in the
+developer's protected stats view; public stats remain aggregate-only.
 
 Debug mode also has a separate **Share alert debug screenshots with the
 developer** option.

@@ -85,7 +85,11 @@ from .notifications import (
 )
 from .popup import popup_icon_path, show_popup
 from .region import Calibration, RegionResolver
-from .telemetry import AnonymousBeltTelemetryClient
+from .telemetry import (
+    AnonymousAppTelemetryClient,
+    AnonymousBeltTelemetryClient,
+    load_or_create_anonymous_install_id,
+)
 from .timers import format_countdown, seconds_until_next
 from .watcher import run_watch
 
@@ -101,6 +105,7 @@ ALERT_COMBOS: tuple[tuple[str, str], ...] = (
 )
 UPDATE_POLL_INTERVAL_MS = 15 * 60 * 1000
 DISCORD_COMMUNITY_URL = "https://discord.gg/ZmFPjS4784"
+IDENTIFY_INSTALL_URL = "https://gonk.tools/identify"
 BELT_REGION_INSTRUCTIONS = (
     "Select the area you'll angle the belt in from the bottom of the blueprints to the top "
     "(excluding the price). Recommended to stand at the start of the belt and have 3 or so "
@@ -154,6 +159,7 @@ class DroidAlertsApp:
         self.belt_stop_event = None
         self.belt_status_queue = None
         self.belt_telemetry: AnonymousBeltTelemetryClient | None = None
+        self.app_telemetry = AnonymousAppTelemetryClient(self.config)
         self._belt_poll_after_id: str | None = None
         self._belt_worker_ready = False
         self._belt_stop_reason = ""
@@ -236,6 +242,7 @@ class DroidAlertsApp:
         self._macos_repaint_after_id: str | None = None
 
         self._build_ui()
+        self.app_telemetry.start()
         self.load_settings()
         self._apply_initial_geometry()
         self._wire_auto_save()
@@ -961,12 +968,17 @@ class DroidAlertsApp:
         ttk.Button(actions, text="What is shared?", command=self.show_privacy_details).grid(
             row=0, column=0, sticky="ew", pady=(0, 6)
         )
-        ttk.Button(actions, text="FAQ", command=self.show_faq).grid(row=1, column=0, sticky="ew")
+        ttk.Button(actions, text="Identify This Install", command=self.show_install_identity).grid(
+            row=1, column=0, sticky="ew"
+        )
+        ttk.Button(actions, text="FAQ", command=self.show_faq).grid(
+            row=2, column=0, sticky="ew", pady=(6, 0)
+        )
         ttk.Button(
             actions,
             text="Discord & Support",
             command=lambda: webbrowser.open(DISCORD_COMMUNITY_URL),
-        ).grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        ).grid(row=3, column=0, sticky="ew", pady=(6, 0))
 
         self.advanced_container = ttk.Frame(content)
         self.advanced_container.grid(row=3, column=0, sticky="ew")
@@ -1866,15 +1878,47 @@ class DroidAlertsApp:
             "Privacy Details",
             intro="Detection runs locally from pixels on the selected display.",
             steps=(
-                "Droid Alerts sends a small anonymous chat-watcher heartbeat using random install and session IDs. It also shares which priority alert options are selected when those options change.",
+                "While the app is open, Droid Alerts sends a small anonymous heartbeat using random install and session IDs so combined open time can be measured.",
+                "The chat watcher has its own heartbeat and shares which priority alert options are selected when those options change.",
                 "Priority chat alerts share the app version and detected droid/rarity. Belt Tracker uses its own heartbeat while running and periodically shares only confirmed droid names and compact counts.",
-                "It never shares raw Belt Tracker OCR, chat text, player or machine names, credentials, or screenshots.",
+                "Automatic telemetry never shares raw Belt Tracker OCR, chat text, player or machine names, credentials, or screenshots.",
+                "Your install stays anonymous unless you use Identify This Install to voluntarily link it to your Discord account and a username. That identity is visible only to the developer.",
                 "Screenshots stay on this PC unless a notification attachment or the separate debug-sharing option is explicitly enabled.",
                 "Support bundles redact notification topics and never include webhook or API credentials.",
             ),
             ok_text="Close",
             cancel_text="",
         )
+
+    def show_install_identity(self) -> None:
+        install_id = load_or_create_anonymous_install_id()
+        result = self._setup_dialog(
+            "Identify This Install",
+            intro=(
+                "By default, your information is anonymous and only you know your install ID. "
+                "If you want to make it known to the developer:"
+            ),
+            steps=(
+                "Copy the install ID below.",
+                "Open gonk.tools/identify and log in with Discord.",
+                "Paste the install ID, enter your username, and save it.",
+            ),
+            fields=(("install_id", "Your install ID", install_id, None),),
+            note="This is optional. Your identity is shown only to the developer, not on the public stats page.",
+            link=("Open Identification Page", IDENTIFY_INSTALL_URL),
+            ok_text="Copy Install ID",
+            cancel_text="Close",
+        )
+        if result is None:
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(install_id)
+            self.root.update_idletasks()
+        except tk.TclError:
+            self.detail_var.set("Could not copy the install ID. Select it in the dialog instead.")
+            return
+        self.detail_var.set("Install ID copied. Open gonk.tools/identify to identify this install.")
 
     def show_faq(self) -> None:
         if sys.platform == "win32":
@@ -3957,6 +4001,7 @@ class DroidAlertsApp:
         self._shutting_down = True
         self._belt_restart_after_stop = False
         self.detail_var.set("Update installed, restarting...")
+        self.app_telemetry.stop()
         if self.stop_event is not None:
             self.stop_event.set()
         if self.belt_stop_event is not None:
@@ -3980,6 +4025,7 @@ class DroidAlertsApp:
     def on_close(self) -> None:
         self._shutting_down = True
         self._belt_restart_after_stop = False
+        self.app_telemetry.stop()
         if self._autosave_after_id is not None:
             try:
                 self.root.after_cancel(self._autosave_after_id)

@@ -24,6 +24,7 @@ def create_support_bundle(config: AppConfig) -> Path:
     config_data = config.to_dict()
     for key in (
         "ntfy_topic",
+        "anonymous_app_stats_url",
         "anonymous_stats_url",
         "anonymous_detection_url",
         "anonymous_belt_stats_url",

@@ -11,10 +11,32 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.config import AppConfig
-from droid_alerts.telemetry import AnonymousBeltTelemetryClient, AnonymousTelemetryClient
+from droid_alerts.telemetry import (
+    AnonymousAppTelemetryClient,
+    AnonymousBeltTelemetryClient,
+    AnonymousTelemetryClient,
+)
 
 
 INSTALL_ID = "11111111-1111-4111-8111-111111111111"
+
+
+class AppTelemetryTests(unittest.TestCase):
+    def test_app_heartbeat_uses_the_shared_anonymous_install_id(self):
+        client = AnonymousAppTelemetryClient(
+            AppConfig(anonymous_app_stats_url="https://example.test/app-heartbeat")
+        )
+        client._post_json = Mock(return_value={"heartbeatIntervalSeconds": 90})
+
+        with patch("droid_alerts.telemetry.load_or_create_anonymous_install_id", return_value=INSTALL_ID):
+            client._send_heartbeat()
+
+        endpoint, payload = client._post_json.call_args.args
+        self.assertEqual("https://example.test/app-heartbeat", endpoint)
+        self.assertEqual(INSTALL_ID, payload["installId"])
+        self.assertIn("sessionId", payload)
+        self.assertIn("appVersion", payload)
+        self.assertEqual(90, client._heartbeat_interval_seconds)
 
 
 class ChatTelemetryTests(unittest.TestCase):

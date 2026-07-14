@@ -126,6 +126,7 @@ class AppConfig:
     phone_sound: str = "siren"
     phone_include_attachment: bool = False
     update_check_enabled: bool = True
+    anonymous_app_stats_url: str = "https://gonk.tools/api/droid-alerts/app-heartbeat"
     anonymous_stats_url: str = "https://gonk.tools/api/droid-alerts/heartbeat"
     anonymous_detection_url: str = "https://gonk.tools/api/droid-alerts/detections"
     anonymous_belt_stats_url: str = "https://gonk.tools/api/droid-alerts/belt-heartbeat"
@@ -212,6 +213,12 @@ class AppConfig:
             phone_sound=str(data.get("phone_sound", "siren")),
             phone_include_attachment=bool(data.get("phone_include_attachment", False)),
             update_check_enabled=bool(data.get("update_check_enabled", True)),
+            anonymous_app_stats_url=str(
+                data.get(
+                    "anonymous_app_stats_url",
+                    "https://gonk.tools/api/droid-alerts/app-heartbeat",
+                )
+            ),
             anonymous_stats_url=str(
                 data.get("anonymous_stats_url", "https://gonk.tools/api/droid-alerts/heartbeat")
             ),
@@ -315,6 +322,7 @@ class AppConfig:
             "phone_sound": self.phone_sound,
             "phone_include_attachment": self.phone_include_attachment,
             "update_check_enabled": self.update_check_enabled,
+            "anonymous_app_stats_url": self.anonymous_app_stats_url,
             "anonymous_stats_url": self.anonymous_stats_url,
             "anonymous_detection_url": self.anonymous_detection_url,
             "anonymous_belt_stats_url": self.anonymous_belt_stats_url,

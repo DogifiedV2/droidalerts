@@ -65,6 +65,101 @@ def load_or_create_anonymous_install_id() -> str:
     return value
 
 
+class AnonymousAppTelemetryClient:
+    """Best-effort heartbeat used only to estimate how long the app is open."""
+
+    def __init__(self, config: AppConfig) -> None:
+        self._lock = threading.Lock()
+        self._endpoint_url = config.anonymous_app_stats_url.strip()
+        self._install_id: str | None = None
+        self._session_id = str(uuid.uuid4())
+        self._heartbeat_interval_seconds = DEFAULT_HEARTBEAT_INTERVAL_SECONDS
+        self._stop_event: threading.Event | None = None
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            if not self._endpoint_url or self._thread is not None:
+                return
+            self._stop_event = threading.Event()
+            self._thread = threading.Thread(
+                target=self._run,
+                name="DroidAlertsAnonymousAppTelemetry",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def stop(self) -> None:
+        with self._lock:
+            stop_event = self._stop_event
+            thread = self._thread
+        if stop_event is not None:
+            stop_event.set()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=0.3)
+        with self._lock:
+            if self._thread is thread:
+                self._stop_event = None
+                self._thread = None
+
+    def _run(self) -> None:
+        self._send_heartbeat()
+        while True:
+            with self._lock:
+                stop_event = self._stop_event
+                interval = self._heartbeat_interval_seconds
+            if stop_event is None:
+                return
+            if stop_event.wait(interval):
+                # Capture most of the final partial minute when the app closes.
+                self._send_heartbeat()
+                return
+            self._send_heartbeat()
+
+    def _send_heartbeat(self) -> None:
+        try:
+            with self._lock:
+                endpoint_url = self._endpoint_url
+            if not endpoint_url:
+                return
+            if self._install_id is None:
+                self._install_id = load_or_create_anonymous_install_id()
+            response_payload = self._post_json(
+                endpoint_url,
+                {
+                    "installId": self._install_id,
+                    "sessionId": self._session_id,
+                    "appVersion": __version__,
+                },
+            )
+            self._apply_server_interval(response_payload.get("heartbeatIntervalSeconds"))
+        except (OSError, ValueError, urllib.error.URLError, TimeoutError):
+            return
+
+    def _post_json(self, endpoint_url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        request = urllib.request.Request(
+            endpoint_url,
+            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": USER_AGENT,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8") or "{}")
+
+    def _apply_server_interval(self, value: object) -> None:
+        try:
+            interval = float(value)
+        except (TypeError, ValueError):
+            return
+        interval = min(max(interval, MIN_HEARTBEAT_INTERVAL_SECONDS), MAX_HEARTBEAT_INTERVAL_SECONDS)
+        with self._lock:
+            self._heartbeat_interval_seconds = interval
+
+
 class AnonymousTelemetryClient:
     """Best-effort anonymous active-watcher and alert-count client.
 
