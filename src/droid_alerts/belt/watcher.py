@@ -29,7 +29,11 @@ def run_belt_watcher(
     status_callback: StatusCallback | None = None,
     ocr_engine=None,
 ) -> None:
-    """Watch one belt region without interfering with the chat-alert watcher."""
+    """Watch one belt region without interfering with the chat-alert watcher.
+
+    ``target_names`` controls alerts only. Recognition and the belt overlay
+    continue to include every exact droid name when no alerts are selected.
+    """
 
     def emit(kind: str, **values: object) -> None:
         if status_callback is not None:
@@ -48,11 +52,11 @@ def run_belt_watcher(
         confirmation_hits=CONFIRMATION_HITS,
         timeout_seconds=TRACK_TIMEOUT_SECONDS,
     )
+    alert_targets = {str(name).strip().upper() for name in target_names if str(name).strip()}
     try:
         engine = ocr_engine if ocr_engine is not None else RapidOcrEngine()
         recognizer = CardRecognizer(
             engine,
-            target_names=target_names,
             config=CardRecognitionConfig(minimum_ocr_confidence=MINIMUM_OCR_CONFIDENCE),
         )
     except Exception as exc:
@@ -100,7 +104,8 @@ def run_belt_watcher(
                 update = tracker.predict(now, region.width)
 
             for event in update.events:
-                record = log_track_event(event)
+                alerted = event.kind == "entered" and event.track.name.upper() in alert_targets
+                record = log_track_event(event, alerted=alerted)
                 print(
                     f"[BELT] Track {event.track.id} {event.kind}: {event.track.name} "
                     f"({event.track.confidence:.0%})",

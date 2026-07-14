@@ -39,21 +39,23 @@ controls stay behind the **Advanced settings** toggle in Settings.
 
 ## Belt Tracker
 
-The **Belt Tracker** tab watches the moving blueprint belt and logs selected
-droid names. It can run at the same time as chat alerts.
+The **Belt Tracker** tab watches the moving blueprint belt and can alert for
+selected droid names. It can run at the same time as chat alerts.
 
 1. Choose the Fortnite display once on the Dashboard.
 2. Open Belt Tracker and click **Select Belt Region**.
-3. Drag around the whole belt card path, including complete cards and their
-   nameplates but excluding HUD text and menus, then press Enter.
-4. Optionally choose **Target Droids**. No selection means all 62 droids.
+3. Select the area you'll angle the belt in from the bottom of the blueprints
+   to the top, excluding the price, then press Enter. Standing at the start of
+   the belt with around three blueprints in the box is recommended.
+4. Under **Priority Alerts**, click **Modify** and select the droids you want
+   alerts for. No selection means no Belt Tracker alerts.
 5. Click **Start Tracking**.
 
 The detector reads exact card names and checks the surrounding card artwork and
 nameplate. A card is reported as soon as four of its latest five reads agree;
-it does not need to cross a boundary. Rarity is not detected. Saved Belt Tracker
-regions are separate for each display, and its event log is stored at
-`data/logs/belt_events.jsonl`.
+it does not need to cross a boundary. Rarity is not detected. Selected droids
+use the same Alert Channels as Dashboard alerts. Saved Belt Tracker regions are
+separate for each display, and its events appear with other alerts in History.
 
 Optional behaviour includes automatic watcher startup and pausing while
 Fortnite is closed. Diagnostics can create a redacted support ZIP, show or

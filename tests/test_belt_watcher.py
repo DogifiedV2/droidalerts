@@ -4,6 +4,7 @@ import sys
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import cv2
@@ -40,6 +41,18 @@ class StaticOcr:
     def read(self, frame):
         self.frame_shapes.append(frame.shape)
         return list(self.observations)
+
+
+class EnteringTracker:
+    def update(self, _observations, _now, _frame_width):
+        track = SimpleNamespace(id=1, name="R2", confidence=0.93)
+        return SimpleNamespace(
+            events=[SimpleNamespace(kind="entered", track=track)],
+            tracks=[],
+        )
+
+    def predict(self, _now, _frame_width):
+        return SimpleNamespace(events=[], tracks=[])
 
 
 def card_frame():
@@ -134,6 +147,31 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual("error", events[0]["type"])
         self.assertIn("Screen capture could not start", events[0]["message"])
         self.assertEqual("stopped", events[-1]["type"])
+
+    def test_selected_names_control_alerts_without_filtering_recognition(self):
+        frame, _ = card_frame()
+
+        for targets, expected_alerted in (((), False), (("R2",), True)):
+            stop_event = threading.Event()
+            capture = OneFrameCapture(frame, stop_event)
+            ocr = StaticOcr([])
+            with (
+                patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
+                patch("droid_alerts.belt.watcher.BeltTracker", return_value=EnteringTracker()),
+                patch(
+                    "droid_alerts.belt.watcher.log_track_event",
+                    return_value={"droid": "R2", "alerted": expected_alerted},
+                ) as log_event,
+            ):
+                run_belt_watcher(
+                    1,
+                    PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                    target_names=targets,
+                    stop_event=stop_event,
+                    ocr_engine=ocr,
+                )
+
+            self.assertEqual(expected_alerted, log_event.call_args.kwargs["alerted"])
 
 
 if __name__ == "__main__":

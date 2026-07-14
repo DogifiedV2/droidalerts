@@ -246,7 +246,11 @@ def show_popup(
             root=window, family="Segoe UI Black", size=max(20, int(32 * ui_scale))
         )
 
-        caption = "PRIORITY SPAWN" if detection.is_priority else "DROID SPAWN"
+        caption = (
+            "BELT ALERT"
+            if detection.rarity == "Belt"
+            else ("PRIORITY SPAWN" if detection.is_priority else "DROID SPAWN")
+        )
         canvas.create_text(
             center_x, 32, text=" ".join(caption), fill=accent, font=caption_font, anchor="center"
         )

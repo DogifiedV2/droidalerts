@@ -25,7 +25,6 @@ except Exception:
 
 from . import __version__
 from .alerts import AlertPolicy
-from .belt.events import event_log_path as belt_event_log_path
 from .belt.names import DROID_NAMES as BELT_DROID_NAMES
 from .belt.overlay import BeltOverlay
 from .belt.region import RelativeRegion as BeltRelativeRegion
@@ -44,7 +43,7 @@ from .capture import (
 from .classifier import Detection
 from .config import AppConfig, config_dir, load_config, project_root, save_config, user_sounds_dir
 from .diagnostics import create_support_bundle
-from .logging_io import alert_samples_dir, debug_dir, logs_dir
+from .logging_io import alert_samples_dir, append_event, debug_dir, logs_dir, timestamp
 from .maintenance import (
     cleanup_runtime_data,
     clear_debug_captures,
@@ -90,6 +89,11 @@ ALERT_COMBOS: tuple[tuple[str, str], ...] = (
 )
 UPDATE_POLL_INTERVAL_MS = 15 * 60 * 1000
 DISCORD_COMMUNITY_URL = "https://discord.gg/ZmFPjS4784"
+BELT_REGION_INSTRUCTIONS = (
+    "Select the area you'll angle the belt in from the bottom of the blueprints to the top "
+    "(excluding the price). Recommended to stand at the start of the belt and have 3 or so "
+    "blueprints in the box."
+)
 
 
 def bootstyle(value: str) -> dict[str, str]:
@@ -181,13 +185,12 @@ class DroidAlertsApp:
         self.last_alert_var = StringVar(value="No priority alerts this session")
         self.session_stats_var = StringVar(value="0 detections · 0 alerts")
         self.belt_status_var = StringVar(value="Ready to track")
-        self.belt_detail_var = StringVar(
-            value="Select the whole blueprint belt region, then start tracking."
-        )
+        self.belt_detail_var = StringVar(value=BELT_REGION_INSTRUCTIONS)
         self.belt_region_var = StringVar(value="No belt region selected for this display")
-        self.belt_targets_var = StringVar(value=f"Targets: All {len(BELT_DROID_NAMES)} droids")
+        self.belt_targets_var = StringVar(value="None selected")
         self.belt_tracks_var = StringVar(value="0 active tracks")
         self.belt_last_scan_var = StringVar(value="No belt scans yet")
+        self.belt_priority_tree = None
         self.storage_status_var = StringVar(value="Calculating storage…")
         self.channel_status_vars = {
             "Popup": StringVar(value="Ready"),
@@ -630,17 +633,23 @@ class DroidAlertsApp:
 
     def _build_belt_tab(self) -> None:
         page = self.belt_tab
-        page.columnconfigure(0, weight=1)
-        page.rowconfigure(2, weight=1)
+        page.columnconfigure(0, weight=3)
+        page.columnconfigure(1, weight=2)
+        page.rowconfigure(1, weight=1)
 
         tracking_outer, tracking = self._labeled_section(page, "TRACKING")
-        tracking_outer.grid(row=0, column=0, sticky="ew", pady=(0, 24))
+        tracking_outer.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 24))
         tracking.columnconfigure(0, weight=1)
         ttk.Label(
             tracking,
             textvariable=self.belt_status_var,
             font=self._font(18, "bold"),
         ).grid(row=0, column=0, sticky="w")
+        ttk.Button(
+            tracking,
+            text="FAQ",
+            command=self.show_belt_faq,
+        ).grid(row=0, column=1, sticky="e")
         belt_detail = ttk.Label(
             tracking,
             textvariable=self.belt_detail_var,
@@ -648,12 +657,12 @@ class DroidAlertsApp:
             justify="left",
             **muted_style(),
         )
-        belt_detail.grid(row=1, column=0, sticky="w", pady=(3, 2))
+        belt_detail.grid(row=1, column=0, columnspan=2, sticky="w", pady=(3, 2))
         self._autowrap(belt_detail, tracking)
 
         controls = ttk.Frame(tracking)
-        controls.grid(row=2, column=0, sticky="ew", pady=(16, 0))
-        controls.columnconfigure(3, weight=1)
+        controls.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(16, 0))
+        controls.columnconfigure(2, weight=1)
         self.belt_watch_button = ttk.Button(
             controls,
             text="Start Tracking",
@@ -669,81 +678,69 @@ class DroidAlertsApp:
             **bootstyle("info-outline"),
         )
         self.belt_region_button.grid(row=0, column=1, padx=(10, 0))
+
+        priority_panel = ttk.Frame(page)
+        priority_panel.grid(row=1, column=0, sticky="nsew", padx=(0, 32))
+        priority_panel.columnconfigure(0, weight=1)
+        priority_panel.rowconfigure(0, weight=1)
+        alerts_outer, alerts = self._labeled_section(priority_panel, "PRIORITY ALERTS")
+        alerts_outer.grid(row=0, column=0, sticky="nsew")
+        alerts.columnconfigure(0, weight=1)
+        alerts.rowconfigure(1, weight=1)
+        heading = ttk.Frame(alerts)
+        heading.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        heading.columnconfigure(0, weight=1)
+        ttk.Label(heading, textvariable=self.belt_targets_var, **muted_style()).grid(
+            row=0, column=0, sticky="w"
+        )
         self.belt_targets_button = ttk.Button(
-            controls,
-            text="Target Droids",
+            heading,
+            text="Modify",
             command=self.choose_belt_targets,
             **bootstyle("info-outline"),
         )
-        self.belt_targets_button.grid(row=0, column=2, padx=(10, 0))
+        self.belt_targets_button.grid(row=0, column=1, sticky="e")
+        self.belt_priority_tree = ttk.Treeview(alerts, show="tree", height=10)
+        self.belt_priority_tree.column("#0", anchor="w", stretch=True)
+        priority_scroll = ttk.Scrollbar(
+            alerts,
+            orient="vertical",
+            command=self.belt_priority_tree.yview,
+        )
+        self.belt_priority_tree.configure(yscrollcommand=priority_scroll.set)
+        self.belt_priority_tree.grid(row=1, column=0, sticky="nsew")
+        priority_scroll.grid(row=1, column=1, sticky="ns")
+
+        view_panel = ttk.Frame(page)
+        view_panel.grid(row=1, column=1, sticky="nsew")
+        view_panel.columnconfigure(0, weight=1)
+        view_outer, view = self._labeled_section(view_panel, "BELT AREA")
+        view_outer.grid(row=0, column=0, sticky="new")
+        view.columnconfigure(0, weight=1)
+        ttk.Label(view, textvariable=self.belt_region_var, font=self._font(10, "bold")).grid(
+            row=0, column=0, sticky="w"
+        )
         self.setting_vars["belt_overlay_enabled"] = BooleanVar(value=True)
         ttk.Checkbutton(
-            controls,
+            view,
             text="Show belt overlay",
             variable=self.setting_vars["belt_overlay_enabled"],
             command=self._belt_overlay_changed,
             **bootstyle("round-toggle"),
-        ).grid(row=0, column=4, sticky="e", padx=(18, 0))
-
-        setup_outer, setup = self._labeled_section(page, "CAPTURE")
-        setup_outer.grid(row=1, column=0, sticky="ew", pady=(0, 24))
-        setup.columnconfigure(1, weight=1)
-        ttk.Label(setup, text="Game display", font=self._font(10, "bold")).grid(
-            row=0, column=0, sticky="w", padx=(0, 14)
-        )
-        ttk.Label(setup, textvariable=self.monitor_display_var).grid(row=0, column=1, sticky="w")
+        ).grid(row=1, column=0, sticky="w", pady=(12, 14))
         ttk.Label(
-            setup,
-            text="Change the display from Dashboard.",
-            **muted_style(),
-        ).grid(row=0, column=2, sticky="e")
-        ttk.Label(setup, textvariable=self.belt_region_var, **muted_style()).grid(
-            row=1, column=0, columnspan=3, sticky="w", pady=(9, 0)
-        )
-        ttk.Label(setup, textvariable=self.belt_targets_var, **muted_style()).grid(
-            row=2, column=0, columnspan=3, sticky="w", pady=(4, 0)
-        )
-        ttk.Label(
-            setup,
-            text="Include complete cards and nameplates. Exclude HUD text and menus.",
-            **muted_style(),
-        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
-
-        log_outer, log = self._labeled_section(page, "LIVE LOG")
-        log_outer.grid(row=2, column=0, sticky="nsew")
-        log_outer.rowconfigure(1, weight=1)
-        log.columnconfigure(0, weight=1)
-        log.rowconfigure(1, weight=1)
-        summary = ttk.Frame(log)
-        summary.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        summary.columnconfigure(1, weight=1)
-        ttk.Label(
-            summary,
+            view,
             textvariable=self.belt_tracks_var,
             font=self._font(10, "bold"),
             **bootstyle("info"),
-        ).grid(row=0, column=0, sticky="w")
-        ttk.Label(summary, textvariable=self.belt_last_scan_var, **muted_style()).grid(
-            row=0, column=1, sticky="e"
-        )
-
-        columns = ("time", "event", "droid", "confidence")
-        self.belt_log_tree = ttk.Treeview(log, columns=columns, show="headings", height=11)
-        for key, label, width, anchor in (
-            ("time", "Time", 95, "w"),
-            ("event", "Event", 95, "w"),
-            ("droid", "Droid", 240, "w"),
-            ("confidence", "Confidence", 110, "e"),
-        ):
-            self.belt_log_tree.heading(key, text=label)
-            self.belt_log_tree.column(key, width=width, minwidth=70, anchor=anchor)
-        belt_scroll = ttk.Scrollbar(log, orient="vertical", command=self.belt_log_tree.yview)
-        self.belt_log_tree.configure(yscrollcommand=belt_scroll.set)
-        self.belt_log_tree.grid(row=1, column=0, sticky="nsew")
-        belt_scroll.grid(row=1, column=1, sticky="ns")
-        ttk.Label(log, text=f"Events: {belt_event_log_path()}", **muted_style()).grid(
-            row=2, column=0, sticky="w", pady=(8, 0)
-        )
+        ).grid(row=2, column=0, sticky="w")
+        ttk.Label(
+            view,
+            textvariable=self.belt_last_scan_var,
+            wraplength=360,
+            justify="left",
+            **muted_style(),
+        ).grid(row=3, column=0, sticky="w", pady=(4, 0))
 
     def _build_logs_tab(self) -> None:
         page = self.logs_tab
@@ -758,7 +755,14 @@ class DroidAlertsApp:
         filter_box = ttk.Combobox(
             filters,
             textvariable=self.history_filter_var,
-            values=("All", "Priority alerts", "Detections", "Delivery failures", "Debug"),
+            values=(
+                "All",
+                "Priority alerts",
+                "Belt Tracker",
+                "Detections",
+                "Delivery failures",
+                "Debug",
+            ),
             state="readonly",
             width=18,
         )
@@ -1487,11 +1491,17 @@ class DroidAlertsApp:
         )
 
     def _refresh_belt_target_text(self) -> None:
-        count = len(self.config.belt_target_names)
-        if count == 0 or count == len(BELT_DROID_NAMES):
-            self.belt_targets_var.set(f"Targets: All {len(BELT_DROID_NAMES)} droids")
-        else:
-            self.belt_targets_var.set(f"Targets: {count} selected")
+        selected = set(self.config.belt_target_names)
+        names = [name for name in BELT_DROID_NAMES if name in selected]
+        self.belt_targets_var.set(
+            f"{len(names)} selected" if names else "None selected · no alerts"
+        )
+        if self.belt_priority_tree is None:
+            return
+        for item in self.belt_priority_tree.get_children():
+            self.belt_priority_tree.delete(item)
+        for name in names:
+            self.belt_priority_tree.insert("", "end", text=name)
 
     def select_belt_region(self) -> None:
         if self.is_belt_tracking():
@@ -1532,17 +1542,17 @@ class DroidAlertsApp:
             return
 
         dialog = tk.Toplevel(self.root)
-        dialog.title("Target Droids")
+        dialog.title("Priority Alerts")
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.minsize(420, 520)
 
         body = ttk.Frame(dialog, padding=20)
         body.pack(fill="both", expand=True)
-        ttk.Label(body, text="Target Droids", font=self._font(14, "bold")).pack(anchor="w")
+        ttk.Label(body, text="Priority Alerts", font=self._font(14, "bold")).pack(anchor="w")
         ttk.Label(
             body,
-            text="Select the blueprint names to report. No selection means all droids.",
+            text="Select the droids you want Belt Tracker to alert you for. None means no alerts.",
             wraplength=390,
             justify="left",
             **muted_style(),
@@ -1571,7 +1581,7 @@ class DroidAlertsApp:
         for name in BELT_DROID_NAMES:
             picker.insert(tk.END, name)
 
-        selected_names = set(self.config.belt_target_names or BELT_DROID_NAMES)
+        selected_names = set(self.config.belt_target_names)
         for index, name in enumerate(BELT_DROID_NAMES):
             if name in selected_names:
                 picker.selection_set(index)
@@ -1580,8 +1590,7 @@ class DroidAlertsApp:
 
         def refresh_count(_event=None) -> None:
             count = len(picker.curselection())
-            suffix = " · no selection saves as all" if count == 0 else ""
-            count_var.set(f"{count} selected{suffix}")
+            count_var.set(f"{count} selected" if count else "None selected · no alerts")
 
         def select_all(_event=None) -> str:
             picker.selection_set(0, tk.END)
@@ -1595,7 +1604,7 @@ class DroidAlertsApp:
         def save_targets(_event=None) -> str:
             chosen = [BELT_DROID_NAMES[index] for index in picker.curselection()]
             config = load_config()
-            config.belt_target_names = [] if len(chosen) in {0, len(BELT_DROID_NAMES)} else chosen
+            config.belt_target_names = chosen
             save_config(config)
             self.config = config
             self._refresh_belt_target_text()
@@ -1800,6 +1809,19 @@ class DroidAlertsApp:
             cancel_text="",
         )
 
+    def show_belt_faq(self) -> None:
+        self._setup_dialog(
+            "Belt Tracker Guide",
+            steps=(
+                "Click Select Belt Region, then click and drag around the belt area.",
+                "Press Enter to save the selected region.",
+                "Enable Show belt overlay and check in-game that the selected area is tall "
+                "enough to cover the blueprints from bottom to top, excluding the prices.",
+            ),
+            ok_text="Close",
+            cancel_text="",
+        )
+
     def is_watching(self) -> bool:
         return self.watch_thread is not None and self.watch_thread.is_alive()
 
@@ -1834,9 +1856,7 @@ class DroidAlertsApp:
         self._refresh_belt_region_text()
         if self.belt_region is None:
             self.belt_status_var.set("Select the belt region first")
-            self.belt_detail_var.set(
-                "Select the complete blueprint belt path on this Dashboard display."
-            )
+            self.belt_detail_var.set(BELT_REGION_INSTRUCTIONS)
             return
 
         config = load_config()
@@ -1924,7 +1944,9 @@ class DroidAlertsApp:
         elif event_type == "track_event":
             record = event.get("record")
             if isinstance(record, dict):
-                self._append_belt_log_record(record)
+                self.refresh_logs(update_detail=False)
+                if bool(record.get("alerted")):
+                    self._send_belt_alert(record)
         elif event_type == "error":
             message = str(event.get("message") or "Unknown Belt Tracker error")
             self._belt_error_message = message
@@ -1932,23 +1954,121 @@ class DroidAlertsApp:
             self.belt_status_var.set("Belt Tracker warning")
             self.belt_detail_var.set(message)
 
-    def _append_belt_log_record(self, record: dict[str, object]) -> None:
-        timestamp_value = str(record.get("timestamp") or "")
-        timestamp = (
-            timestamp_value.split("T", 1)[1][:8]
-            if "T" in timestamp_value
-            else self._display_timestamp(timestamp_value)
-        )
-        event = str(record.get("event") or "").upper()
-        droid = str(record.get("droid") or "")
+    def _send_belt_alert(self, record: dict[str, object]) -> None:
+        droid = str(record.get("droid") or "").strip()
+        if not droid:
+            return
+        config = load_config()
+        if droid not in config.belt_target_names:
+            return
         try:
-            confidence = f"{float(record.get('confidence') or 0.0):.0%}"
+            confidence = min(1.0, max(0.0, float(record.get("confidence") or 0.0)))
         except (TypeError, ValueError):
-            confidence = ""
-        self.belt_log_tree.insert("", 0, values=(timestamp, event, droid, confidence))
-        children = self.belt_log_tree.get_children()
-        for item in children[200:]:
-            self.belt_log_tree.delete(item)
+            confidence = 0.0
+        detection = Detection(
+            droid=droid,
+            rarity="Belt",
+            row_box=(0, 0, 0, 0),
+            droid_score=confidence,
+            rarity_score=1.0,
+            rarity_margin=1.0,
+            score=confidence,
+            source="belt-tracker",
+            shape_score=1.0,
+        )
+
+        if config.sound_enabled:
+            AlertPolicy(config).notify(detection)
+        if config.popup_enabled:
+            show_popup(
+                detection,
+                config.popup_seconds,
+                icon_path=popup_icon_path(config),
+                parent=self.root,
+                monitor=self._current_monitor_info(),
+                position=config.popup_position,
+                scale=config.popup_scale,
+                opacity=config.popup_opacity,
+            )
+
+        deliveries: list[tuple[str, object, tuple[object, ...], dict[str, object]]] = []
+        if config.discord_enabled:
+            try:
+                webhook_url, _source = load_discord_webhook(config)
+            except Exception as exc:
+                webhook_url = None
+                self.channel_status_vars["Discord"].set(f"Failed · {str(exc)[:70]}")
+            if webhook_url:
+                deliveries.append(("Discord", send_discord_alert, (webhook_url, detection), {}))
+        if config.ntfy_enabled and ntfy_configured(config):
+            deliveries.append(
+                ("ntfy", send_ntfy_alert, (config, detection), {"attachment_path": None})
+            )
+        if config.phone_alerts_enabled:
+            try:
+                credentials, _source = load_phone_alert_credentials(config)
+            except Exception as exc:
+                credentials = None
+                self.channel_status_vars["Pushover"].set(f"Failed · {str(exc)[:70]}")
+            if credentials:
+                deliveries.append(
+                    (
+                        "Pushover",
+                        send_phone_alert,
+                        (credentials, detection),
+                        {"sound": config.phone_sound, "attachment_path": None},
+                    )
+                )
+
+        for label, target, args, kwargs in deliveries:
+            self.channel_status_vars[label].set("Sending…")
+            threading.Thread(
+                target=self._deliver_belt_alert,
+                args=(label, target, args, kwargs, detection),
+                name=f"DroidAlertsBelt{label}",
+                daemon=True,
+            ).start()
+
+    def _deliver_belt_alert(
+        self,
+        label: str,
+        target,
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+        detection: Detection,
+    ) -> None:
+        try:
+            result = target(*args, **kwargs)
+            success = bool(getattr(result, "success", False))
+            detail = str(getattr(result, "message", "") or "")
+        except Exception as exc:
+            success = False
+            detail = str(exc)
+        delivery_event: dict[str, object] = {
+            "ts": timestamp(),
+            "event_type": "delivery",
+            "source": "belt_tracker",
+            "channel": label,
+            "success": success,
+            "detail": detail,
+            "droid": detection.droid,
+            "rarity": "",
+            "alerted": True,
+            "is_priority": True,
+            "score": detection.score,
+        }
+        append_event(delivery_event)
+        self._post_to_ui(
+            lambda label=label, event=delivery_event: self._belt_delivery_finished(label, event)
+        )
+
+    def _belt_delivery_finished(self, label: str, event: dict[str, object]) -> None:
+        success = bool(event.get("success"))
+        detail = str(event.get("detail") or "")
+        self.channel_status_vars[label].set(
+            "Delivered just now" if success else f"Failed · {detail[:70]}"
+        )
+        self.refresh_logs(update_detail=False)
 
     def _set_belt_controls(self, *, running: bool) -> None:
         if running:
@@ -2012,7 +2132,7 @@ class DroidAlertsApp:
             self.belt_detail_var.set(
                 "Ready to track the selected blueprint belt region."
                 if self.belt_region is not None
-                else "Select the whole blueprint belt region, then start tracking."
+                else BELT_REGION_INSTRUCTIONS
             )
         self.detail_var.set("Belt Tracker stopped")
 
@@ -3001,10 +3121,21 @@ class DroidAlertsApp:
             if selected_filter == "All" and is_debug_row:
                 continue
             if selected_filter == "Priority alerts" and not (
-                event_type == "alert" or (not event_type and bool(row.get("alerted")))
+                event_type == "alert"
+                or (event_type == "belt_entered" and bool(row.get("alerted")))
+                or (not event_type and bool(row.get("alerted")))
             ):
                 continue
-            if selected_filter == "Detections" and event_type not in {"alert", "detected", "seen"}:
+            if selected_filter == "Belt Tracker" and not (
+                str(row.get("source") or "") == "belt_tracker" or event_type.startswith("belt_")
+            ):
+                continue
+            if selected_filter == "Detections" and event_type not in {
+                "alert",
+                "detected",
+                "seen",
+                "belt_entered",
+            }:
                 continue
             if selected_filter == "Delivery failures" and not (
                 event_type == "delivery" and not bool(row.get("success"))
@@ -3284,8 +3415,6 @@ class DroidAlertsApp:
         result = clear_history()
         self._log_file_signature = None
         self.refresh_logs(update_detail=False)
-        for item in self.belt_log_tree.get_children():
-            self.belt_log_tree.delete(item)
         self.detail_var.set(f"Deleted {result.deleted_files} history file(s), freeing {format_bytes(result.freed_bytes)}")
         self._refresh_storage_status(cleanup=False)
 

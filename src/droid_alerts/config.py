@@ -135,7 +135,7 @@ class AppConfig:
     extra_checks: bool = False
     start_watcher_on_launch: bool = False
     belt_overlay_enabled: bool = True
-    # Empty means every known blueprint name.
+    # Empty means Belt Tracker does not send any priority alerts.
     belt_target_names: list[str] = field(default_factory=list)
     retention_days: int = 30
     max_storage_mb: int = 500
