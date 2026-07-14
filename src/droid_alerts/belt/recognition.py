@@ -171,6 +171,14 @@ class CardRecognizer:
         if not np.isfinite(scale) or scale <= 0:
             scale = 1.0
 
+        max_width_value = getattr(self.ocr_engine, "card_max_input_width", None)
+        try:
+            max_width = int(max_width_value) if max_width_value is not None else 0
+        except (TypeError, ValueError):
+            max_width = 0
+        if max_width > 0 and source.shape[1] * scale > max_width:
+            scale = max_width / source.shape[1]
+
         ocr_input = source
         if scale != 1.0:
             ocr_input = cv2.resize(
@@ -178,7 +186,7 @@ class CardRecognizer:
                 None,
                 fx=scale,
                 fy=scale,
-                interpolation=cv2.INTER_CUBIC,
+                interpolation=cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA,
             )
         observations: list[TextObservation] = []
         for item in self.ocr_engine.read(ocr_input):

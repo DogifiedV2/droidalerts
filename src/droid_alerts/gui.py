@@ -1990,9 +1990,11 @@ class DroidAlertsApp:
             self._set_belt_header_state("Running")
             accepted = int(event.get("accepted_count") or 0)
             candidates = int(event.get("candidate_count") or 0)
+            ocr_fps = float(event.get("ocr_fps") or 0.0)
             self.belt_status_var.set("Tracking blueprint belt")
             self.belt_last_scan_var.set(
                 f"Latest scan: {accepted} accepted · {candidates} exact candidates"
+                f" · {ocr_fps:.1f} OCR FPS"
             )
         elif event_type == "tracks":
             tracks = event.get("tracks")

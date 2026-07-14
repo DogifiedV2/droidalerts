@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 from typing import Any, Protocol
 
 import cv2
@@ -32,6 +33,12 @@ class RapidOcrEngine:
     # belt video needed this small upscale to read short names consistently.
     card_input_scale = 1.25
     card_ocr_band = (0.35, 1.0)
+    # RapidOCR 3.x promotes wide inputs to a 2000px detector canvas. On
+    # Windows that made each belt pass take about a second. Staying just below
+    # its 1500px tier retained the complete cards in the Windows regression
+    # capture while substantially reducing detector work. Keep the proven Mac
+    # path unchanged.
+    card_max_input_width = 1490 if sys.platform == "win32" else None
 
     def __init__(self) -> None:
         try:

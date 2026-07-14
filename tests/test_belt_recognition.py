@@ -53,6 +53,34 @@ class ScalingOcr:
         ]
 
 
+class WidthCappedScalingOcr:
+    card_input_scale = 1.5
+    card_ocr_band = (0.35, 1.0)
+    card_max_input_width = 600
+
+    def __init__(self, observation):
+        self.observation = observation
+        self.frame_shapes = []
+
+    def read(self, image_bgr):
+        self.frame_shapes.append(image_bgr.shape)
+        scale = image_bgr.shape[1] / 900
+        x, y, width, height = self.observation.box
+        band_y = round(520 * self.card_ocr_band[0])
+        return [
+            TextObservation(
+                self.observation.text,
+                self.observation.confidence,
+                (
+                    round(x * scale),
+                    round((y - band_y) * scale),
+                    round(width * scale),
+                    round(height * scale),
+                ),
+            )
+        ]
+
+
 def blank_frame(height=520, width=900):
     return np.full((height, width, 3), (105, 115, 125), dtype=np.uint8)
 
@@ -120,6 +148,17 @@ class CardRecognitionTests(unittest.TestCase):
         result = CardRecognizer(ocr).analyze(frame)
 
         self.assertEqual((507, 1350, 3), ocr.frame_shapes[0])
+        self.assertEqual(name_box, result.candidates[0].name_box)
+        self.assertEqual(["R2"], [item.match.name for item in result.observations])
+
+    def test_ocr_width_cap_overrides_upscale_and_remaps_boxes(self):
+        frame = blank_frame()
+        name_box = draw_card(frame, (132, 270, 60, 30), "R2")
+        ocr = WidthCappedScalingOcr(TextObservation("R2", 0.98, name_box))
+
+        result = CardRecognizer(ocr).analyze(frame)
+
+        self.assertEqual((225, 600, 3), ocr.frame_shapes[0])
         self.assertEqual(name_box, result.candidates[0].name_box)
         self.assertEqual(["R2"], [item.match.name for item in result.observations])
 

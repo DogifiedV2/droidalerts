@@ -87,18 +87,28 @@ def run_belt_watcher(
                     result = recognizer.analyze(frame)
                     observations = result.observations
                     update = tracker.update(observations, now, region.width)
-                    if now - last_scan_status >= 1.0:
+                    completed_at = time.monotonic()
+                    # The detected boxes belong to the frame captured before
+                    # OCR began. Predict them forward by the OCR duration so
+                    # the overlay is current when it finally reaches the GUI.
+                    display_update = tracker.predict(completed_at, region.width)
+                    update.tracks = display_update.tracks
+                    update.events.extend(display_update.events)
+                    ocr_seconds = max(0.001, completed_at - now)
+                    if completed_at - last_scan_status >= 1.0:
                         emit(
                             "scan",
                             raw_count=len(result.text_observations),
                             candidate_count=len(result.candidates),
                             accepted_count=len(observations),
                             frame=frame_number,
+                            ocr_seconds=ocr_seconds,
+                            ocr_fps=1.0 / max(ocr_seconds, OCR_INTERVAL_SECONDS),
                         )
-                        last_scan_status = now
+                        last_scan_status = completed_at
                 except Exception as exc:
                     emit("error", message=f"Belt OCR frame failed: {exc}")
-                    update = tracker.predict(now, region.width)
+                    update = tracker.predict(time.monotonic(), region.width)
                 next_ocr = now + OCR_INTERVAL_SECONDS
             else:
                 update = tracker.predict(now, region.width)

@@ -212,6 +212,17 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual(["exited"], [event.kind for event in expired.events])
         self.assertEqual([], tracker.predict(0.9, 400).events)
 
+    def test_slow_ocr_cadence_extends_prediction_through_next_result(self):
+        tracker = BeltTracker(confirmation_hits=2, confirmation_window=3)
+        tracker.update([observation("GONK", 20)], 0.0, 1_000)
+        tracker.update([observation("GONK", 220)], 1.0, 1_000)
+
+        predicted = tracker.predict(1.9, 1_000)
+
+        # A fixed 0.75s horizon stopped at x=325 with the smoothed velocity.
+        # The adaptive horizon continues following the moving card.
+        self.assertGreater(predicted.tracks[0].box[0], 325)
+
     def test_outside_prediction_cannot_discard_video_style_votes(self):
         tracker = BeltTracker(timeout_seconds=2.0)
         for index, x in enumerate((100, 120, 140)):

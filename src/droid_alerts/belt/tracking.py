@@ -57,11 +57,12 @@ class Track:
     last_center_x: float = 0.0
     last_center_y: float = 0.0
     entered_emitted: bool = False
+    prediction_horizon: float = 0.75
 
     def predicted_box(self, now: float) -> Box:
-        # Extrapolate only briefly. A missed OCR pass should not make a track
-        # run indefinitely across the screen.
-        dt = min(0.75, max(0.0, now - self.last_updated_at))
+        # Extrapolate through the expected next OCR result, but never let a
+        # missed pass make a track run indefinitely across the screen.
+        dt = min(self.prediction_horizon, max(0.0, now - self.last_updated_at))
         return (
             self.box[0] + self.velocity_x * dt,
             self.box[1] + self.velocity_y * dt,
@@ -360,6 +361,11 @@ class BeltTracker:
         else:
             track.velocity_x = track.velocity_x * 0.55 + measured_vx * 0.45
             track.velocity_y = track.velocity_y * 0.55 + measured_vy * 0.45
+
+        # OCR cadence is hardware-dependent. The old fixed 0.75-second cap
+        # expired between Windows results, freezing labels behind their cards.
+        # Faster machines retain the conservative original horizon.
+        track.prediction_horizon = min(1.5, max(0.75, dt * 1.35))
 
         track.box = observation.box
         track.last_seen_at = now

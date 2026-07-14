@@ -100,6 +100,20 @@ class EnteringTracker:
         return SimpleNamespace(events=[], tracks=[])
 
 
+class LatencyRecordingTracker:
+    def __init__(self):
+        self.update_now = None
+        self.predict_now = None
+
+    def update(self, _observations, now, _frame_width):
+        self.update_now = now
+        return SimpleNamespace(events=[], tracks=[])
+
+    def predict(self, now, _frame_width):
+        self.predict_now = now
+        return SimpleNamespace(events=[], tracks=[])
+
+
 def card_frame():
     frame = np.full((520, 900, 3), (105, 115, 125), dtype=np.uint8)
     x, y, width, height = (130, 270, 55, 30)
@@ -123,6 +137,35 @@ def card_frame():
 
 
 class WatcherTests(unittest.TestCase):
+    def test_ocr_result_is_predicted_forward_to_completion_time(self):
+        frame, _ = card_frame()
+        stop_event = threading.Event()
+        capture = OneFrameCapture(frame, stop_event)
+        tracker = LatencyRecordingTracker()
+        events = []
+
+        with (
+            patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
+            patch("droid_alerts.belt.watcher.BeltTracker", return_value=tracker),
+            patch(
+                "droid_alerts.belt.watcher.time.monotonic",
+                side_effect=(10.0, 10.1, 10.9, 11.0),
+            ),
+        ):
+            run_belt_watcher(
+                1,
+                PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                stop_event=stop_event,
+                status_callback=events.append,
+                ocr_engine=StaticOcr([]),
+            )
+
+        self.assertEqual(10.1, tracker.update_now)
+        self.assertEqual(10.9, tracker.predict_now)
+        scan = next(event for event in events if event["type"] == "scan")
+        self.assertAlmostEqual(0.8, scan["ocr_seconds"])
+        self.assertAlmostEqual(1.25, scan["ocr_fps"])
+
     def test_watcher_uses_independent_mss_and_reports_safe_counts(self):
         frame, name_box = card_frame()
         stop_event = threading.Event()
