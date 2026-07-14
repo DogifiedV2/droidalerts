@@ -16,8 +16,12 @@ class RegionSelector:
         root: tk.Misc,
         monitor: MonitorDescriptor | MonitorInfo,
         on_selected: Callable[[PixelBox], None],
+        *,
+        on_cancelled: Callable[[], None] | None = None,
     ) -> None:
-        self.root, self.monitor, self.on_selected = root, monitor, on_selected
+        self.root, self.monitor = root, monitor
+        self.on_selected, self.on_cancelled = on_selected, on_cancelled
+        self._finished = False
         # Chat monitoring may own DXcam's singleton for this display. An
         # independent MSS capture avoids releasing that camera underneath it.
         capture = create_capture(monitor.index, prefer_dxcam=False)
@@ -64,7 +68,8 @@ class RegionSelector:
         self.canvas.bind("<B1-Motion>", self._drag)
         self.canvas.bind("<ButtonRelease-1>", self._release)
         self.window.bind("<Return>", self._save)
-        self.window.bind("<Escape>", lambda _event: self.window.destroy())
+        self.window.bind("<Escape>", self._cancel)
+        self.window.protocol("WM_DELETE_WINDOW", self._cancel)
         self.window.focus_force()
 
     def _press(self, event) -> None:
@@ -89,5 +94,14 @@ class RegionSelector:
         if self.current is None or self.current[2] < 100 or self.current[3] < 50:
             return
         box = PixelBox(*self.current)
+        self._finished = True
         self.window.destroy()
         self.on_selected(box)
+
+    def _cancel(self, _event=None) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        self.window.destroy()
+        if self.on_cancelled is not None:
+            self.on_cancelled()

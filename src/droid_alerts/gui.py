@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import csv
 import shutil
@@ -10,6 +11,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
+from queue import Empty as QueueEmpty
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, filedialog, messagebox
 
 import tkinter as tk
@@ -31,6 +33,7 @@ from .belt.region import RelativeRegion as BeltRelativeRegion
 from .belt.region import load_region as load_belt_region
 from .belt.region import save_region as save_belt_region
 from .belt.selector import RegionSelector as BeltRegionSelector
+from .belt.worker import run_belt_worker_process
 from .capture import (
     MonitorInfo,
     PixelBox,
@@ -138,8 +141,11 @@ class DroidAlertsApp:
         self.stop_event: threading.Event | None = None
         self._watch_stop_reason = ""
         self._watcher_header_state = "Stopped"
-        self.belt_thread: threading.Thread | None = None
-        self.belt_stop_event: threading.Event | None = None
+        self.belt_process = None
+        self.belt_stop_event = None
+        self.belt_status_queue = None
+        self._belt_poll_after_id: str | None = None
+        self._belt_worker_ready = False
         self._belt_stop_reason = ""
         self._belt_error_message = ""
         self._belt_restart_after_stop = False
@@ -147,6 +153,7 @@ class DroidAlertsApp:
         self._shutting_down = False
         self.belt_region: PixelBox | None = None
         self.belt_selector = None
+        self._belt_selector_root_state: str | None = None
         self.belt_overlay = BeltOverlay(self.root)
         self._belt_visible_tracks: list[dict[str, object]] = []
         self.region_overlay: tk.Toplevel | None = None
@@ -1480,6 +1487,7 @@ class DroidAlertsApp:
         relative = load_belt_region(monitor) if monitor is not None else None
         self.belt_region = relative.to_pixels(monitor) if relative is not None and monitor is not None else None
         self._refresh_belt_region_text()
+        self._configure_belt_overlay()
 
     def _refresh_belt_region_text(self) -> None:
         if self.belt_region is None:
@@ -1513,16 +1521,47 @@ class DroidAlertsApp:
             return
         self.belt_overlay.close()
         try:
+            self._belt_selector_root_state = str(self.root.state())
+            self.root.iconify()
+            self.root.update_idletasks()
+            # Windows needs a compositor cycle after iconify() or the capture
+            # can still contain the main Droid Alerts window.
+            self.root.after(300, lambda monitor=monitor: self._open_belt_region_selector(monitor))
+        except Exception as exc:
+            self._restore_after_belt_selection()
+            messagebox.showerror("Belt Region", str(exc))
+
+    def _open_belt_region_selector(self, monitor: MonitorInfo) -> None:
+        try:
             self.belt_selector = BeltRegionSelector(
                 self.root,
                 monitor,
                 lambda box, monitor=monitor: self._belt_region_selected(box, monitor),
+                on_cancelled=self._belt_region_cancelled,
             )
         except Exception as exc:
+            self._restore_after_belt_selection()
             messagebox.showerror("Belt Region", str(exc))
+
+    def _restore_after_belt_selection(self) -> None:
+        previous_state = self._belt_selector_root_state
+        self._belt_selector_root_state = None
+        try:
+            self.root.deiconify()
+            if previous_state == "zoomed":
+                self.root.state("zoomed")
+            self.root.lift()
+        except (RuntimeError, tk.TclError):
+            pass
+
+    def _belt_region_cancelled(self) -> None:
+        self.belt_selector = None
+        self._restore_after_belt_selection()
+        self._configure_belt_overlay()
 
     def _belt_region_selected(self, box: PixelBox, monitor: MonitorInfo) -> None:
         self.belt_selector = None
+        self._restore_after_belt_selection()
         save_belt_region(monitor, BeltRelativeRegion.from_pixels(box, monitor))
         self.belt_status_var.set("Belt region saved")
         current = self._current_monitor_info()
@@ -1535,6 +1574,7 @@ class DroidAlertsApp:
             self.belt_detail_var.set(
                 "The region was saved for its original display; Dashboard now uses another display."
             )
+        self._configure_belt_overlay()
 
     def choose_belt_targets(self) -> None:
         if self.is_belt_tracking():
@@ -1645,8 +1685,7 @@ class DroidAlertsApp:
     def _configure_belt_overlay(self) -> None:
         self.belt_overlay.close()
         if (
-            not self.is_belt_tracking()
-            or not bool(self._value("belt_overlay_enabled"))
+            not bool(self._value("belt_overlay_enabled"))
             or self.belt_region is None
         ):
             return
@@ -1832,7 +1871,9 @@ class DroidAlertsApp:
             self.start_watcher()
 
     def is_belt_tracking(self) -> bool:
-        return self.belt_thread is not None and self.belt_thread.is_alive()
+        # Keep the lifecycle busy until the UI poller has reaped a stopped
+        # process, so a fast second click cannot overwrite its queue/state.
+        return self.belt_process is not None
 
     def toggle_belt_tracking(self) -> None:
         if self.is_belt_tracking():
@@ -1865,57 +1906,77 @@ class DroidAlertsApp:
         save_config(config)
         self.config = config
 
-        self.belt_stop_event = threading.Event()
+        context = multiprocessing.get_context("spawn")
+        self.belt_stop_event = context.Event()
+        self.belt_status_queue = context.Queue()
         self._belt_stop_reason = ""
         self._belt_error_message = ""
+        self._belt_worker_ready = False
         self._belt_visible_tracks = []
         self.belt_last_scan_var.set("Waiting for first belt scan…")
-        thread = threading.Thread(
-            target=self._belt_watch_thread,
-            args=(monitor.index, self.belt_region, tuple(config.belt_target_names), self.belt_stop_event),
+        process = context.Process(
+            target=run_belt_worker_process,
+            args=(
+                monitor.index,
+                self.belt_region,
+                tuple(config.belt_target_names),
+                self.belt_stop_event,
+                self.belt_status_queue,
+            ),
+            name="DroidAlertsBeltTracker",
             daemon=True,
         )
-        self.belt_thread = thread
-        thread.start()
+        self.belt_process = process
+        try:
+            process.start()
+        except Exception as exc:
+            self._belt_worker_finished(exc, process)
+            return
+        self._belt_poll_after_id = self.root.after(50, self._poll_belt_process)
         self._set_belt_header_state("Running")
         self.belt_status_var.set("Starting Belt Tracker…")
-        self.belt_detail_var.set("Loading belt OCR in the background.")
+        self.belt_detail_var.set("Loading belt OCR in a separate process.")
         self._set_belt_controls(running=True)
         self._configure_belt_overlay()
         self.detail_var.set("Belt Tracker started")
 
-    def _belt_watch_thread(
-        self,
-        monitor_index: int,
-        region: PixelBox,
-        target_names: tuple[str, ...],
-        stop_event: threading.Event,
-    ) -> None:
-        thread = threading.current_thread()
-        try:
-            # Import in the worker so opening Droid Alerts never initializes
-            # RapidOCR/ONNX on Tk's UI thread.
-            from .belt.watcher import run_belt_watcher
+    def _drain_belt_status_queue(self) -> None:
+        status_queue = self.belt_status_queue
+        if status_queue is None:
+            return
+        while True:
+            try:
+                event = status_queue.get_nowait()
+            except QueueEmpty:
+                return
+            except (EOFError, OSError, ValueError):
+                return
+            if isinstance(event, dict):
+                self._handle_belt_status(event)
 
-            run_belt_watcher(
-                monitor_index,
-                region,
-                target_names=target_names,
-                stop_event=stop_event,
-                status_callback=self._queue_belt_status,
-            )
-            self._post_to_ui(lambda thread=thread: self._belt_worker_finished(None, thread))
-        except Exception as exc:
-            self._post_to_ui(
-                lambda exc=exc, thread=thread: self._belt_worker_finished(exc, thread)
-            )
-
-    def _queue_belt_status(self, event: dict[str, object]) -> None:
-        self._post_to_ui(lambda event=event: self._handle_belt_status(event))
+    def _poll_belt_process(self) -> None:
+        self._belt_poll_after_id = None
+        process = self.belt_process
+        if process is None:
+            return
+        self._drain_belt_status_queue()
+        if process is not self.belt_process:
+            return
+        if process.is_alive():
+            self._belt_poll_after_id = self.root.after(50, self._poll_belt_process)
+            return
+        process.join(timeout=0)
+        self._drain_belt_status_queue()
+        exit_code = process.exitcode
+        error = None
+        if exit_code not in (None, 0):
+            error = RuntimeError(f"Belt Tracker process exited with code {exit_code}")
+        self._belt_worker_finished(error, process)
 
     def _handle_belt_status(self, event: dict[str, object]) -> None:
         event_type = str(event.get("type") or "")
         if event_type == "ready":
+            self._belt_worker_ready = True
             self._belt_error_message = ""
             self._set_belt_header_state("Running")
             self.belt_status_var.set("Tracking blueprint belt")
@@ -2087,9 +2148,9 @@ class DroidAlertsApp:
     def _belt_worker_finished(
         self,
         exc: Exception | None,
-        thread: threading.Thread | None = None,
+        process=None,
     ) -> None:
-        if thread is not None and self.belt_thread is not thread:
+        if process is not None and self.belt_process is not process:
             return
         reason = self._belt_stop_reason
         restart = (
@@ -2098,12 +2159,24 @@ class DroidAlertsApp:
             and not self._shutting_down
         )
         self._belt_restart_after_stop = False
-        self.belt_thread = None
+        self.belt_process = None
         self.belt_stop_event = None
+        status_queue = self.belt_status_queue
+        self.belt_status_queue = None
+        self._belt_worker_ready = False
         self._belt_stop_reason = ""
         self._belt_visible_tracks = []
         self.belt_tracks_var.set("0 active tracks")
-        self.belt_overlay.close()
+        if status_queue is not None:
+            try:
+                status_queue.close()
+            except (OSError, ValueError):
+                pass
+        if process is not None:
+            try:
+                process.close()
+            except (OSError, ValueError):
+                pass
         self._set_belt_controls(running=False)
 
         error_message = str(exc) if exc is not None else self._belt_error_message
@@ -2134,6 +2207,8 @@ class DroidAlertsApp:
                 if self.belt_region is not None
                 else BELT_REGION_INSTRUCTIONS
             )
+        if not self._shutting_down:
+            self._configure_belt_overlay()
         self.detail_var.set("Belt Tracker stopped")
 
     def stop_belt_tracking(self, *, reason: str = "manual") -> None:
@@ -2142,9 +2217,42 @@ class DroidAlertsApp:
             return
         self._belt_stop_reason = reason
         self.belt_stop_event.set()
-        self.belt_overlay.close()
+        process = self.belt_process
+        if not self._belt_worker_ready and process is not None and process.is_alive():
+            # ONNX construction does not observe the event until it returns.
+            # It is safe to terminate because OCR is isolated in this process.
+            process.terminate()
         self.belt_watch_button.configure(text="Stopping…", state="disabled")
         self.belt_status_var.set("Stopping Belt Tracker…")
+
+    def _terminate_belt_process(self) -> None:
+        if self._belt_poll_after_id is not None:
+            try:
+                self.root.after_cancel(self._belt_poll_after_id)
+            except (RuntimeError, tk.TclError):
+                pass
+            self._belt_poll_after_id = None
+        if self.belt_stop_event is not None:
+            self.belt_stop_event.set()
+        process = self.belt_process
+        if process is not None:
+            try:
+                if process.is_alive():
+                    process.terminate()
+                process.join(timeout=0.2)
+                process.close()
+            except (OSError, ValueError):
+                pass
+        status_queue = self.belt_status_queue
+        if status_queue is not None:
+            try:
+                status_queue.close()
+            except (OSError, ValueError):
+                pass
+        self.belt_process = None
+        self.belt_stop_event = None
+        self.belt_status_queue = None
+        self._belt_worker_ready = False
 
     def _post_to_ui(self, callback) -> None:
         # Worker threads must not touch Tk directly; after() is the marshal
@@ -3750,6 +3858,7 @@ class DroidAlertsApp:
         if self.belt_stop_event is not None:
             self._belt_stop_reason = "update"
             self.belt_stop_event.set()
+        self._terminate_belt_process()
         self.belt_overlay.close()
         self.hide_droid_timers()
         self.destroy_region_overlay_windows()
@@ -3779,6 +3888,7 @@ class DroidAlertsApp:
             self._dashboard_timer_after_id,
             self._storage_after_id,
             self._update_poll_after_id,
+            self._belt_poll_after_id,
             self._options_scrollregion_after_id,
             self._macos_repaint_after_id,
         ):
@@ -3792,6 +3902,7 @@ class DroidAlertsApp:
         if self.belt_stop_event is not None:
             self._belt_stop_reason = "close"
             self.belt_stop_event.set()
+        self._terminate_belt_process()
         self.belt_overlay.close()
         self.hide_droid_timers()
         self.destroy_region_overlay_windows()

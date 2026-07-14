@@ -16,6 +16,7 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.belt.ocr import TextObservation
 from droid_alerts.belt.watcher import run_belt_watcher
+from droid_alerts.belt.worker import run_belt_worker_process
 from droid_alerts.capture import PixelBox
 
 
@@ -41,6 +42,50 @@ class StaticOcr:
     def read(self, frame):
         self.frame_shapes.append(frame.shape)
         return list(self.observations)
+
+
+class RecordingQueue:
+    def __init__(self):
+        self.events = []
+
+    def put(self, event):
+        self.events.append(event)
+
+
+class WorkerProcessEntryTests(unittest.TestCase):
+    def test_process_entry_forwards_watcher_status(self):
+        status_queue = RecordingQueue()
+
+        def fake_watcher(*_args, status_callback, **_kwargs):
+            status_callback({"type": "ready"})
+
+        with patch("droid_alerts.belt.worker.run_belt_watcher", side_effect=fake_watcher):
+            run_belt_worker_process(
+                1,
+                PixelBox(0, 0, 900, 520),
+                ("R2",),
+                threading.Event(),
+                status_queue,
+            )
+
+        self.assertEqual([{"type": "ready"}], status_queue.events)
+
+    def test_process_entry_reports_uncaught_failure(self):
+        status_queue = RecordingQueue()
+        with patch(
+            "droid_alerts.belt.worker.run_belt_watcher",
+            side_effect=RuntimeError("worker exploded"),
+        ):
+            run_belt_worker_process(
+                1,
+                PixelBox(0, 0, 900, 520),
+                (),
+                threading.Event(),
+                status_queue,
+            )
+
+        self.assertEqual("error", status_queue.events[0]["type"])
+        self.assertIn("worker exploded", status_queue.events[0]["message"])
 
 
 class EnteringTracker:

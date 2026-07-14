@@ -15,14 +15,14 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.belt.events import log_track_event
 from droid_alerts.belt.region import RelativeRegion, load_region, save_region
-from droid_alerts.capture import MonitorDescriptor, PixelBox
+from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox
 from droid_alerts.config import AppConfig
 from droid_alerts.gui import DroidAlertsApp
 
 
 class FakeVar:
-    def __init__(self):
-        self.value = ""
+    def __init__(self, value=""):
+        self.value = value
 
     def set(self, value):
         self.value = value
@@ -39,7 +39,7 @@ class FakeButton:
         self.options.update(values)
 
 
-class AliveThread:
+class AliveProcess:
     @staticmethod
     def is_alive():
         return True
@@ -48,9 +48,48 @@ class AliveThread:
 class FakeOverlay:
     def __init__(self):
         self.closed = False
+        self.configured = None
+        self.tracks = None
 
     def close(self):
         self.closed = True
+
+    def configure(self, monitor, region):
+        self.configured = (monitor, region)
+
+    def update_tracks(self, tracks):
+        self.tracks = tracks
+
+
+class FakeRoot:
+    def __init__(self, state="normal"):
+        self.window_state = state
+        self.events = []
+
+    def state(self, value=None):
+        if value is not None:
+            self.window_state = value
+            self.events.append(f"state:{value}")
+        return self.window_state
+
+    def iconify(self):
+        self.events.append("iconify")
+        self.window_state = "iconic"
+
+    def update_idletasks(self):
+        self.events.append("update_idletasks")
+
+    def after(self, delay, callback):
+        self.events.append(f"after:{delay}")
+        callback()
+        return "after-id"
+
+    def deiconify(self):
+        self.events.append("deiconify")
+        self.window_state = "normal"
+
+    def lift(self):
+        self.events.append("lift")
 
 
 class ImmediateThread:
@@ -153,12 +192,66 @@ class BeltConfigAndRegionTests(unittest.TestCase):
                 self.assertIsNone(load_region(monitor))
 
 
+class BeltUiWindowsTests(unittest.TestCase):
+    @staticmethod
+    def fake_overlay_app():
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.belt_process = None
+        app.belt_region = PixelBox(100, 200, 800, 300)
+        app._belt_visible_tracks = []
+        app.setting_vars = {"belt_overlay_enabled": FakeVar(True)}
+        app.belt_overlay = FakeOverlay()
+        app._current_monitor_info = lambda: MonitorInfo(
+            left=0,
+            top=0,
+            width=1920,
+            height=1080,
+            index=1,
+            key="game",
+        )
+        return app
+
+    def test_enabled_overlay_previews_region_before_tracking(self):
+        app = self.fake_overlay_app()
+
+        DroidAlertsApp._configure_belt_overlay(app)
+
+        self.assertEqual(app.belt_region, app.belt_overlay.configured[1])
+        self.assertEqual([], app.belt_overlay.tracks)
+
+    def test_region_selection_minimizes_before_capture_and_restores_on_cancel(self):
+        app = self.fake_overlay_app()
+        app.root = FakeRoot(state="zoomed")
+        app.belt_selector = None
+        app._belt_selector_root_state = None
+        app.belt_detail_var = FakeVar()
+        monitor = app._current_monitor_info()
+        app._current_monitor_info = lambda: monitor
+        states_during_capture = []
+
+        def create_selector(*_args, **_kwargs):
+            states_during_capture.append(app.root.window_state)
+            return object()
+
+        with patch("droid_alerts.gui.BeltRegionSelector", side_effect=create_selector) as selector:
+            DroidAlertsApp.select_belt_region(app)
+
+        self.assertEqual(["iconic"], states_during_capture)
+        self.assertLess(app.root.events.index("iconify"), app.root.events.index("after:300"))
+        cancel = selector.call_args.kwargs["on_cancelled"]
+        cancel()
+        self.assertEqual("zoomed", app.root.window_state)
+        self.assertIn("deiconify", app.root.events)
+
+
 class IndependentLifecycleTests(unittest.TestCase):
     @staticmethod
     def fake_app():
         app = DroidAlertsApp.__new__(DroidAlertsApp)
         app.stop_event = threading.Event()
         app.belt_stop_event = threading.Event()
+        app.belt_process = None
+        app._belt_worker_ready = True
         app._watch_stop_reason = ""
         app._belt_stop_reason = ""
         app.watch_button = FakeButton()
@@ -177,7 +270,7 @@ class IndependentLifecycleTests(unittest.TestCase):
         self.assertTrue(app.belt_stop_event.is_set())
         self.assertFalse(app.stop_event.is_set())
         self.assertEqual("manual", app._belt_stop_reason)
-        self.assertTrue(app.belt_overlay.closed)
+        self.assertFalse(app.belt_overlay.closed)
 
     def test_stopping_chat_watcher_does_not_stop_belt(self):
         app = self.fake_app()
@@ -190,7 +283,7 @@ class IndependentLifecycleTests(unittest.TestCase):
 
     def test_programmatic_monitor_change_restarts_only_belt_tracker(self):
         app = self.fake_app()
-        app.belt_thread = AliveThread()
+        app.belt_process = AliveProcess()
         app._belt_restart_after_stop = False
         app._load_belt_region = lambda: setattr(app, "belt_region_reloaded", True)
 
@@ -218,7 +311,7 @@ class IndependentLifecycleTests(unittest.TestCase):
 
         DroidAlertsApp.start_belt_tracking(app)
 
-        self.assertFalse(hasattr(app, "belt_thread"))
+        self.assertFalse(hasattr(app, "belt_process"))
 
 
 class BeltAlertDeliveryTests(unittest.TestCase):

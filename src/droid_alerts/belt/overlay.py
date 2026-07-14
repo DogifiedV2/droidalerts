@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ctypes
 import itertools
+import sys
 import tkinter as tk
 
 from ..capture import MonitorDescriptor, MonitorInfo, PixelBox, format_tk_geometry
@@ -8,6 +10,33 @@ from .macos_overlay import configure_macos_overlay, refresh_macos_overlay
 
 
 MAX_VISIBLE_LABELS = 16
+
+
+def _configure_windows_overlay(window: tk.Misc) -> None:
+    """Make an opaque Tk top-level click-through without hiding its pixels."""
+    if sys.platform != "win32":
+        return
+    try:
+        window.update_idletasks()
+        user32 = ctypes.windll.user32
+        # Tk's winfo_id() is the drawable child HWND. Extended top-level
+        # styles must be applied to its wrapper HWND instead.
+        child = window.winfo_id()
+        hwnd = user32.GetParent(child) or child
+        gwl_exstyle = -20
+        ws_ex_layered = 0x00080000
+        ws_ex_transparent = 0x00000020
+        ws_ex_noactivate = 0x08000000
+        lwa_alpha = 0x00000002
+        style = user32.GetWindowLongW(hwnd, gwl_exstyle)
+        style |= ws_ex_layered | ws_ex_transparent | ws_ex_noactivate
+        user32.SetWindowLongW(hwnd, gwl_exstyle, style)
+        # A layered window is not reliably visible until its layer attributes
+        # are initialized. Full opacity keeps borders and labels opaque.
+        user32.SetLayeredWindowAttributes(hwnd, 0, 255, lwa_alpha)
+    except Exception:
+        # Tk's topmost window remains the fallback if native styling fails.
+        pass
 
 
 class BeltOverlay:
@@ -106,14 +135,7 @@ class BeltOverlay:
         window.overrideredirect(True)
         window.attributes("-topmost", True)
         window.configure(bg=background)
-        try:
-            if window.tk.call("tk", "windowingsystem") == "win32":
-                import ctypes
-                hwnd = window.winfo_id()
-                style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
-                ctypes.windll.user32.SetWindowLongW(hwnd, -20, style | 0x20 | 0x80000)
-        except Exception:
-            pass
+        _configure_windows_overlay(window)
         window._belt_native_window = configure_macos_overlay(window)
         return window
 
