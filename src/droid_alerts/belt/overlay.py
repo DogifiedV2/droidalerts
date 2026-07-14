@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import tkinter as tk
 
-from ..capture import MonitorDescriptor, MonitorInfo, PixelBox
+from ..capture import MonitorDescriptor, MonitorInfo, PixelBox, format_tk_geometry
 from .macos_overlay import configure_macos_overlay, refresh_macos_overlay
 
 
@@ -32,7 +32,14 @@ class BeltOverlay:
             (left + region.width - thickness, top, thickness, region.height),
         ):
             window = self._window(color)
-            window.geometry(f"{max(1, width)}x{max(1, height)}{x:+d}{y:+d}")
+            window.geometry(
+                format_tk_geometry(
+                    width=max(1, width),
+                    height=max(1, height),
+                    x=x,
+                    y=y,
+                )
+            )
             self._border.append(window)
         # Pre-create every label before the game takes focus. Updating text and
         # geometry on these windows cannot activate/tab out a fullscreen game.
@@ -43,7 +50,7 @@ class BeltOverlay:
                 padx=7, pady=3, relief="solid", borderwidth=1,
             )
             label.pack()
-            window.geometry(f"1x1{left:+d}{top:+d}")
+            window.geometry(format_tk_geometry(width=1, height=1, x=left, y=top))
             self._labels.append((window, label))
         self._refresh_topmost()
 
@@ -56,7 +63,9 @@ class BeltOverlay:
         for index, (window, label) in enumerate(self._labels):
             if index >= len(ordered):
                 label.configure(text="")
-                window.geometry(f"1x1{hidden_x:+d}{hidden_y:+d}")
+                window.geometry(
+                    format_tk_geometry(width=1, height=1, x=hidden_x, y=hidden_y)
+                )
                 continue
             track = ordered[index]
             track_id = int(track["id"])
@@ -69,7 +78,14 @@ class BeltOverlay:
             # Keep labels outside the scan box so capture never OCRs its own
             # overlay and the in-game names remain visible.
             y = max(self._monitor.top, self._monitor.top + self._region.top - window.winfo_reqheight() - 6)
-            window.geometry(f"{width}x{window.winfo_reqheight()}{x:+d}{y:+d}")
+            window.geometry(
+                format_tk_geometry(
+                    width=width,
+                    height=window.winfo_reqheight(),
+                    x=x,
+                    y=y,
+                )
+            )
 
     def _refresh_topmost(self) -> None:
         """Reassert topmost after fullscreen apps such as GeForce NOW focus."""

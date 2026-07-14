@@ -16,7 +16,7 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts import config as config_module
 from droid_alerts import maintenance
-from droid_alerts.capture import monitor_key_from_mapping
+from droid_alerts.capture import format_tk_geometry, monitor_key_from_mapping
 from droid_alerts.config import AppConfig
 from droid_alerts.region import Calibration
 from droid_alerts.timers import seconds_until_next
@@ -109,6 +109,15 @@ def main() -> int:
     if monitor_key_from_mapping(monitor, 1) != monitor_key_from_mapping(monitor, 3):
         failures.append("monitor fallback identity depends on enumeration order")
 
+    stacked_geometry = format_tk_geometry(width=560, height=72, x=680, y=-1074)
+    if stacked_geometry != "560x72+680+-1074":
+        failures.append("Tk geometry did not preserve an above-primary monitor coordinate")
+    left_geometry = format_tk_geometry(width=560, height=72, x=-1920, y=24)
+    if left_geometry != "560x72+-1920+24":
+        failures.append("Tk geometry did not preserve a left-of-primary monitor coordinate")
+    if format_tk_geometry(x=-1920, y=-1080) != "+-1920+-1080":
+        failures.append("position-only Tk geometry did not preserve negative coordinates")
+
     noon = time.struct_time((2026, 7, 10, 12, 0, 0, 3, 191, -1))
     with patch("droid_alerts.timers.time.localtime", return_value=noon):
         if seconds_until_next("beskar") != 1200 or seconds_until_next("rainbow") != 600:
@@ -137,7 +146,10 @@ def main() -> int:
         for failure in failures:
             print(f"  - {failure}")
         return 1
-    print("runtime UX OK: config recovery, calibration, retention, timers, retries, and safe updates")
+    print(
+        "runtime UX OK: config recovery, calibration, monitor geometry, retention, "
+        "timers, retries, and safe updates"
+    )
     return 0
 
 

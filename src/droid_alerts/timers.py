@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from .capture import MonitorInfo
+from .capture import MonitorInfo, format_tk_geometry
 from .popup import CARD_BG, CARD_BG_SOFT, RAINBOW_LETTERS, RARITY_COLORS, _rounded_rect
 
 try:
@@ -171,7 +171,14 @@ class DroidTimersOverlay:
         y = int(self.top_y_ratio * screen_h)
         x = max(0, min(screen_w - width, x))
         y = max(0, min(screen_h - height, y))
-        window.geometry(f"{width}x{height}{screen_left + x:+d}{screen_top + y:+d}")
+        window.geometry(
+            format_tk_geometry(
+                width=width,
+                height=height,
+                x=screen_left + x,
+                y=screen_top + y,
+            )
+        )
 
     def _store_position_from_window(self) -> None:
         window = self.window
@@ -340,7 +347,7 @@ class DroidTimersOverlay:
         width, height = self._window_size()
         x = max(screen_left, min(screen_left + screen_w - width, x))
         y = max(screen_top, min(screen_top + screen_h - height, y))
-        self.window.geometry(f"{x:+d}{y:+d}")
+        self.window.geometry(format_tk_geometry(x=x, y=y))
 
     def _on_release(self, _event: "tk.Event") -> None:
         self._drag_offset = None

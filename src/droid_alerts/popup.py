@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 
 from .classifier import Detection
-from .capture import MonitorInfo
+from .capture import MonitorInfo, format_tk_geometry
 from .config import AppConfig, assets_dir
 
 try:
@@ -219,7 +219,7 @@ def show_popup(
             # Keep top alerts below the default timer-strip position.
             available_y = max(margin, screen_h - height - margin)
             y = screen_top + min(max(92, margin), available_y)
-        window.geometry(f"{width}x{height}{x:+d}{y:+d}")
+        window.geometry(format_tk_geometry(width=width, height=height, x=x, y=y))
 
         canvas = tk.Canvas(window, width=width, height=height, bg=canvas_bg, highlightthickness=0)
         canvas.pack(fill="both", expand=True)

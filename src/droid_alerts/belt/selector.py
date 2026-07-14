@@ -7,7 +7,7 @@ from pathlib import Path
 
 import cv2
 
-from ..capture import MonitorDescriptor, MonitorInfo, PixelBox, create_capture
+from ..capture import MonitorDescriptor, MonitorInfo, PixelBox, create_capture, format_tk_geometry
 
 
 class RegionSelector:
@@ -28,7 +28,14 @@ class RegionSelector:
         self.window = tk.Toplevel(root)
         self.window.overrideredirect(True)
         self.window.attributes("-topmost", True)
-        self.window.geometry(f"{monitor.width}x{monitor.height}{monitor.left:+d}{monitor.top:+d}")
+        self.window.geometry(
+            format_tk_geometry(
+                width=monitor.width,
+                height=monitor.height,
+                x=monitor.left,
+                y=monitor.top,
+            )
+        )
         self.canvas = tk.Canvas(self.window, highlightthickness=0, cursor="crosshair")
         self.canvas.pack(fill="both", expand=True)
         temp = tempfile.NamedTemporaryFile(

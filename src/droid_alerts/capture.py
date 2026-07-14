@@ -77,6 +77,26 @@ class MonitorDescriptor:
         )
 
 
+def format_tk_geometry(
+    *,
+    x: int,
+    y: int,
+    width: int | None = None,
+    height: int | None = None,
+) -> str:
+    """Format an absolute Tk window geometry on the virtual desktop.
+
+    Tk treats a bare ``-N`` position as an offset from the right or bottom
+    edge. Prefixing each coordinate with ``+`` preserves negative virtual
+    desktop coordinates as ``+-N``, which is required for monitors above or
+    left of the primary display.
+    """
+    if (width is None) != (height is None):
+        raise ValueError("width and height must be provided together")
+    size = "" if width is None else f"{int(width)}x{int(height)}"
+    return f"{size}+{int(x)}+{int(y)}"
+
+
 def monitor_key_from_mapping(monitor: dict[str, object], _index: int) -> str:
     """Stable-enough key for per-display settings, with geometry fallback."""
     unique_id = str(monitor.get("unique_id") or "").strip()

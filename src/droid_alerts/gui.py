@@ -37,6 +37,7 @@ from .capture import (
     PixelBox,
     create_capture,
     format_monitor_label,
+    format_tk_geometry,
     list_monitors,
     set_dpi_awareness,
 )
@@ -1672,7 +1673,7 @@ class DroidAlertsApp:
             height = 150
             x = monitor.left + max(0, (monitor.width - width) // 2)
             y = monitor.top + max(0, (monitor.height - height) // 2)
-            window.geometry(f"{width}x{height}{x:+d}{y:+d}")
+            window.geometry(format_tk_geometry(width=width, height=height, x=x, y=y))
             window.configure(bg="#111827")
             tk.Label(
                 window,
@@ -3247,7 +3248,7 @@ class DroidAlertsApp:
         else:
             x = self.root.winfo_rootx() + max(20, self.root.winfo_width() - dialog.winfo_width() - 30)
             y = self.root.winfo_rooty() + 80
-        dialog.geometry(f"{x:+d}{y:+d}")
+        dialog.geometry(format_tk_geometry(x=x, y=y))
         dialog.focus_force()
 
     def create_diagnostics_bundle(self) -> None:
@@ -3462,7 +3463,7 @@ class DroidAlertsApp:
             bar.overrideredirect(True)
             bar.attributes("-topmost", True)
             bar.configure(bg=color)
-            bar.geometry(f"{w}x{h}{x:+d}{y:+d}")
+            bar.geometry(format_tk_geometry(width=w, height=h, x=x, y=y))
             windows.append(bar)
 
         add_bar(left, top, width, thickness)
@@ -3472,13 +3473,21 @@ class DroidAlertsApp:
 
         title = f"Droid Alerts region: {source}"
         label_height = 24
-        if top >= label_height + 4:
+        monitor_top = self.region_monitor_offset[1]
+        if top - monitor_top >= label_height + 4:
             label = tk.Toplevel(self.root)
             label.overrideredirect(True)
             label.attributes("-topmost", True)
             label.configure(bg=color)
             label_width = min(width, max(230, min(420, len(title) * 9 + 18)))
-            label.geometry(f"{label_width}x{label_height}{left:+d}{top - label_height - 2:+d}")
+            label.geometry(
+                format_tk_geometry(
+                    width=label_width,
+                    height=label_height,
+                    x=left,
+                    y=top - label_height - 2,
+                )
+            )
             tk.Label(
                 label,
                 text=title,
