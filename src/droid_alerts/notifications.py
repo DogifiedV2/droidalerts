@@ -34,7 +34,15 @@ def _delivery(channel: str, success: bool, message: str) -> DeliveryResult:
 
 
 def event_text(detection: Detection) -> str:
+    if detection.rarity == "Belt":
+        return f"{detection.droid} blueprint is on the belt"
     return f"{detection.droid} Droid ({detection.rarity})"
+
+
+def alert_title(detection: Detection) -> str:
+    if detection.rarity == "Belt":
+        return "Droid Alerts Belt Tracker"
+    return "Droid Alerts Priority Spawn"
 
 
 def discord_webhook_path(config: AppConfig) -> Path:
@@ -101,7 +109,11 @@ def post_discord(webhook_url: str, detection: Detection) -> None:
             "content": f"**{label}**",
             "embeds": [
                 {
-                    "title": "Droid Tycoon Priority Spawn",
+                    "title": (
+                        "Belt Tracker Alert"
+                        if detection.rarity == "Belt"
+                        else "Droid Tycoon Priority Spawn"
+                    ),
                     "description": f"**{label}**",
                     "color": discord_color(detection),
                     "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -261,7 +273,7 @@ def send_ntfy_alert(
     try:
         post_ntfy_message(
             config,
-            title="Droid Alerts Priority Spawn",
+            title=alert_title(detection),
             message=event_text(detection),
             priority=config.ntfy_priority,
             tags=config.ntfy_tags,
@@ -418,7 +430,7 @@ def send_phone_alert(
     try:
         post_phone_message(
             credentials,
-            title="Droid Alerts Priority Spawn",
+            title=alert_title(detection),
             message=event_text(detection),
             priority=1,
             sound=sound,

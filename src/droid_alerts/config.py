@@ -126,14 +126,22 @@ class AppConfig:
     phone_sound: str = "siren"
     phone_include_attachment: bool = False
     update_check_enabled: bool = True
+    anonymous_app_stats_url: str = "https://gonk.tools/api/droid-alerts/app-heartbeat"
     anonymous_stats_url: str = "https://gonk.tools/api/droid-alerts/heartbeat"
     anonymous_detection_url: str = "https://gonk.tools/api/droid-alerts/detections"
+    anonymous_belt_stats_url: str = "https://gonk.tools/api/droid-alerts/belt-heartbeat"
+    anonymous_belt_counts_url: str = "https://gonk.tools/api/droid-alerts/belt-counts"
     share_debug_detections: bool = False
     debug_detection_upload_url: str = "https://gonk.tools/api/droid-alerts/debug-detections"
     update_repo: str = "DogifiedV2/droidalerts"
     advanced_mode: bool = False
     extra_checks: bool = False
     start_watcher_on_launch: bool = False
+    belt_overlay_enabled: bool = True
+    belt_cpu_warning_confirmed: bool = False
+    belt_region_guide_confirmed: bool = False
+    # Empty means Belt Tracker does not send any priority alerts.
+    belt_target_names: list[str] = field(default_factory=list)
     retention_days: int = 30
     max_storage_mb: int = 500
     timer_reminders_enabled: bool = False
@@ -154,6 +162,15 @@ class AppConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AppConfig":
         thresholds = data.get("thresholds") or {}
+        belt_target_names: list[str] = []
+        raw_belt_targets = data.get("belt_target_names")
+        if isinstance(raw_belt_targets, (list, tuple)):
+            for value in raw_belt_targets:
+                if not isinstance(value, str):
+                    continue
+                name = value.strip().upper()
+                if name and name not in belt_target_names:
+                    belt_target_names.append(name)
         config = cls(
             config_version=max(2, int(data.get("config_version", 1))),
             monitor_index=int(data.get("monitor_index", 1)),
@@ -196,11 +213,29 @@ class AppConfig:
             phone_sound=str(data.get("phone_sound", "siren")),
             phone_include_attachment=bool(data.get("phone_include_attachment", False)),
             update_check_enabled=bool(data.get("update_check_enabled", True)),
+            anonymous_app_stats_url=str(
+                data.get(
+                    "anonymous_app_stats_url",
+                    "https://gonk.tools/api/droid-alerts/app-heartbeat",
+                )
+            ),
             anonymous_stats_url=str(
                 data.get("anonymous_stats_url", "https://gonk.tools/api/droid-alerts/heartbeat")
             ),
             anonymous_detection_url=str(
                 data.get("anonymous_detection_url", "https://gonk.tools/api/droid-alerts/detections")
+            ),
+            anonymous_belt_stats_url=str(
+                data.get(
+                    "anonymous_belt_stats_url",
+                    "https://gonk.tools/api/droid-alerts/belt-heartbeat",
+                )
+            ),
+            anonymous_belt_counts_url=str(
+                data.get(
+                    "anonymous_belt_counts_url",
+                    "https://gonk.tools/api/droid-alerts/belt-counts",
+                )
             ),
             share_debug_detections=bool(data.get("share_debug_detections", False)),
             debug_detection_upload_url=str(
@@ -210,6 +245,14 @@ class AppConfig:
             advanced_mode=bool(data.get("advanced_mode", False)),
             extra_checks=bool(data.get("extra_checks", False)),
             start_watcher_on_launch=bool(data.get("start_watcher_on_launch", False)),
+            belt_overlay_enabled=bool(data.get("belt_overlay_enabled", True)),
+            belt_cpu_warning_confirmed=bool(
+                data.get("belt_cpu_warning_confirmed", False)
+            ),
+            belt_region_guide_confirmed=bool(
+                data.get("belt_region_guide_confirmed", False)
+            ),
+            belt_target_names=belt_target_names,
             retention_days=int(data.get("retention_days", 30)),
             max_storage_mb=int(data.get("max_storage_mb", 500)),
             timer_reminders_enabled=bool(data.get("timer_reminders_enabled", False)),
@@ -279,14 +322,21 @@ class AppConfig:
             "phone_sound": self.phone_sound,
             "phone_include_attachment": self.phone_include_attachment,
             "update_check_enabled": self.update_check_enabled,
+            "anonymous_app_stats_url": self.anonymous_app_stats_url,
             "anonymous_stats_url": self.anonymous_stats_url,
             "anonymous_detection_url": self.anonymous_detection_url,
+            "anonymous_belt_stats_url": self.anonymous_belt_stats_url,
+            "anonymous_belt_counts_url": self.anonymous_belt_counts_url,
             "share_debug_detections": self.share_debug_detections,
             "debug_detection_upload_url": self.debug_detection_upload_url,
             "update_repo": self.update_repo,
             "advanced_mode": self.advanced_mode,
             "extra_checks": self.extra_checks,
             "start_watcher_on_launch": self.start_watcher_on_launch,
+            "belt_overlay_enabled": self.belt_overlay_enabled,
+            "belt_cpu_warning_confirmed": self.belt_cpu_warning_confirmed,
+            "belt_region_guide_confirmed": self.belt_region_guide_confirmed,
+            "belt_target_names": self.belt_target_names,
             "retention_days": self.retention_days,
             "max_storage_mb": self.max_storage_mb,
             "timer_reminders_enabled": self.timer_reminders_enabled,

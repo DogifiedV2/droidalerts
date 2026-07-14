@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import tkinter as tk
 
-from .capture import monitor_key_from_mapping, set_dpi_awareness
+from .capture import format_tk_geometry, monitor_key_from_mapping, set_dpi_awareness
 from .region import Calibration, calibration_path
 
 MIN_SIZE = 20
@@ -55,8 +55,12 @@ class RegionSelector:
 
         self.root.title("Droid Alerts: Select Alert Region")
         self.root.geometry(
-            f"{self.virtual['width']}x{self.virtual['height']}"
-            f"{self.virtual['left']:+d}{self.virtual['top']:+d}"
+            format_tk_geometry(
+                width=self.virtual["width"],
+                height=self.virtual["height"],
+                x=self.virtual["left"],
+                y=self.virtual["top"],
+            )
         )
         self.root.overrideredirect(True)
         self.root.deiconify()

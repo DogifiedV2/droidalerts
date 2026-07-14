@@ -1,6 +1,9 @@
 opencv-python>=4.8
-numpy>=1.26
+numpy>=1.26,<3
 mss>=9.0
 ttkbootstrap>=1.10
+rapidocr>=3.8,<4
+onnxruntime>=1.18
+pyobjc-framework-Cocoa>=10; sys_platform == "darwin"
 # optional, faster capture backend; falls back to mss automatically
 # dxcam

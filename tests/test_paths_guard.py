@@ -23,11 +23,13 @@ FORBIDDEN = (
 
 def main() -> int:
     failures: list[str] = []
-    for path in sorted((BASE_DIR / "src" / "droid_alerts").glob("*.py")):
+    for path in sorted((BASE_DIR / "src" / "droid_alerts").rglob("*.py")):
         text = path.read_text(encoding="utf-8")
         for token in FORBIDDEN:
             if token in text:
-                failures.append(f"{path.name}: contains forbidden token {token!r}")
+                failures.append(
+                    f"{path.relative_to(BASE_DIR)}: contains forbidden token {token!r}"
+                )
 
     from droid_alerts import config
 

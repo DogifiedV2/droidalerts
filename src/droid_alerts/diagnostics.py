@@ -8,6 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import __version__
+from .belt.region import regions_path as belt_regions_path
 from .capture import list_monitors
 from .config import AppConfig, data_dir, project_root
 from .logging_io import debug_dir, logs_dir, timestamp
@@ -21,7 +22,15 @@ def create_support_bundle(config: AppConfig) -> Path:
     out_path = out_dir / f"droid_alerts_support_{timestamp()}.zip"
 
     config_data = config.to_dict()
-    for key in ("ntfy_topic", "anonymous_stats_url", "anonymous_detection_url", "debug_detection_upload_url"):
+    for key in (
+        "ntfy_topic",
+        "anonymous_app_stats_url",
+        "anonymous_stats_url",
+        "anonymous_detection_url",
+        "anonymous_belt_stats_url",
+        "anonymous_belt_counts_url",
+        "debug_detection_upload_url",
+    ):
         if config_data.get(key):
             config_data[key] = "<redacted>"
     system = {
@@ -38,6 +47,9 @@ def create_support_bundle(config: AppConfig) -> Path:
         calibration = calibration_path()
         if calibration.exists():
             bundle.write(calibration, "calibration.json")
+        belt_regions = belt_regions_path()
+        if belt_regions.exists():
+            bundle.write(belt_regions, "belt_regions.json")
         events = logs_dir() / "events.jsonl"
         if events.exists():
             bundle.writestr("recent_events.jsonl", _redacted_event_tail(events, 500))

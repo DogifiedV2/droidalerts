@@ -115,10 +115,26 @@ class RarityCandidate:
 
 
 def read_image(path: str | Path) -> np.ndarray:
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    image = _read_cv_image(path, cv2.IMREAD_COLOR)
     if image is None:
         raise FileNotFoundError(path)
     return image
+
+
+def _read_cv_image(path: str | Path, flags: int) -> np.ndarray | None:
+    """Read an image without passing its path through OpenCV's Windows APIs.
+
+    Some OpenCV Windows builds cannot open paths containing non-ASCII
+    characters. Python's file APIs are Unicode-safe, so read the bytes there
+    and let OpenCV decode the in-memory image instead.
+    """
+    try:
+        encoded = np.frombuffer(Path(path).read_bytes(), dtype=np.uint8)
+    except OSError:
+        return None
+    if encoded.size == 0:
+        return None
+    return cv2.imdecode(encoded, flags)
 
 
 def save_json(path: str | Path, data: object) -> None:
@@ -155,7 +171,7 @@ def load_templates(template_dir: str | Path) -> list[Template]:
         rarity = path.stem.split("__", 1)[0]
         if rarity not in RARITIES:
             continue
-        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        image = _read_cv_image(path, cv2.IMREAD_GRAYSCALE)
         if image is None or image.size == 0:
             continue
         templates.append(Template(rarity=rarity, path=path, image=image))
@@ -177,7 +193,7 @@ def load_rarity_roi_templates(template_dir: str | Path) -> dict[str, list[Rarity
         droid, rarity = parts[0], parts[1]
         if droid not in DROID_TYPES or rarity not in RARITIES:
             continue
-        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        image = _read_cv_image(path, cv2.IMREAD_GRAYSCALE)
         if image is None or image.size == 0:
             continue
         templates[droid].append(RarityRoiTemplate(droid=droid, rarity=rarity, path=path, image=image))
@@ -192,7 +208,7 @@ def load_edge_templates(template_dir: str | Path) -> list[EdgeTemplate]:
 
     templates: list[EdgeTemplate] = []
     for path in sorted(template_dir.glob("*.png")):
-        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        image = _read_cv_image(path, cv2.IMREAD_GRAYSCALE)
         if image is None or image.size == 0:
             continue
         templates.append(EdgeTemplate(path=path, image=image))
@@ -209,7 +225,7 @@ def load_droid_word_templates(template_dir: str | Path) -> dict[str, list[DroidW
         droid = path.stem.split("__", 1)[0]
         if droid not in DROID_TYPES:
             continue
-        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        image = _read_cv_image(path, cv2.IMREAD_GRAYSCALE)
         if image is None or image.size == 0:
             continue
         templates[droid].append(DroidWordTemplate(droid=droid, path=path, image=image))

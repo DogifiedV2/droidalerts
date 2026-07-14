@@ -37,6 +37,26 @@ Chat Box** are under Diagnostics; moving the box never resizes it. Alert
 appearance plus less common detection, debug, notification-detail, and storage
 controls stay behind the **Advanced settings** toggle in Settings.
 
+## Belt Tracker
+
+The **Belt Tracker** tab watches the moving blueprint belt and can alert for
+selected droid names. It can run at the same time as chat alerts.
+
+1. Choose the Fortnite display once on the Dashboard.
+2. Open Belt Tracker and click **Select Belt Region**.
+3. Select the area you'll angle the belt in from the bottom of the blueprints
+   to the top, excluding the price, then press Enter. Standing at the start of
+   the belt with around three blueprints in the box is recommended.
+4. Under **Priority Alerts**, click **Modify** and select the droids you want
+   alerts for. No selection means no Belt Tracker alerts.
+5. Click **Start Tracking**.
+
+The detector reads exact card names and checks the surrounding card artwork and
+nameplate. A card is reported as soon as four of its latest five reads agree;
+it does not need to cross a boundary. Rarity is not detected. Selected droids
+use the same Alert Channels as Dashboard alerts. Saved Belt Tracker regions are
+separate for each display, and its events appear with other alerts in History.
+
 Optional behaviour includes automatic watcher startup and pausing while
 Fortnite is closed. Diagnostics can create a redacted support ZIP, show or
 reposition the chat region, report local disk usage, and clear debug captures
@@ -83,18 +103,29 @@ ntfy is completely free and takes about two minutes.
 There's also a **Discord** option if you'd rather have alerts posted into a
 Discord channel. The **Set Up Discord** button walks you through that too.
 
-## Anonymous watcher count
+## Anonymous stats telemetry
 
-Droid Alerts sends a small anonymous heartbeat to `gonk.tools` while the
-watcher is running so the site can show how many people are currently watching
-droids. It contains only a random anonymous install ID, a per-run session ID,
-and the app version. The random IDs group counts from the same installation and
-watching session without identifying the user.
+Droid Alerts sends a small anonymous app heartbeat to `gonk.tools` while the
+program is open so the site can total usage time. It contains a random anonymous
+install ID, a per-run session ID, and the app version. The chat watcher has a
+separate heartbeat while it is running so the site can show how many people are
+currently watching droids. Its selected priority-alert combinations are included
+on the first heartbeat and only sent again after they change.
 
 When a priority alert fires, it also sends the timestamp plus the detected
-droid/rarity combo so the site can count which rare droids are being found. It
-does **not** send screenshots, player names, notification settings, machine
-names, credentials, or chat text.
+droid/rarity combo so the site can count which rare droids are being found. Belt
+Tracker has a separate heartbeat while it is running. It periodically sends
+only confirmed droid names and compact cumulative counts grouped by anonymous
+session and hour. Raw OCR reads, confidence values, boxes, and exit events are
+not uploaded. Failed belt-count uploads stay in a small local retry file.
+
+Normal telemetry does **not** send screenshots, player names, notification
+credentials, machine names, chat text, or raw Belt Tracker OCR.
+
+In **Settings**, **Identify This Install** shows the random install ID and links
+to <https://gonk.tools/identify>. Identification is optional and requires a
+Discord login plus a username chosen by the user. It is visible only in the
+developer's protected stats view; public stats remain aggregate-only.
 
 Debug mode also has a separate **Share alert debug screenshots with the
 developer** option.
