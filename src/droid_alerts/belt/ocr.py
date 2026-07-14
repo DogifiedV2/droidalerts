@@ -39,6 +39,8 @@ class RapidOcrEngine:
     # capture while substantially reducing detector work. Keep the proven Mac
     # path unchanged.
     card_max_input_width = 1490 if sys.platform == "win32" else None
+    windows_intra_op_threads = 4
+    windows_inter_op_threads = 1
 
     def __init__(self) -> None:
         try:
@@ -47,16 +49,30 @@ class RapidOcrEngine:
             raise RuntimeError(
                 "RapidOCR is not installed. Run: pip install -r requirements.txt"
             ) from exc
-        self._engine = RapidOCR(
-            params={
-                "Global.use_cls": False,
-                "Global.log_level": "warning",
-                # Avoid expanding a thin, wide belt strip to several thousand
-                # pixels while retaining enough detail for card names.
-                "Det.limit_type": "max",
-                "Det.limit_side_len": 1600,
-            }
-        )
+        params = {
+            "Global.use_cls": False,
+            "Global.log_level": "warning",
+            # Avoid expanding a thin, wide belt strip to several thousand
+            # pixels while retaining enough detail for card names.
+            "Det.limit_type": "max",
+            "Det.limit_side_len": 1600,
+        }
+        if sys.platform == "win32":
+            # ONNX defaults to every available core. Belt OCR is continuous,
+            # so that default held roughly half of a 16-thread CPU busy. Four
+            # inference threads retain most scan throughput without competing
+            # with the game for the entire processor.
+            params.update(
+                {
+                    "EngineConfig.onnxruntime.intra_op_num_threads": (
+                        self.windows_intra_op_threads
+                    ),
+                    "EngineConfig.onnxruntime.inter_op_num_threads": (
+                        self.windows_inter_op_threads
+                    ),
+                }
+            )
+        self._engine = RapidOCR(params=params)
 
     def read(self, image_bgr: np.ndarray) -> list[TextObservation]:
         rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)

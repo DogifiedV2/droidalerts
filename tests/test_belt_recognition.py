@@ -262,6 +262,15 @@ class OcrCompatibilityTests(unittest.TestCase):
         self.assertEqual("max", params["Det.limit_type"])
         self.assertEqual(1600, params["Det.limit_side_len"])
         self.assertFalse(params["Global.use_cls"])
+        if sys.platform == "win32":
+            self.assertEqual(
+                4,
+                params["EngineConfig.onnxruntime.intra_op_num_threads"],
+            )
+            self.assertEqual(
+                1,
+                params["EngineConfig.onnxruntime.inter_op_num_threads"],
+            )
         self.assertEqual({"use_cls": False}, calls[1][2])
 
 

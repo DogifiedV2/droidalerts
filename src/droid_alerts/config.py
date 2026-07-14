@@ -135,6 +135,8 @@ class AppConfig:
     extra_checks: bool = False
     start_watcher_on_launch: bool = False
     belt_overlay_enabled: bool = True
+    belt_cpu_warning_confirmed: bool = False
+    belt_region_guide_confirmed: bool = False
     # Empty means Belt Tracker does not send any priority alerts.
     belt_target_names: list[str] = field(default_factory=list)
     retention_days: int = 30
@@ -223,6 +225,12 @@ class AppConfig:
             extra_checks=bool(data.get("extra_checks", False)),
             start_watcher_on_launch=bool(data.get("start_watcher_on_launch", False)),
             belt_overlay_enabled=bool(data.get("belt_overlay_enabled", True)),
+            belt_cpu_warning_confirmed=bool(
+                data.get("belt_cpu_warning_confirmed", False)
+            ),
+            belt_region_guide_confirmed=bool(
+                data.get("belt_region_guide_confirmed", False)
+            ),
             belt_target_names=belt_target_names,
             retention_days=int(data.get("retention_days", 30)),
             max_storage_mb=int(data.get("max_storage_mb", 500)),
@@ -302,6 +310,8 @@ class AppConfig:
             "extra_checks": self.extra_checks,
             "start_watcher_on_launch": self.start_watcher_on_launch,
             "belt_overlay_enabled": self.belt_overlay_enabled,
+            "belt_cpu_warning_confirmed": self.belt_cpu_warning_confirmed,
+            "belt_region_guide_confirmed": self.belt_region_guide_confirmed,
             "belt_target_names": self.belt_target_names,
             "retention_days": self.retention_days,
             "max_storage_mb": self.max_storage_mb,

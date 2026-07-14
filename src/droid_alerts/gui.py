@@ -44,7 +44,15 @@ from .capture import (
     set_dpi_awareness,
 )
 from .classifier import Detection
-from .config import AppConfig, config_dir, load_config, project_root, save_config, user_sounds_dir
+from .config import (
+    AppConfig,
+    assets_dir,
+    config_dir,
+    load_config,
+    project_root,
+    save_config,
+    user_sounds_dir,
+)
 from .diagnostics import create_support_bundle
 from .logging_io import alert_samples_dir, append_event, debug_dir, logs_dir, timestamp
 from .maintenance import (
@@ -377,6 +385,7 @@ class DroidAlertsApp:
         self.header_status_label.pack(side="left")
         self._refresh_header_status()
         self.notebook.bind("<<NotebookTabChanged>>", self._highlight_active_tab, add="+")
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_belt_tab_opened, add="+")
         self._highlight_active_tab()
 
         self._build_dashboard_tab()
@@ -1103,6 +1112,31 @@ class DroidAlertsApp:
             else:
                 button.state(["pressed"] if tab is selected else ["!pressed"])
 
+    def _on_belt_tab_opened(self, _event=None) -> None:
+        try:
+            selected = self.root.nametowidget(self.notebook.select())
+        except Exception:
+            return
+        if selected is self.belt_tab:
+            self._show_belt_cpu_warning_if_needed()
+
+    def _show_belt_cpu_warning_if_needed(self) -> None:
+        config = getattr(self, "config", None) or load_config()
+        if config.belt_cpu_warning_confirmed:
+            return
+        confirmed = self._setup_dialog(
+            "Belt Tracker CPU Usage",
+            intro="The belt tracker uses more CPU power than the normal chat alerts do.",
+            ok_text="Confirm",
+            cancel_text="",
+        )
+        if confirmed is None:
+            return
+        config = load_config()
+        config.belt_cpu_warning_confirmed = True
+        save_config(config)
+        self.config = config
+
     def _wire_macos_repaint_workaround(self) -> None:
         # Tk's Aqua backend defers repainting remapped widgets, so freshly
         # selected notebook tabs keep showing stale content for up to a
@@ -1519,6 +1553,8 @@ class DroidAlertsApp:
         if monitor is None:
             messagebox.showerror("Belt Region", "The selected Dashboard display is not available.")
             return
+        if not self._confirm_belt_region_guide_if_needed():
+            return
         self.belt_overlay.close()
         try:
             self._belt_selector_root_state = str(self.root.state())
@@ -1530,6 +1566,28 @@ class DroidAlertsApp:
         except Exception as exc:
             self._restore_after_belt_selection()
             messagebox.showerror("Belt Region", str(exc))
+
+    def _confirm_belt_region_guide_if_needed(self) -> bool:
+        config = getattr(self, "config", None) or load_config()
+        if config.belt_region_guide_confirmed:
+            return True
+        confirmed = self._setup_dialog(
+            "Set Up Your Belt Region",
+            intro=(
+                "It is highly recommended you set up the region similar to the picture below, "
+                "ensuring the cards in the background are not included."
+            ),
+            image_path=assets_dir() / "belt_region_guide.png",
+            ok_text="Confirm",
+            cancel_text="",
+        )
+        if confirmed is None:
+            return False
+        config = load_config()
+        config.belt_region_guide_confirmed = True
+        save_config(config)
+        self.config = config
+        return True
 
     def _open_belt_region_selector(self, monitor: MonitorInfo) -> None:
         try:
@@ -1934,11 +1992,14 @@ class DroidAlertsApp:
             return
         self._belt_poll_after_id = self.root.after(50, self._poll_belt_process)
         self._set_belt_header_state("Running")
-        self.belt_status_var.set("Starting Belt Tracker…")
-        self.belt_detail_var.set("Loading belt OCR in a separate process.")
+        self._set_belt_loading_state()
         self._set_belt_controls(running=True)
         self._configure_belt_overlay()
         self.detail_var.set("Belt Tracker started")
+
+    def _set_belt_loading_state(self) -> None:
+        self.belt_status_var.set("Loading Belt Tracker")
+        self.belt_detail_var.set("This can take a little bit")
 
     def _drain_belt_status_queue(self) -> None:
         status_queue = self.belt_status_queue
@@ -2418,8 +2479,7 @@ class DroidAlertsApp:
             self.detail_var.set("Settings saved automatically")
 
     def run_first_time_intro(self) -> None:
-        """First-launch walkthrough: region check in Diagnostics, then the
-        Droid Timers question, then phone alerts. One time only."""
+        """First-launch walkthrough for region checking, timers, and phone alerts."""
         config = load_config()
         # Existing installs (already past the phone prompt) skip the intro.
         if config.intro_shown or config.notification_setup_prompted:
@@ -2429,11 +2489,6 @@ class DroidAlertsApp:
                 self.config = config
             self.prompt_notification_setup_if_needed()
             return
-
-        try:
-            self.notebook.select(self.files_tab)
-        except Exception:
-            pass
 
         self._setup_dialog(
             "Before You Start",
@@ -2642,6 +2697,7 @@ class DroidAlertsApp:
         note: str = "",
         error: str = "",
         link: tuple[str, str] | None = None,
+        image_path: Path | None = None,
         ok_text: str = "Continue",
         cancel_text: str = "Cancel",
         modal: bool = True,
@@ -2672,6 +2728,34 @@ class DroidAlertsApp:
             ttk.Label(body, text=intro, wraplength=wrap, justify="left").grid(
                 row=row, column=0, sticky="w", pady=(0, 10)
             )
+            row += 1
+        if image_path is not None:
+            try:
+                dialog_image = tk.PhotoImage(file=str(image_path))
+                max_image_width = max(
+                    480,
+                    min(1120, self.root.winfo_screenwidth() - 120),
+                )
+                max_image_height = max(
+                    270,
+                    min(630, self.root.winfo_screenheight() - 280),
+                )
+                divisor = max(
+                    1,
+                    (dialog_image.width() + max_image_width - 1) // max_image_width,
+                    (dialog_image.height() + max_image_height - 1) // max_image_height,
+                )
+                if divisor > 1:
+                    dialog_image = dialog_image.subsample(divisor, divisor)
+                image_label = ttk.Label(body, image=dialog_image)
+                image_label.image = dialog_image
+                image_label.grid(row=row, column=0, sticky="w", pady=(0, 10))
+            except (OSError, tk.TclError):
+                ttk.Label(
+                    body,
+                    text="The belt-region example image could not be loaded.",
+                    **bootstyle("danger"),
+                ).grid(row=row, column=0, sticky="w", pady=(0, 10))
             row += 1
         for index, step in enumerate(steps, start=1):
             step_frame = ttk.Frame(body)

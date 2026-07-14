@@ -107,13 +107,20 @@ class BeltConfigAndRegionTests(unittest.TestCase):
         config = AppConfig.from_dict(
             {
                 "belt_overlay_enabled": False,
+                "belt_cpu_warning_confirmed": True,
+                "belt_region_guide_confirmed": True,
                 "belt_target_names": [" r2 ", "GONK", "R2", 123],
             }
         )
 
         self.assertFalse(config.belt_overlay_enabled)
+        self.assertTrue(config.belt_cpu_warning_confirmed)
+        self.assertTrue(config.belt_region_guide_confirmed)
         self.assertEqual(["R2", "GONK"], config.belt_target_names)
-        self.assertEqual(["R2", "GONK"], AppConfig.from_dict(config.to_dict()).belt_target_names)
+        restored = AppConfig.from_dict(config.to_dict())
+        self.assertEqual(["R2", "GONK"], restored.belt_target_names)
+        self.assertTrue(restored.belt_cpu_warning_confirmed)
+        self.assertTrue(restored.belt_region_guide_confirmed)
 
     def test_belt_events_are_written_to_shared_history(self):
         track = SimpleNamespace(
@@ -199,6 +206,10 @@ class BeltUiWindowsTests(unittest.TestCase):
         app.belt_process = None
         app.belt_region = PixelBox(100, 200, 800, 300)
         app._belt_visible_tracks = []
+        app.config = AppConfig(
+            belt_cpu_warning_confirmed=True,
+            belt_region_guide_confirmed=True,
+        )
         app.setting_vars = {"belt_overlay_enabled": FakeVar(True)}
         app.belt_overlay = FakeOverlay()
         app._current_monitor_info = lambda: MonitorInfo(
@@ -242,6 +253,82 @@ class BeltUiWindowsTests(unittest.TestCase):
         cancel()
         self.assertEqual("zoomed", app.root.window_state)
         self.assertIn("deiconify", app.root.events)
+
+    def test_first_belt_tab_open_requires_cpu_warning_confirmation(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        config = AppConfig(belt_cpu_warning_confirmed=False)
+        app.config = config
+        app._setup_dialog = Mock(return_value={})
+
+        with (
+            patch("droid_alerts.gui.load_config", return_value=config),
+            patch("droid_alerts.gui.save_config") as save,
+        ):
+            DroidAlertsApp._show_belt_cpu_warning_if_needed(app)
+
+        self.assertTrue(config.belt_cpu_warning_confirmed)
+        save.assert_called_once_with(config)
+        call = app._setup_dialog.call_args
+        self.assertEqual("Confirm", call.kwargs["ok_text"])
+        self.assertEqual(
+            "The belt tracker uses more CPU power than the normal chat alerts do.",
+            call.kwargs["intro"],
+        )
+
+    def test_first_region_selection_guide_uses_bundled_example(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        config = AppConfig(belt_region_guide_confirmed=False)
+        app.config = config
+        app._setup_dialog = Mock(return_value={})
+
+        with (
+            patch("droid_alerts.gui.load_config", return_value=config),
+            patch("droid_alerts.gui.save_config") as save,
+        ):
+            confirmed = DroidAlertsApp._confirm_belt_region_guide_if_needed(app)
+
+        self.assertTrue(confirmed)
+        self.assertTrue(config.belt_region_guide_confirmed)
+        save.assert_called_once_with(config)
+        call = app._setup_dialog.call_args
+        self.assertEqual("belt_region_guide.png", call.kwargs["image_path"].name)
+        self.assertIn("cards in the background are not included", call.kwargs["intro"])
+
+    def test_closing_first_time_notices_does_not_acknowledge_them(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        config = AppConfig(
+            belt_cpu_warning_confirmed=False,
+            belt_region_guide_confirmed=False,
+        )
+        app.config = config
+        app._setup_dialog = Mock(return_value=None)
+
+        with patch("droid_alerts.gui.save_config") as save:
+            DroidAlertsApp._show_belt_cpu_warning_if_needed(app)
+            region_confirmed = DroidAlertsApp._confirm_belt_region_guide_if_needed(app)
+
+        self.assertFalse(region_confirmed)
+        self.assertFalse(config.belt_cpu_warning_confirmed)
+        self.assertFalse(config.belt_region_guide_confirmed)
+        save.assert_not_called()
+
+    def test_first_launch_intro_keeps_dashboard_selected(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.notebook = Mock()
+        app._setup_dialog = Mock(side_effect=(None, None))
+        app._set_var = Mock()
+        app.show_droid_timers = Mock()
+        app.hide_droid_timers = Mock()
+        app.prompt_notification_setup_if_needed = Mock()
+        config = AppConfig(intro_shown=False, notification_setup_prompted=False)
+
+        with (
+            patch("droid_alerts.gui.load_config", return_value=config),
+            patch("droid_alerts.gui.save_config"),
+        ):
+            DroidAlertsApp.run_first_time_intro(app)
+
+        app.notebook.select.assert_not_called()
 
 
 class IndependentLifecycleTests(unittest.TestCase):
@@ -304,6 +391,16 @@ class IndependentLifecycleTests(unittest.TestCase):
         DroidAlertsApp._refresh_header_status(app)
 
         self.assertEqual("Running", app.status_var.value)
+
+    def test_belt_loading_state_uses_requested_copy(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.belt_status_var = FakeVar()
+        app.belt_detail_var = FakeVar()
+
+        DroidAlertsApp._set_belt_loading_state(app)
+
+        self.assertEqual("Loading Belt Tracker", app.belt_status_var.value)
+        self.assertEqual("This can take a little bit", app.belt_detail_var.value)
 
     def test_shutdown_blocks_a_pending_belt_restart(self):
         app = DroidAlertsApp.__new__(DroidAlertsApp)
