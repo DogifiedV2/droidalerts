@@ -25,11 +25,19 @@ DROID_TEXT_COLORS = {
 }
 RAINBOW_LETTERS = ["#ff5252", "#ff9f2e", "#ffe14d", "#5ce06b", "#42c9ff", "#b06bff", "#ff6bd6"]
 DROID_ACCENTS = {
+    "Default": ("#9ca3af", "#3f4652"),
+    "Gold": ("#ffd34d", "#725517"),
     "Diamond": ("#3fd9ff", "#155a6e"),
     "Rainbow": ("#c05cff", "#4d2470"),
     "Beskar": ("#c9cdd9", "#4d5160"),
 }
 RARITY_COLORS = {
+    "Default": "#e8e8e8",
+    "Gold": "#ffd34d",
+    "Diamond": "#3fd9ff",
+    "Beskar": "#e8eaf0",
+    "Rainbow": "#ff65d8",
+    "Belt": "#65f3ff",
     "Common": "#e8e8e8",
     "Rare": "#3fd9ff",
     "Epic": "#a95cff",
@@ -80,9 +88,20 @@ def _rounded_rect(canvas: "tk.Canvas", x1: int, y1: int, x2: int, y2: int, radiu
     return canvas.create_polygon(points, smooth=True, **kwargs)
 
 
+def _is_belt_detection(detection: Detection) -> bool:
+    return detection.source == "belt-tracker" or detection.rarity == "Belt"
+
+
 def _title_segments(detection: Detection) -> list[tuple[str, str]]:
-    rarity_color = RARITY_COLORS.get(detection.rarity, "#ffffff")
-    segments = [(detection.rarity.upper() + " ", rarity_color)]
+    attributes = (
+        detection.rarity.split()
+        if _is_belt_detection(detection) and detection.rarity != "Belt"
+        else [detection.rarity]
+    )
+    segments = [
+        (attribute.upper() + " ", RARITY_COLORS.get(attribute, "#ffffff"))
+        for attribute in attributes
+    ]
     name = detection.droid.upper()
     if detection.droid == "Rainbow":
         segments.extend(
@@ -228,7 +247,12 @@ def show_popup(
         # explicit post-creation configure always wins.
         canvas.configure(bg=canvas_bg, highlightthickness=0)
 
-        accent, accent_dim = DROID_ACCENTS.get(detection.droid, ("#ff0055", "#5a0f2c"))
+        accent_key = (
+            detection.rarity.split(" ", 1)[0]
+            if _is_belt_detection(detection)
+            else detection.droid
+        )
+        accent, accent_dim = DROID_ACCENTS.get(accent_key, ("#ff0055", "#5a0f2c"))
 
         # Card: soft outer ring + accent border + dark rounded body.
         _rounded_rect(canvas, 0, 0, panel_width - 1, panel_height - 1, 20, fill=accent_dim, outline="")
@@ -248,7 +272,7 @@ def show_popup(
 
         caption = (
             "BELT ALERT"
-            if detection.rarity == "Belt"
+            if _is_belt_detection(detection)
             else ("PRIORITY SPAWN" if detection.is_priority else "DROID SPAWN")
         )
         canvas.create_text(

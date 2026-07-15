@@ -18,6 +18,9 @@ from droid_alerts.belt.region import RelativeRegion, load_region, save_region
 from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox
 from droid_alerts.config import AppConfig
 from droid_alerts.gui import DroidAlertsApp
+from droid_alerts.notifications import alert_title, event_text
+from droid_alerts.classifier import Detection
+from droid_alerts.popup import _title_segments
 
 
 class FakeVar:
@@ -128,6 +131,10 @@ class BeltConfigAndRegionTests(unittest.TestCase):
             name="R2",
             confidence=0.93,
             raw_text="R2",
+            family="Diamond",
+            family_confidence=0.94,
+            rarity="Common",
+            rarity_confidence=0.91,
             box=(10.0, 20.0, 30.0, 40.0),
         )
         event = SimpleNamespace(kind="entered", track=track)
@@ -137,6 +144,10 @@ class BeltConfigAndRegionTests(unittest.TestCase):
 
         self.assertEqual("belt_entered", record["event_type"])
         self.assertEqual("belt_tracker", record["source"])
+        self.assertEqual("Diamond Common", record["rarity"])
+        self.assertEqual("Diamond", record["card_family"])
+        self.assertEqual("Common", record["card_rarity"])
+        self.assertEqual(0.91, record["rarity_confidence"])
         self.assertTrue(record["alerted"])
         append.assert_called_once_with(record)
 
@@ -488,7 +499,13 @@ class BeltAlertDeliveryTests(unittest.TestCase):
         ):
             DroidAlertsApp._send_belt_alert(
                 app,
-                {"droid": "R2", "confidence": 0.93, "alerted": True},
+                {
+                    "droid": "R2",
+                    "rarity": "Diamond Common",
+                    "confidence": 0.93,
+                    "rarity_confidence": 0.97,
+                    "alerted": True,
+                },
             )
 
         policy.notify.assert_called_once()
@@ -496,6 +513,9 @@ class BeltAlertDeliveryTests(unittest.TestCase):
         discord.assert_called_once()
         ntfy.assert_called_once()
         phone.assert_called_once()
+        popup_detection = popup.call_args.args[0]
+        self.assertEqual("Diamond Common", popup_detection.rarity)
+        self.assertEqual("belt-tracker", popup_detection.source)
         self.assertEqual(3, append.call_count)
         self.assertTrue(
             all(call.args[0]["source"] == "belt_tracker" for call in append.call_args_list)
@@ -513,6 +533,29 @@ class BeltAlertDeliveryTests(unittest.TestCase):
             )
 
         popup.assert_not_called()
+
+    def test_actual_rarity_keeps_belt_alert_wording_and_title(self):
+        detection = Detection(
+            droid="BAL-CORE",
+            rarity="Beskar Rare",
+            row_box=(0, 0, 0, 0),
+            droid_score=0.99,
+            rarity_score=0.92,
+            rarity_margin=0.92,
+            score=0.99,
+            source="belt-tracker",
+        )
+
+        self.assertEqual("Beskar Rare BAL-CORE blueprint is on the belt", event_text(detection))
+        self.assertEqual("Droid Alerts Belt Tracker", alert_title(detection))
+        self.assertEqual(
+            [
+                ("BESKAR ", "#e8eaf0"),
+                ("RARE ", "#3fd9ff"),
+                ("BAL-CORE", "#ffffff"),
+            ],
+            _title_segments(detection),
+        )
 
 
 if __name__ == "__main__":

@@ -51,11 +51,13 @@ selected droid names. It can run at the same time as chat alerts.
    alerts for. No selection means no Belt Tracker alerts.
 5. Click **Start Tracking**.
 
-The detector reads exact card names and checks the surrounding card artwork and
-nameplate. A card is reported as soon as four of its latest five reads agree;
-it does not need to cross a boundary. Rarity is not detected. Selected droids
-use the same Alert Channels as Dashboard alerts. Saved Belt Tracker regions are
-separate for each display, and its events appear with other alerts in History.
+The detector reads exact card names, the card family shown by the border and
+left label (Default, Gold, Diamond, Beskar, or Rainbow), and the rarity pill
+(Common, Rare, Epic, Legendary, or Mythic). It checks the surrounding card
+artwork and nameplate. A card is reported as soon as four of its latest five
+reads agree; it does not need to cross a boundary. Selected droids use the same
+Alert Channels as Dashboard alerts. Saved Belt Tracker regions are separate for
+each display, and its events appear with other alerts in History.
 
 Optional behaviour includes automatic watcher startup and pausing while
 Fortnite is closed. Diagnostics can create a redacted support ZIP, show or

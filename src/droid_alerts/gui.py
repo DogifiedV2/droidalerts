@@ -2143,13 +2143,21 @@ class DroidAlertsApp:
             confidence = min(1.0, max(0.0, float(record.get("confidence") or 0.0)))
         except (TypeError, ValueError):
             confidence = 0.0
+        rarity = str(record.get("rarity") or "").strip() or "Belt"
+        try:
+            rarity_confidence = min(
+                1.0,
+                max(0.0, float(record.get("rarity_confidence") or 0.0)),
+            )
+        except (TypeError, ValueError):
+            rarity_confidence = 0.0
         detection = Detection(
             droid=droid,
-            rarity="Belt",
+            rarity=rarity,
             row_box=(0, 0, 0, 0),
             droid_score=confidence,
-            rarity_score=1.0,
-            rarity_margin=1.0,
+            rarity_score=rarity_confidence,
+            rarity_margin=rarity_confidence,
             score=confidence,
             source="belt-tracker",
             shape_score=1.0,
@@ -2230,7 +2238,7 @@ class DroidAlertsApp:
             "success": success,
             "detail": detail,
             "droid": detection.droid,
-            "rarity": "",
+            "rarity": "" if detection.rarity == "Belt" else detection.rarity,
             "alerted": True,
             "is_priority": True,
             "score": detection.score,

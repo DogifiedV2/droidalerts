@@ -33,14 +33,19 @@ def _delivery(channel: str, success: bool, message: str) -> DeliveryResult:
     return DeliveryResult(channel=channel, success=success, message=message)
 
 
+def _is_belt_detection(detection: Detection) -> bool:
+    return detection.source == "belt-tracker" or detection.rarity == "Belt"
+
+
 def event_text(detection: Detection) -> str:
-    if detection.rarity == "Belt":
-        return f"{detection.droid} blueprint is on the belt"
+    if _is_belt_detection(detection):
+        rarity = "" if detection.rarity == "Belt" else f"{detection.rarity} "
+        return f"{rarity}{detection.droid} blueprint is on the belt"
     return f"{detection.droid} Droid ({detection.rarity})"
 
 
 def alert_title(detection: Detection) -> str:
-    if detection.rarity == "Belt":
+    if _is_belt_detection(detection):
         return "Droid Alerts Belt Tracker"
     return "Droid Alerts Priority Spawn"
 
@@ -91,6 +96,14 @@ def discord_webhook_configured(config: AppConfig) -> bool:
 
 
 def discord_color(detection: Detection) -> int:
+    if _is_belt_detection(detection):
+        family = detection.rarity.split(" ", 1)[0]
+        return {
+            "Gold": 0xFFD34D,
+            "Diamond": 0x3FD9FF,
+            "Beskar": 0xC9CDD9,
+            "Rainbow": 0xFF33CC,
+        }.get(family, 0x9B59B6)
     if detection.droid == "Rainbow":
         return 0xFF33CC
     if detection.rarity == "Mythic":
@@ -111,7 +124,7 @@ def post_discord(webhook_url: str, detection: Detection) -> None:
                 {
                     "title": (
                         "Belt Tracker Alert"
-                        if detection.rarity == "Belt"
+                        if _is_belt_detection(detection)
                         else "Droid Tycoon Priority Spawn"
                     ),
                     "description": f"**{label}**",

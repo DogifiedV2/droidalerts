@@ -116,8 +116,18 @@ def run_belt_watcher(
             for event in update.events:
                 alerted = event.kind == "entered" and event.track.name.upper() in alert_targets
                 record = log_track_event(event, alerted=alerted)
+                attributes = " ".join(
+                    value
+                    for value in (
+                        str(getattr(event.track, "family", "") or ""),
+                        str(getattr(event.track, "rarity", "") or ""),
+                    )
+                    if value
+                )
+                rarity_text = f" [{attributes}]" if attributes else ""
                 print(
-                    f"[BELT] Track {event.track.id} {event.kind}: {event.track.name} "
+                    f"[BELT] Track {event.track.id} {event.kind}: "
+                    f"{event.track.name}{rarity_text} "
                     f"({event.track.confidence:.0%})",
                     flush=True,
                 )
@@ -128,6 +138,8 @@ def run_belt_watcher(
                     {
                         "id": track.id,
                         "name": track.name,
+                        "family": str(getattr(track, "family", "") or ""),
+                        "rarity": str(getattr(track, "rarity", "") or ""),
                         "box": tuple(round(value) for value in track.box),
                         "confidence": track.confidence,
                     }

@@ -33,6 +33,10 @@ class _PreparedObservation:
     raw_text: str
     box: Box
     source_index: int
+    family: str
+    family_confidence: float
+    rarity: str
+    rarity_confidence: float
 
 
 @dataclass
@@ -51,9 +55,15 @@ class Track:
     velocity_y: float = 0.0
     confidence: float = 0.0
     raw_text: str = ""
+    family: str = ""
+    family_confidence: float = 0.0
+    rarity: str = ""
+    rarity_confidence: float = 0.0
     identity_votes: deque[str] = field(default_factory=deque, repr=False)
     vote_confidences: deque[float] = field(default_factory=deque, repr=False)
     vote_raw_texts: deque[str] = field(default_factory=deque, repr=False)
+    family_votes: deque[tuple[str, str, float]] = field(default_factory=deque, repr=False)
+    rarity_votes: deque[tuple[str, str, float]] = field(default_factory=deque, repr=False)
     last_center_x: float = 0.0
     last_center_y: float = 0.0
     entered_emitted: bool = False
@@ -108,6 +118,10 @@ class BeltTracker:
     ) -> None:
         self.confirmation_hits = max(1, int(confirmation_hits))
         self.confirmation_window = max(self.confirmation_hits, int(confirmation_window))
+        # A lone color/component read is not enough to label an alert. Keep
+        # name confirmation just as fast, while requiring one repeat for the
+        # optional card attributes whenever the tracker itself uses >1 read.
+        self.attribute_confirmation_hits = min(2, self.confirmation_hits)
         self.timeout_seconds = max(0.2, float(timeout_seconds))
         self.association_distance_ratio = min(1.0, max(0.02, float(association_distance_ratio)))
         self.outside_margin = max(0.0, float(outside_margin))
@@ -191,10 +205,30 @@ class BeltTracker:
                     max(0.0, float(observation.ocr_confidence) * float(observation.match.score)),
                 )
                 raw_text = str(observation.match.raw_text)
+                family = str(getattr(observation, "family", "")).strip()
+                family_confidence = min(
+                    1.0,
+                    max(0.0, float(getattr(observation, "family_confidence", 0.0))),
+                )
+                rarity = str(getattr(observation, "rarity", "")).strip()
+                rarity_confidence = min(
+                    1.0,
+                    max(0.0, float(getattr(observation, "rarity_confidence", 0.0))),
+                )
             except (AttributeError, TypeError, ValueError):
                 continue
             prepared.append(
-                _PreparedObservation(name, confidence, raw_text, box, index)  # type: ignore[arg-type]
+                _PreparedObservation(
+                    name,
+                    confidence,
+                    raw_text,
+                    box,  # type: ignore[arg-type]
+                    index,
+                    family,
+                    family_confidence,
+                    rarity,
+                    rarity_confidence,
+                )
             )
         return prepared
 
@@ -336,6 +370,18 @@ class BeltTracker:
             identity_votes=deque([observation.name], maxlen=self.confirmation_window),
             vote_confidences=deque([observation.confidence], maxlen=self.confirmation_window),
             vote_raw_texts=deque([observation.raw_text], maxlen=self.confirmation_window),
+            family_votes=deque(
+                [(observation.name, observation.family, observation.family_confidence)]
+                if observation.family
+                else (),
+                maxlen=self.confirmation_window,
+            ),
+            rarity_votes=deque(
+                [(observation.name, observation.rarity, observation.rarity_confidence)]
+                if observation.rarity
+                else (),
+                maxlen=self.confirmation_window,
+            ),
             last_center_x=center_x,
             last_center_y=center_y,
         )
@@ -374,6 +420,15 @@ class BeltTracker:
         track.last_center_y = new_center_y
         track.hits += 1
 
+        if observation.family and (not track.confirmed or not track.family):
+            track.family_votes.append(
+                (observation.name, observation.family, observation.family_confidence)
+            )
+        if observation.rarity and (not track.confirmed or not track.rarity):
+            track.rarity_votes.append(
+                (observation.name, observation.rarity, observation.rarity_confidence)
+            )
+
         if not track.confirmed:
             track.identity_votes.append(observation.name)
             track.vote_confidences.append(observation.confidence)
@@ -395,11 +450,46 @@ class BeltTracker:
                 ]
                 track.confidence = sum(value[0] for value in matching) / len(matching)
                 track.raw_text = matching[-1][1]
+                self._assign_card_attributes(track)
         elif observation.name == track.name:
             # Geometry is always updated, but a contradictory label must not
             # alter the immutable identity or its displayed confidence.
             track.confidence = track.confidence * 0.70 + observation.confidence * 0.30
             track.raw_text = observation.raw_text
+            self._assign_card_attributes(track)
+
+    def _assign_card_attributes(self, track: Track) -> None:
+        self._assign_attribute(track, track.family_votes, "family", "family_confidence")
+        self._assign_attribute(track, track.rarity_votes, "rarity", "rarity_confidence")
+
+    def _assign_attribute(
+        self,
+        track: Track,
+        votes: deque[tuple[str, str, float]],
+        value_attribute: str,
+        confidence_attribute: str,
+    ) -> None:
+        """Freeze a repeated, unique-majority attribute for the confirmed identity."""
+
+        if not track.confirmed or getattr(track, value_attribute):
+            return
+        matching = [
+            (value, confidence)
+            for name, value, confidence in votes
+            if name == track.name and value
+        ]
+        counts = Counter(value for value, _confidence in matching)
+        if not counts:
+            return
+        ranked = counts.most_common()
+        value, vote_count = ranked[0]
+        if vote_count < self.attribute_confirmation_hits or (
+            len(ranked) > 1 and ranked[1][1] == vote_count
+        ):
+            return
+        confidences = [confidence for item, confidence in matching if item == value]
+        setattr(track, value_attribute, value)
+        setattr(track, confidence_attribute, sum(confidences) / len(confidences))
 
     def _confirmed_vote(self, track: Track) -> str | None:
         counts = Counter(track.identity_votes)
@@ -439,4 +529,6 @@ class BeltTracker:
             identity_votes=deque(track.identity_votes, maxlen=track.identity_votes.maxlen),
             vote_confidences=deque(track.vote_confidences, maxlen=track.vote_confidences.maxlen),
             vote_raw_texts=deque(track.vote_raw_texts, maxlen=track.vote_raw_texts.maxlen),
+            family_votes=deque(track.family_votes, maxlen=track.family_votes.maxlen),
+            rarity_votes=deque(track.rarity_votes, maxlen=track.rarity_votes.maxlen),
         )

@@ -13,11 +13,128 @@ from droid_alerts.belt.ocr import DroidObservation
 from droid_alerts.belt.tracking import BeltTracker
 
 
-def observation(name, x, *, y=80, width=60, height=18, confidence=0.9, score=1.0):
-    return DroidObservation(NameMatch(name, score, name), confidence, (x, y, width, height))
+def observation(
+    name,
+    x,
+    *,
+    y=80,
+    width=60,
+    height=18,
+    confidence=0.9,
+    score=1.0,
+    family="",
+    family_confidence=0.9,
+    rarity="",
+    rarity_confidence=0.9,
+):
+    return DroidObservation(
+        NameMatch(name, score, name),
+        confidence,
+        (x, y, width, height),
+        family=family,
+        family_confidence=family_confidence,
+        rarity=rarity,
+        rarity_confidence=rarity_confidence,
+    )
 
 
 class TrackingTests(unittest.TestCase):
+    def test_card_attributes_confirm_with_name_without_delaying_entry(self):
+        tracker = BeltTracker()
+        families = ("Beskar", "", "Beskar", "Beskar")
+        rarities = ("Rare", "", "Rare", "Rare")
+        for index, (family, rarity) in enumerate(zip(families, rarities)):
+            confirmed = tracker.update(
+                [
+                    observation(
+                        "BAL-CORE",
+                        20 + index * 20,
+                        family=family,
+                        rarity=rarity,
+                    )
+                ],
+                index * 0.2,
+                400,
+            )
+
+        self.assertEqual(["entered"], [event.kind for event in confirmed.events])
+        self.assertEqual("Beskar", confirmed.events[0].track.family)
+        self.assertEqual("Rare", confirmed.events[0].track.rarity)
+        self.assertAlmostEqual(0.9, confirmed.events[0].track.family_confidence)
+        self.assertAlmostEqual(0.9, confirmed.events[0].track.rarity_confidence)
+
+        missing = BeltTracker()
+        for index in range(4):
+            result = missing.update([observation("R2", 20)], index * 0.2, 400)
+        self.assertEqual(["entered"], [event.kind for event in result.events])
+        self.assertEqual("", result.events[0].track.family)
+        self.assertEqual("", result.events[0].track.rarity)
+
+    def test_confirmed_attributes_are_not_replaced_by_later_conflicting_reads(self):
+        tracker = BeltTracker()
+        for index in range(4):
+            tracker.update(
+                [
+                    observation(
+                        "R8",
+                        20 + index * 20,
+                        family="Diamond",
+                        rarity="Common",
+                    )
+                ],
+                index * 0.2,
+                400,
+            )
+
+        result = tracker.update(
+            [observation("R8", 100, family="Rainbow", rarity="Mythic")],
+            0.8,
+            400,
+        )
+
+        self.assertEqual("Diamond", result.tracks[0].family)
+        self.assertEqual("Common", result.tracks[0].rarity)
+
+    def test_single_attribute_read_is_not_published_and_later_majority_can_win(self):
+        tracker = BeltTracker()
+        reads = (
+            ("Gold", "Mythic"),
+            ("", ""),
+            ("", ""),
+            ("", ""),
+        )
+        for index, (family, rarity) in enumerate(reads):
+            result = tracker.update(
+                [
+                    observation(
+                        "R2",
+                        20 + index * 20,
+                        family=family,
+                        rarity=rarity,
+                    )
+                ],
+                index * 0.2,
+                400,
+            )
+
+        self.assertEqual(["entered"], [event.kind for event in result.events])
+        self.assertEqual("", result.events[0].track.family)
+        self.assertEqual("", result.events[0].track.rarity)
+
+        tracker.update(
+            [observation("R2", 100, family="Default", rarity="Common")],
+            0.8,
+            400,
+        )
+        corrected = tracker.update(
+            [observation("R2", 120, family="Default", rarity="Common")],
+            1.0,
+            400,
+        )
+
+        self.assertEqual("Default", corrected.tracks[0].family)
+        self.assertEqual("Common", corrected.tracks[0].rarity)
+
     def test_default_emits_immediately_on_fourth_vote_without_motion_or_gate(self):
         tracker = BeltTracker()
         updates = [

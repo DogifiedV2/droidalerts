@@ -99,7 +99,16 @@ class BeltOverlay:
             track = ordered[index]
             track_id = int(track["id"])
             box = tuple(int(value) for value in track["box"])
-            label.configure(text=f'{track["name"]}  #{track_id}')
+            attributes = " ".join(
+                value
+                for value in (
+                    str(track.get("family") or "").upper(),
+                    str(track.get("rarity") or "").upper(),
+                )
+                if value
+            )
+            rarity_text = f" · {attributes}" if attributes else ""
+            label.configure(text=f'{track["name"]}{rarity_text}  #{track_id}')
             window.update_idletasks()
             center_x = box[0] + box[2] // 2
             width = max(80, window.winfo_reqwidth())

@@ -14,7 +14,14 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.belt.ocr import RapidOcrEngine, TextObservation, _parse_rapidocr_result
-from droid_alerts.belt.recognition import UNKNOWN, CardRecognizer, exact_canonical_name
+from droid_alerts.belt.recognition import (
+    UNKNOWN,
+    CardRecognizer,
+    classify_card_family_border,
+    classify_card_rarity,
+    exact_canonical_name,
+    exact_card_family,
+)
 
 
 class StaticOcr:
@@ -116,12 +123,105 @@ def draw_card(frame, name_box, text):
     return name_box
 
 
+def draw_rarity_pill(frame, name_box, rarity, *, x_offset=2.5, width_ratio=1.25):
+    hues = {
+        "Common": (0, 0, 190),
+        "Rare": (90, 210, 220),
+        "Epic": (130, 210, 220),
+        "Legendary": (18, 210, 220),
+        "Mythic": (165, 210, 220),
+    }
+    x, y, _width, height = name_box
+    hsv = np.uint8([[hues[rarity]]])
+    color = tuple(int(value) for value in cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0])
+    x1 = round(x + x_offset * height)
+    y1 = round(y + 0.86 * height)
+    x2 = round(x1 + width_ratio * height)
+    y2 = round(y1 + 0.30 * height)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, -1)
+
+
 class CardRecognitionTests(unittest.TestCase):
     def test_exact_compact_lookup_never_fuzzy_creates_an_identity(self):
         self.assertEqual("DRK-1 PROBE", exact_canonical_name(" drk_1 probe "))
         self.assertIsNone(exact_canonical_name("DRK-I PROBE"))
         self.assertIsNone(exact_canonical_name("1.10K"))
         self.assertIsNone(exact_canonical_name("HUD R2"))
+
+    def test_card_family_accepts_joined_badge_text_without_fuzzy_guessing(self):
+        self.assertEqual("Default", exact_card_family("DEFAULT RARE"))
+        self.assertEqual("Beskar", exact_card_family("BESKARC"))
+        self.assertEqual("Rainbow", exact_card_family("rainbow"))
+        self.assertIsNone(exact_card_family("COMMON"))
+        self.assertIsNone(exact_card_family("BESKXR"))
+
+    def test_color_classifier_recognizes_all_five_rarity_pills(self):
+        for rarity in ("Common", "Rare", "Epic", "Legendary", "Mythic"):
+            with self.subTest(rarity=rarity):
+                frame = blank_frame()
+                name_box = draw_card(frame, (130, 270, 85, 30), "GONK")
+                draw_rarity_pill(frame, name_box, rarity)
+
+                detected, confidence = classify_card_rarity(frame, name_box)
+
+                self.assertEqual(rarity, detected)
+                self.assertGreater(confidence, 0.5)
+
+    def test_color_classifier_accepts_wide_real_card_pills(self):
+        for rarity in ("Common", "Legendary"):
+            with self.subTest(rarity=rarity):
+                frame = blank_frame()
+                name_box = draw_card(frame, (130, 270, 85, 30), "GONK")
+                draw_rarity_pill(
+                    frame,
+                    name_box,
+                    rarity,
+                    x_offset=1.2,
+                    width_ratio=2.25,
+                )
+
+                detected, _confidence = classify_card_rarity(frame, name_box)
+
+                self.assertEqual(rarity, detected)
+
+    def test_border_fallback_recognizes_only_distinctive_card_families(self):
+        name_box = (100, 100, 100, 20)
+        card_box = (80, 40, 200, 100)
+        family_hsv = {
+            "Gold": [(18, 220, 220)],
+            "Diamond": [(90, 220, 220)],
+            "Rainbow": [(18, 220, 220), (90, 220, 220), (135, 220, 220)],
+            "Default": [(0, 0, 180)],
+            "Beskar": [(90, 30, 180)],
+        }
+        for expected, colors in family_hsv.items():
+            with self.subTest(family=expected):
+                frame = blank_frame(width=400, height=240)
+                x1, x2 = card_box[0], card_box[0] + card_box[2]
+                y1 = round(name_box[1] + 1.20 * name_box[3])
+                y2 = round(name_box[1] + 1.70 * name_box[3])
+                segment_width = (x2 - x1) // len(colors)
+                for index, hsv_color in enumerate(colors):
+                    hsv = np.uint8([[hsv_color]])
+                    bgr = tuple(
+                        int(value) for value in cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0]
+                    )
+                    start = x1 + index * segment_width
+                    end = x2 if index == len(colors) - 1 else start + segment_width
+                    frame[y1:y2, start:end] = bgr
+
+                family, confidence = classify_card_family_border(
+                    frame,
+                    name_box,
+                    card_box,
+                )
+
+                if expected in {"Gold", "Diamond", "Rainbow"}:
+                    self.assertEqual(expected, family)
+                    self.assertGreater(confidence, 0.5)
+                else:
+                    self.assertEqual("", family)
+                    self.assertEqual(0.0, confidence)
 
     def test_full_frame_keeps_all_ocr_text_but_only_accepts_exact_card(self):
         frame = blank_frame()
@@ -221,6 +321,53 @@ class CardRecognitionTests(unittest.TestCase):
         result = CardRecognizer(ocr).analyze(frame)
 
         self.assertEqual(["IMPERIAL PROBE"], [item.match.name for item in result.observations])
+
+    def test_existing_frame_provides_family_and_rarity_for_each_card(self):
+        frame = blank_frame(width=1_050)
+        opti = draw_card(frame, (130, 270, 150, 30), "OPTI-STRK")
+        bal = draw_card(frame, (430, 270, 135, 30), "BAL-CORE")
+        cb = draw_card(frame, (730, 270, 55, 30), "CB")
+        draw_rarity_pill(frame, opti, "Legendary")
+        draw_rarity_pill(frame, bal, "Rare")
+        draw_rarity_pill(frame, cb, "Common")
+        ocr = StaticOcr(
+            [
+                TextObservation("OPTI-STRK", 0.99, opti),
+                TextObservation("BAL-CORE", 0.99, bal),
+                TextObservation("CB", 0.99, cb),
+                TextObservation("GOLD", 0.88, (134, 294, 52, 13)),
+                TextObservation("BESKARC", 0.92, (434, 294, 78, 13)),
+                TextObservation("DEFAULT", 0.95, (734, 294, 70, 13)),
+                TextObservation("COMMON", 0.99, (806, 294, 72, 13)),
+            ]
+        )
+
+        result = CardRecognizer(ocr).analyze(frame)
+
+        self.assertEqual(
+            [
+                ("OPTI-STRK", "Gold", "Legendary"),
+                ("BAL-CORE", "Beskar", "Rare"),
+                ("CB", "Default", "Common"),
+            ],
+            [(item.match.name, item.family, item.rarity) for item in result.observations],
+        )
+
+    def test_right_rarity_badge_does_not_become_card_family(self):
+        frame = blank_frame()
+        name_box = draw_card(frame, (130, 270, 55, 30), "R2")
+        draw_rarity_pill(frame, name_box, "Common")
+        result = CardRecognizer(
+            StaticOcr(
+                [
+                    TextObservation("R2", 0.99, name_box),
+                    TextObservation("COMMON", 0.99, (205, 294, 72, 13)),
+                ]
+            )
+        ).analyze(frame)
+
+        self.assertEqual("", result.observations[0].family)
+        self.assertEqual("Common", result.observations[0].rarity)
 
 
 class ResultObject:

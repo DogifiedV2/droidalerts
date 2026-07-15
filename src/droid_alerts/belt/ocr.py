@@ -22,6 +22,10 @@ class DroidObservation:
     match: NameMatch
     ocr_confidence: float
     box: tuple[int, int, int, int]
+    family: str = ""
+    family_confidence: float = 0.0
+    rarity: str = ""
+    rarity_confidence: float = 0.0
 
 
 class OcrEngine(Protocol):

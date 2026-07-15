@@ -12,8 +12,11 @@ from .ocr import DroidObservation, OcrEngine, RapidOcrEngine, TextObservation
 
 
 UNKNOWN = "UNKNOWN"
+CARD_FAMILIES = ("Default", "Gold", "Diamond", "Beskar", "Rainbow")
+CARD_RARITIES = ("Common", "Rare", "Epic", "Legendary", "Mythic")
 
 _CANONICAL_BY_COMPACT = {compact(name): name for name in DROID_NAMES}
+_FAMILY_BY_COMPACT = {compact(family): family for family in CARD_FAMILIES}
 
 
 def exact_canonical_name(raw_text: str) -> str | None:
@@ -27,9 +30,155 @@ def exact_canonical_name(raw_text: str) -> str | None:
     return _CANONICAL_BY_COMPACT.get(key) if key else None
 
 
+def exact_card_family(raw_text: str) -> str | None:
+    """Return the card family printed below a blueprint name.
+
+    RapidOCR can join the left rarity word to the smaller badge beside it, for
+    example ``DEFAULT RARE`` or ``BESKARC``. The card geometry check below
+    restricts this prefix match to the expected left badge position.
+    """
+
+    key = compact(raw_text)
+    if not key:
+        return None
+    for family_key, family in _FAMILY_BY_COMPACT.items():
+        if key.startswith(family_key):
+            return family
+    return None
+
+
+def classify_card_rarity(
+    frame_bgr: np.ndarray,
+    name_box: tuple[int, int, int, int],
+) -> tuple[str, float]:
+    """Classify the small colored rarity pill beside the family word.
+
+    The crop and component limits are relative to the already-recognized name
+    height, so this is scale independent. It uses only a tiny HSV crop and no
+    additional OCR/model pass.
+    """
+
+    x, y, _width, name_height = name_box
+    if name_height <= 0:
+        return "", 0.0
+    frame_height, frame_width = frame_bgr.shape[:2]
+    x1 = max(0, round(x - 0.05 * name_height))
+    x2 = min(frame_width, round(x + 4.55 * name_height))
+    y1 = max(0, round(y + 0.78 * name_height))
+    y2 = min(frame_height, round(y + 1.28 * name_height))
+    crop = frame_bgr[y1:y2, x1:x2]
+    if crop.size == 0:
+        return "", 0.0
+
+    hue, saturation, value = cv2.split(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV))
+    masks = (
+        (
+            "Legendary",
+            (hue >= 5) & (hue <= 30) & (saturation >= 80) & (value >= 100),
+        ),
+        (
+            "Rare",
+            (hue >= 75) & (hue <= 105) & (saturation >= 70) & (value >= 100),
+        ),
+        (
+            "Epic",
+            (hue >= 110) & (hue <= 145) & (saturation >= 70) & (value >= 100),
+        ),
+        (
+            "Mythic",
+            ((hue >= 145) | (hue <= 3)) & (saturation >= 70) & (value >= 100),
+        ),
+        ("Common", (saturation < 60) & (value >= 100)),
+    )
+    candidates: list[tuple[float, float, str]] = []
+    scale_area = float(name_height * name_height)
+    for rarity, condition in masks:
+        mask = condition.astype(np.uint8) * 255
+        _count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+            mask,
+            connectivity=8,
+        )
+        for component_x, _component_y, width, height, area in stats[1:]:
+            normalized_x = float(component_x) / name_height
+            normalized_width = float(width) / name_height
+            normalized_height = float(height) / name_height
+            area_ratio = float(area) / scale_area
+            if (
+                0.60 <= normalized_x <= 3.50
+                and 0.55 <= normalized_width <= 2.35
+                and 0.18 <= normalized_height <= 0.55
+                and area_ratio >= 0.10
+            ):
+                candidates.append((area_ratio, normalized_x, rarity))
+    if not candidates:
+        return "", 0.0
+    area_ratio, _normalized_x, rarity = max(candidates, key=lambda item: (item[0], item[1]))
+    return rarity, min(1.0, area_ratio / 0.30)
+
+
+def classify_card_family_border(
+    frame_bgr: np.ndarray,
+    name_box: tuple[int, int, int, int],
+    card_box: tuple[int, int, int, int],
+) -> tuple[str, float]:
+    """Fallback for the distinctive Gold, Diamond, and Rainbow frames.
+
+    Default and Beskar are deliberately not guessed from color because both
+    are low-saturation metal/gray under some lighting. The family label OCR is
+    authoritative whenever it is available.
+    """
+
+    _name_x, name_y, _name_width, name_height = name_box
+    card_x, _card_y, card_width, _card_height = card_box
+    # A clipped card can expose unrelated colored scenery in this band.
+    if name_height <= 0 or card_width < 5.0 * name_height:
+        return "", 0.0
+
+    y1 = max(0, round(name_y + 1.20 * name_height))
+    y2 = min(frame_bgr.shape[0], round(name_y + 1.70 * name_height))
+    x1 = max(0, round(card_x))
+    x2 = min(frame_bgr.shape[1], round(card_x + card_width))
+    crop = frame_bgr[y1:y2, x1:x2]
+    if crop.size == 0 or crop.shape[0] < max(3, round(0.35 * name_height)):
+        return "", 0.0
+
+    hue, saturation, value = cv2.split(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV))
+    valid = value > 60
+    valid_count = int(valid.sum())
+    if valid_count < max(20, round(crop.shape[0] * crop.shape[1] * 0.10)):
+        return "", 0.0
+
+    vivid = (saturation >= 70) & (value >= 100)
+    vivid_count = int(vivid.sum())
+    vivid_fraction = vivid_count / valid_count
+    orange_fraction = float(
+        ((hue >= 5) & (hue <= 35) & (saturation >= 80) & (value >= 100)).sum()
+    ) / valid_count
+    cyan_fraction = float(
+        ((hue >= 75) & (hue <= 105) & (saturation >= 70) & (value >= 100)).sum()
+    ) / valid_count
+
+    diverse_bins = 0
+    if vivid_count:
+        histogram = np.histogram(hue[vivid], bins=np.arange(0, 181, 15))[0]
+        significant = max(5, round(vivid_count * 0.03))
+        diverse_bins = int((histogram > significant).sum())
+
+    # Rainbow must run first: its animated border can contain a dominant cyan
+    # or orange section, but spans at least three meaningful hue families.
+    if vivid_fraction >= 0.35 and diverse_bins >= 3:
+        return "Rainbow", min(1.0, vivid_fraction / 0.60)
+    if orange_fraction >= 0.45:
+        return "Gold", min(1.0, orange_fraction / 0.75)
+    if cyan_fraction >= 0.45:
+        return "Diamond", min(1.0, cyan_fraction / 0.75)
+    return "", 0.0
+
+
 @dataclass(frozen=True)
 class CardRecognitionConfig:
     minimum_ocr_confidence: float = 0.70
+    minimum_family_ocr_confidence: float = 0.60
     minimum_name_height: int = 8
     dark_pixel_value: int = 105
     minimum_nameplate_dark_fraction: float = 0.38
@@ -60,6 +209,10 @@ class CardCandidate:
     context: CardContext
     accepted: bool
     reason: str
+    family: str = ""
+    family_confidence: float = 0.0
+    rarity: str = ""
+    rarity_confidence: float = 0.0
 
     @property
     def identity(self) -> str:
@@ -71,7 +224,15 @@ class CardCandidate:
         if not self.accepted:
             return None
         match = NameMatch(name=self.canonical_name, score=1.0, raw_text=self.raw_text)
-        return DroidObservation(match, self.ocr_confidence, self.context.card_box)
+        return DroidObservation(
+            match,
+            self.ocr_confidence,
+            self.context.card_box,
+            self.family,
+            self.family_confidence,
+            self.rarity,
+            self.rarity_confidence,
+        )
 
 
 @dataclass(frozen=True)
@@ -130,6 +291,7 @@ class CardRecognizer:
         exact_candidates = _exact_text_candidates(text_observations, frame_bgr.shape)
         candidates = tuple(self._analyze_candidate(frame_bgr, item) for item in exact_candidates)
         candidates = self._keep_dominant_card_row(candidates)
+        candidates = self._attach_card_attributes(candidates, text_observations, frame_bgr)
         return CardFrameResult(text_observations, candidates)
 
     def recognize(self, frame_bgr: np.ndarray) -> list[DroidObservation]:
@@ -274,6 +436,78 @@ class CardRecognizer:
         for index, candidate in enumerate(candidates):
             if index in eligible and index not in dominant and candidate.accepted:
                 candidate = replace(candidate, accepted=False, reason="off_card_row")
+            updated.append(candidate)
+        return tuple(updated)
+
+    def _attach_card_attributes(
+        self,
+        candidates: tuple[CardCandidate, ...],
+        text_observations: tuple[TextObservation, ...],
+        frame_bgr: np.ndarray,
+    ) -> tuple[CardCandidate, ...]:
+        """Pair family text and classify the rarity pill for each card.
+
+        Family detection deliberately reuses the existing OCR result. Rarity
+        classification is a tiny color/component check. Neither runs another
+        OCR or neural-model pass.
+        """
+
+        updated: list[CardCandidate] = []
+        for candidate in candidates:
+            if not candidate.accepted:
+                updated.append(candidate)
+                continue
+
+            name_x, name_y, name_width, name_height = candidate.name_box
+            card_x, _card_y, card_width, _card_height = candidate.context.card_box
+            badge_center_y_min = name_y + name_height * 0.55
+            badge_center_y_max = name_y + name_height * 1.45
+            badge_left_min = name_x - name_height * 0.65
+            badge_left_max = name_x + max(name_height * 1.75, name_width * 0.45)
+            matches: list[tuple[float, float, str, TextObservation]] = []
+
+            for observation in text_observations:
+                family = exact_card_family(observation.text)
+                if family is None or observation.confidence < self.config.minimum_family_ocr_confidence:
+                    continue
+                x, y, width, height = observation.box
+                center_x = x + width / 2
+                center_y = y + height / 2
+                if not (card_x <= center_x <= card_x + card_width):
+                    continue
+                if not (badge_center_y_min <= center_y <= badge_center_y_max):
+                    continue
+                if not (badge_left_min <= x <= badge_left_max):
+                    continue
+                horizontal_offset = abs(x - name_x) / max(1.0, name_height)
+                matches.append(
+                    (horizontal_offset, -float(observation.confidence), family, observation)
+                )
+
+            if matches:
+                _offset, _negative_confidence, family, observation = min(matches)
+                candidate = replace(
+                    candidate,
+                    family=family,
+                    family_confidence=float(observation.confidence),
+                )
+            else:
+                family, family_confidence = classify_card_family_border(
+                    frame_bgr,
+                    candidate.name_box,
+                    candidate.context.card_box,
+                )
+                candidate = replace(
+                    candidate,
+                    family=family,
+                    family_confidence=family_confidence,
+                )
+            rarity, rarity_confidence = classify_card_rarity(frame_bgr, candidate.name_box)
+            candidate = replace(
+                candidate,
+                rarity=rarity,
+                rarity_confidence=rarity_confidence,
+            )
             updated.append(candidate)
         return tuple(updated)
 
