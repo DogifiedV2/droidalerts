@@ -411,13 +411,16 @@ class OcrCompatibilityTests(unittest.TestCase):
         self.assertFalse(params["Global.use_cls"])
         if sys.platform == "win32":
             self.assertEqual(
-                4,
+                2,
                 params["EngineConfig.onnxruntime.intra_op_num_threads"],
             )
             self.assertEqual(
                 1,
                 params["EngineConfig.onnxruntime.inter_op_num_threads"],
             )
+        self.assertEqual(13, params["Global.width_height_ratio"])
+        self.assertEqual("small", getattr(params["Det.model_type"], "value", params["Det.model_type"]))
+        self.assertEqual("tiny", getattr(params["Rec.model_type"], "value", params["Rec.model_type"]))
         self.assertEqual({"use_cls": False}, calls[1][2])
 
 

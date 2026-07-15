@@ -15,7 +15,12 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.belt.ocr import TextObservation
-from droid_alerts.belt.watcher import adaptive_track_timeout, run_belt_watcher
+from droid_alerts.belt.watcher import (
+    OCR_INTERVAL_SECONDS,
+    adaptive_ocr_interval,
+    adaptive_track_timeout,
+    run_belt_watcher,
+)
 from droid_alerts.belt.worker import run_belt_worker_process
 from droid_alerts.capture import PixelBox
 
@@ -32,6 +37,33 @@ class OneFrameCapture:
 
     def close(self):
         self.closed = True
+
+
+class CountingCapture:
+    def __init__(self, frame):
+        self.frame = frame
+        self.grabs = 0
+        self.closed = False
+
+    def grab(self, _box):
+        self.grabs += 1
+        return self.frame.copy()
+
+    def close(self):
+        self.closed = True
+
+
+class LoopLimitedStopEvent:
+    def __init__(self, loops):
+        self.loops = loops
+        self.waits = 0
+
+    def is_set(self):
+        return self.waits >= self.loops
+
+    def wait(self, _timeout):
+        self.waits += 1
+        return self.is_set()
 
 
 class StaticOcr:
@@ -141,10 +173,33 @@ def card_frame():
 
 
 class WatcherTests(unittest.TestCase):
+    def test_empty_candidate_scans_back_off_without_becoming_unresponsive(self):
+        self.assertEqual(OCR_INTERVAL_SECONDS, adaptive_ocr_interval(0))
+        self.assertEqual(OCR_INTERVAL_SECONDS, adaptive_ocr_interval(2))
+        self.assertEqual(0.5, adaptive_ocr_interval(3))
+        self.assertEqual(1.0, adaptive_ocr_interval(4))
+        self.assertEqual(1.0, adaptive_ocr_interval(100))
+
     def test_track_timeout_expands_for_slow_ocr_and_is_capped(self):
         self.assertEqual(3.5, adaptive_track_timeout(0.5))
         self.assertEqual(13.0, adaptive_track_timeout(5.0))
         self.assertEqual(60.0, adaptive_track_timeout(999.0))
+
+    def test_overlay_prediction_loops_do_not_capture_unused_frames(self):
+        frame, _ = card_frame()
+        stop_event = LoopLimitedStopEvent(5)
+        capture = CountingCapture(frame)
+
+        with patch("droid_alerts.belt.watcher.create_capture", return_value=capture):
+            run_belt_watcher(
+                1,
+                PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                stop_event=stop_event,
+                ocr_engine=StaticOcr([]),
+            )
+
+        self.assertEqual(1, capture.grabs)
+        self.assertTrue(capture.closed)
 
     def test_ocr_result_is_predicted_forward_to_completion_time(self):
         frame, _ = card_frame()

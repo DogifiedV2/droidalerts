@@ -17,8 +17,13 @@ CAPTURE_FPS = 12.0
 OCR_INTERVAL_SECONDS = 0.25
 TRACK_TIMEOUT_SECONDS = 3.5
 CONFIRMATION_HITS = 4
+SLOW_CONFIRMATION_HITS = 3
+SLOW_CADENCE_SECONDS = 4.0 / 3.0
+SLOW_MINIMUM_OCR_CONFIDENCE = 0.78
 MINIMUM_OCR_CONFIDENCE = 0.70
 MAX_ADAPTIVE_TRACK_TIMEOUT_SECONDS = 60.0
+EMPTY_SCAN_BACKOFF_START = 3
+MAX_IDLE_OCR_INTERVAL_SECONDS = 1.0
 
 StatusCallback = Callable[[dict[str, object]], None]
 
@@ -29,6 +34,19 @@ def adaptive_track_timeout(ocr_seconds: float) -> float:
     return min(
         MAX_ADAPTIVE_TRACK_TIMEOUT_SECONDS,
         max(TRACK_TIMEOUT_SECONDS, max(0.0, float(ocr_seconds)) * 2.5 + 0.5),
+    )
+
+
+def adaptive_ocr_interval(empty_candidate_scans: int) -> float:
+    """Reduce idle OCR work while checking again within one second."""
+
+    empty_candidate_scans = max(0, int(empty_candidate_scans))
+    if empty_candidate_scans < EMPTY_SCAN_BACKOFF_START:
+        return OCR_INTERVAL_SECONDS
+    backoff_steps = min(empty_candidate_scans - 2, 2)
+    return min(
+        MAX_IDLE_OCR_INTERVAL_SECONDS,
+        OCR_INTERVAL_SECONDS * (2**backoff_steps),
     )
 
 
@@ -69,6 +87,9 @@ def run_belt_watcher(
     tracker = BeltTracker(
         confirmation_hits=CONFIRMATION_HITS,
         timeout_seconds=TRACK_TIMEOUT_SECONDS,
+        slow_confirmation_hits=SLOW_CONFIRMATION_HITS,
+        slow_cadence_seconds=SLOW_CADENCE_SECONDS,
+        slow_minimum_confidence=SLOW_MINIMUM_OCR_CONFIDENCE,
     )
     alert_targets = {str(name).strip().upper() for name in target_names if str(name).strip()}
     ocr_init_started = time.perf_counter()
@@ -103,6 +124,9 @@ def run_belt_watcher(
             ocr_engine_init_seconds=float(getattr(engine, "init_seconds", 0.0)),
             ocr_engine_params=dict(getattr(engine, "engine_params", {})),
             confirmation_hits=CONFIRMATION_HITS,
+            slow_confirmation_hits=SLOW_CONFIRMATION_HITS,
+            slow_cadence_seconds=SLOW_CADENCE_SECONDS,
+            slow_minimum_ocr_confidence=SLOW_MINIMUM_OCR_CONFIDENCE,
             base_track_timeout_seconds=TRACK_TIMEOUT_SECONDS,
             minimum_ocr_confidence=MINIMUM_OCR_CONFIDENCE,
         )
@@ -112,99 +136,121 @@ def run_belt_watcher(
     next_ocr = 0.0
     last_scan_status = 0.0
     previous_ocr_completed_at: float | None = None
+    empty_candidate_scans = 0
     frame_number = 0
     emit("ready", region=region, monitor_index=monitor_index)
     try:
         while not stop_event.is_set():
             loop_started = time.monotonic()
             frame_number += 1
-            capture_frame_started = time.perf_counter()
-            try:
-                frame = capture.grab(region)
-            except Exception as exc:
-                dev_logger.log("capture_error", frame=frame_number, error=str(exc))
-                emit("error", message=f"Belt screen capture failed: {exc}")
-                stop_event.wait(0.5)
-                continue
-            capture_seconds = time.perf_counter() - capture_frame_started
-
-            now = time.monotonic()
-            if now >= next_ocr:
+            if loop_started >= next_ocr:
+                capture_frame_started = time.perf_counter()
                 try:
-                    result = recognizer.analyze(frame)
-                    observations = result.observations
-                    update = tracker.update(observations, now, region.width)
-                    completed_at = time.monotonic()
-                    ocr_seconds = max(0.001, completed_at - now)
-                    tracker.timeout_seconds = adaptive_track_timeout(ocr_seconds)
-                    # The detected boxes belong to the frame captured before
-                    # OCR began. Predict them forward by the OCR duration so
-                    # the overlay is current when it finally reaches the GUI.
-                    display_update = tracker.predict(completed_at, region.width)
-                    update.tracks = display_update.tracks
-                    update.events.extend(display_update.events)
-                    if dev_logger.enabled:
+                    frame = capture.grab(region)
+                except Exception as exc:
+                    dev_logger.log("capture_error", frame=frame_number, error=str(exc))
+                    emit("error", message=f"Belt screen capture failed: {exc}")
+                    update = tracker.predict(loop_started, region.width)
+                    next_ocr = loop_started + 0.5
+                else:
+                    capture_seconds = time.perf_counter() - capture_frame_started
+                    # This timestamp belongs to the pixels just captured. OCR
+                    # detections must be tracked at capture time, not at the
+                    # later instant when inference finishes.
+                    now = time.monotonic()
+                    try:
+                        result = recognizer.analyze(frame)
+                        observations = result.observations
+                        update = tracker.update(observations, now, region.width)
+                        completed_at = time.monotonic()
+                        ocr_seconds = max(0.001, completed_at - now)
+                        tracker.timeout_seconds = adaptive_track_timeout(ocr_seconds)
                         scan_interval_seconds = (
                             completed_at - previous_ocr_completed_at
                             if previous_ocr_completed_at is not None
                             else None
                         )
-                        frame_file = dev_logger.save_frame(
-                            frame,
-                            frame_number=frame_number,
-                            now=completed_at,
+                        sample_seconds = (
+                            scan_interval_seconds
+                            if scan_interval_seconds is not None
+                            else max(ocr_seconds, OCR_INTERVAL_SECONDS)
                         )
-                        dev_logger.log(
-                            "scan",
-                            frame=frame_number,
-                            capture_seconds=capture_seconds,
-                            ocr_seconds=ocr_seconds,
-                            scan_interval_seconds=scan_interval_seconds,
-                            ocr_fps=1.0 / max(ocr_seconds, OCR_INTERVAL_SECONDS),
-                            adaptive_track_timeout_seconds=tracker.timeout_seconds,
-                            raw_observations=[
-                                {
-                                    "text": item.text,
-                                    "confidence": item.confidence,
-                                    "box": list(item.box),
-                                }
-                                for item in result.text_observations
-                            ],
-                            candidates=[
-                                _candidate_diagnostics(item) for item in result.candidates
-                            ],
-                            rejection_counts=dict(
-                                Counter(
-                                    item.reason
-                                    for item in result.candidates
-                                    if not item.accepted
-                                )
-                            ),
-                            accepted_count=len(observations),
-                            recognizer=result.diagnostics,
-                            tracker=tracker.diagnostic_state(),
-                            saved_frame=frame_file,
+                        sample_fps = 1.0 / max(0.001, sample_seconds)
+                        throughput_fps = 1.0 / ocr_seconds
+                        empty_candidate_scans = (
+                            0 if result.candidates else empty_candidate_scans + 1
                         )
-                    previous_ocr_completed_at = completed_at
-                    if completed_at - last_scan_status >= 1.0:
-                        emit(
-                            "scan",
-                            raw_count=len(result.text_observations),
-                            candidate_count=len(result.candidates),
-                            accepted_count=len(observations),
-                            frame=frame_number,
-                            ocr_seconds=ocr_seconds,
-                            ocr_fps=1.0 / max(ocr_seconds, OCR_INTERVAL_SECONDS),
-                            track_timeout_seconds=tracker.timeout_seconds,
-                        )
-                        last_scan_status = completed_at
-                except Exception as exc:
-                    dev_logger.log("ocr_error", frame=frame_number, error=str(exc))
-                    emit("error", message=f"Belt OCR frame failed: {exc}")
-                    update = tracker.predict(time.monotonic(), region.width)
-                next_ocr = now + OCR_INTERVAL_SECONDS
+                        ocr_interval = adaptive_ocr_interval(empty_candidate_scans)
+                        next_ocr = now + ocr_interval
+                        # The detected boxes belong to the frame captured before
+                        # OCR began. Predict them forward by the OCR duration so
+                        # the overlay is current when it finally reaches the GUI.
+                        display_update = tracker.predict(completed_at, region.width)
+                        update.tracks = display_update.tracks
+                        update.events.extend(display_update.events)
+                        if dev_logger.enabled:
+                            frame_file = dev_logger.save_frame(
+                                frame,
+                                frame_number=frame_number,
+                                now=completed_at,
+                            )
+                            dev_logger.log(
+                                "scan",
+                                frame=frame_number,
+                                capture_seconds=capture_seconds,
+                                ocr_seconds=ocr_seconds,
+                                scan_interval_seconds=scan_interval_seconds,
+                                ocr_fps=sample_fps,
+                                ocr_throughput_fps=throughput_fps,
+                                next_ocr_interval_seconds=ocr_interval,
+                                empty_candidate_scans=empty_candidate_scans,
+                                adaptive_track_timeout_seconds=tracker.timeout_seconds,
+                                raw_observations=[
+                                    {
+                                        "text": item.text,
+                                        "confidence": item.confidence,
+                                        "box": list(item.box),
+                                    }
+                                    for item in result.text_observations
+                                ],
+                                candidates=[
+                                    _candidate_diagnostics(item) for item in result.candidates
+                                ],
+                                rejection_counts=dict(
+                                    Counter(
+                                        item.reason
+                                        for item in result.candidates
+                                        if not item.accepted
+                                    )
+                                ),
+                                accepted_count=len(observations),
+                                recognizer=result.diagnostics,
+                                tracker=tracker.diagnostic_state(),
+                                saved_frame=frame_file,
+                            )
+                        previous_ocr_completed_at = completed_at
+                        if completed_at - last_scan_status >= 1.0:
+                            emit(
+                                "scan",
+                                raw_count=len(result.text_observations),
+                                candidate_count=len(result.candidates),
+                                accepted_count=len(observations),
+                                frame=frame_number,
+                                ocr_seconds=ocr_seconds,
+                                ocr_fps=sample_fps,
+                                ocr_throughput_fps=throughput_fps,
+                                track_timeout_seconds=tracker.timeout_seconds,
+                            )
+                            last_scan_status = completed_at
+                    except Exception as exc:
+                        dev_logger.log("ocr_error", frame=frame_number, error=str(exc))
+                        emit("error", message=f"Belt OCR frame failed: {exc}")
+                        update = tracker.predict(time.monotonic(), region.width)
+                        next_ocr = now + OCR_INTERVAL_SECONDS
             else:
-                update = tracker.predict(now, region.width)
+                # Overlay prediction remains smooth at 12 Hz, but no screen
+                # capture is performed until OCR can actually consume it.
+                update = tracker.predict(loop_started, region.width)
 
             for event in update.events:
                 alerted = event.kind == "entered" and event.track.name.upper() in alert_targets

@@ -34,6 +34,7 @@ def log_track_event(event: TrackEvent, *, alerted: bool = False) -> dict[str, ob
         "alerted": bool(alerted),
         "is_priority": bool(alerted),
         "confidence": round(track.confidence, 4),
+        "confirmation_mode": str(getattr(track, "confirmation_mode", "") or ""),
         "rarity_confidence": round(min(attribute_confidences, default=0.0), 4),
         "family_confidence": round(float(getattr(track, "family_confidence", 0.0)), 4),
         "card_rarity_confidence": round(

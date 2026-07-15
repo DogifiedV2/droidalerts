@@ -62,12 +62,14 @@ class Track:
     identity_votes: deque[str] = field(default_factory=deque, repr=False)
     vote_confidences: deque[float] = field(default_factory=deque, repr=False)
     vote_raw_texts: deque[str] = field(default_factory=deque, repr=False)
+    vote_intervals: deque[float] = field(default_factory=deque, repr=False)
     family_votes: deque[tuple[str, str, float]] = field(default_factory=deque, repr=False)
     rarity_votes: deque[tuple[str, str, float]] = field(default_factory=deque, repr=False)
     last_center_x: float = 0.0
     last_center_y: float = 0.0
     entered_emitted: bool = False
     prediction_horizon: float = 0.75
+    confirmation_mode: str = ""
 
     def predicted_box(self, now: float) -> Box:
         # Extrapolate through the expected next OCR result, but never let a
@@ -94,17 +96,22 @@ class TrackerUpdate:
 
 
 class BeltTracker:
-    """Geometry-first tracker for repeated observations of belt cards.
+    """Ordered motion tracker for repeated observations of belt cards.
 
-    Unconfirmed observations are associated by predicted geometry, then their
-    labels become votes. A single card whose early OCR alternates between two
-    names therefore remains one physical track. Once confirmed, a contradictory
-    name cannot advance or keep that identity alive.
+    Belt cards cannot overtake one another. Observations are therefore assigned
+    globally in horizontal order, using exact labels as strong evidence without
+    allowing two same-named cards to collapse into one track. A single card
+    whose early OCR alternates between two names can still remain one physical
+    track. Once confirmed, a contradictory name cannot advance or keep that
+    identity alive.
 
     Four matching labels in the latest five observations are required by
-    default. An ``entered`` event is emitted immediately on confirmation, with
-    no motion or screen-position requirement. The track ID prevents duplicate
-    alerts for later reads of the same visible card.
+    default. On hardware producing less than 0.75 OCR FPS, three consecutive,
+    high-confidence exact reads are accepted instead so short-lived cards still
+    have a physically possible path to confirmation. An ``entered`` event is
+    emitted immediately on confirmation, with no motion or screen-position
+    requirement. The track ID prevents duplicate alerts for later reads of the
+    same visible card.
     """
 
     def __init__(
@@ -115,9 +122,17 @@ class BeltTracker:
         timeout_seconds: float = 3.5,
         association_distance_ratio: float = 0.20,
         outside_margin: float = 60.0,
+        slow_confirmation_hits: int = 3,
+        slow_cadence_seconds: float = 4.0 / 3.0,
+        slow_minimum_confidence: float = 0.78,
     ) -> None:
         self.confirmation_hits = max(1, int(confirmation_hits))
-        self.confirmation_window = max(self.confirmation_hits, int(confirmation_window))
+        self.slow_confirmation_hits = max(2, int(slow_confirmation_hits))
+        self.confirmation_window = max(
+            self.confirmation_hits,
+            self.slow_confirmation_hits,
+            int(confirmation_window),
+        )
         # A lone color/component read is not enough to label an alert. Keep
         # name confirmation just as fast, while requiring one repeat for the
         # optional card attributes whenever the tracker itself uses >1 read.
@@ -125,6 +140,11 @@ class BeltTracker:
         self.timeout_seconds = max(0.2, float(timeout_seconds))
         self.association_distance_ratio = min(1.0, max(0.02, float(association_distance_ratio)))
         self.outside_margin = max(0.0, float(outside_margin))
+        self.slow_cadence_seconds = max(0.2, float(slow_cadence_seconds))
+        self.slow_minimum_confidence = min(
+            1.0,
+            max(0.0, float(slow_minimum_confidence)),
+        )
         self._tracks: list[Track] = []
         self._next_id = 1
 
@@ -140,6 +160,7 @@ class BeltTracker:
                 "confirmed": track.confirmed,
                 "hits": track.hits,
                 "identity_votes": list(track.identity_votes),
+                "confirmation_mode": track.confirmation_mode,
                 "last_seen_at": track.last_seen_at,
                 "velocity_x": track.velocity_x,
                 "velocity_y": track.velocity_y,
@@ -280,58 +301,223 @@ class BeltTracker:
         now: float,
         frame_width: int,
     ) -> dict[int, int]:
-        """Return a one-to-one predicted-geometry assignment.
+        """Return a global one-to-one assignment that cannot cross belt order.
 
-        Confirmed identity is used only as a safety constraint; it is never a
-        scoring shortcut while an unconfirmed track is collecting votes.
+        A greedy nearest-box match fails when a slow OCR pass takes long enough
+        for every card to occupy its neighbour's old position. Sequence
+        alignment lets exact-name anchors shift the whole row while insertions
+        and exits remain possible. Matching still uses geometry, so duplicate
+        names and isolated OCR mistakes do not merge physical cards.
         """
-        candidates: list[tuple[float, float, int, int, int]] = []
-        for track_index, track in enumerate(self._tracks):
-            predicted = self._association_box(track, now, frame_width)
-            predicted_center = _center(predicted)
-            for observation_index, observation in enumerate(observations):
-                # Geometry decides identity while a track is collecting votes.
-                # Once identity is confirmed, however, a contradictory label
-                # must never carry or keep that identity alive. Leave the
-                # observation free to start its own candidate track instead.
-                if track.confirmed and observation.name != track.name:
+
+        if not self._tracks or not observations:
+            return {}
+
+        ordered_tracks = sorted(
+            enumerate(self._tracks),
+            key=lambda item: (_center(item[1].box)[0], item[1].id),
+        )
+        ordered_observations = sorted(
+            enumerate(observations),
+            key=lambda item: (_center(item[1].box)[0], item[1].source_index),
+        )
+        track_count = len(ordered_tracks)
+        observation_count = len(ordered_observations)
+        skip_cost = 0.80
+        belt_shift = self._estimate_belt_shift(observations, now, frame_width)
+
+        # State ordering is total cost, number of skips, then negative matches.
+        # The latter two make equal-cost decisions deterministic and favour
+        # retaining a physical track.
+        states: list[list[tuple[float, int, int] | None]] = [
+            [None] * (observation_count + 1) for _ in range(track_count + 1)
+        ]
+        previous: list[list[tuple[int, int, str] | None]] = [
+            [None] * (observation_count + 1) for _ in range(track_count + 1)
+        ]
+        states[0][0] = (0.0, 0, 0)
+
+        def consider(
+            row: int,
+            column: int,
+            candidate: tuple[float, int, int],
+            origin: tuple[int, int, str],
+        ) -> None:
+            current = states[row][column]
+            if current is None or candidate < current:
+                states[row][column] = candidate
+                previous[row][column] = origin
+
+        for row in range(track_count + 1):
+            for column in range(observation_count + 1):
+                state = states[row][column]
+                if state is None:
                     continue
-                observed_center = _center(observation.box)
-                dx = abs(observed_center[0] - predicted_center[0])
-                dy = abs(observed_center[1] - predicted_center[1])
-                width = max(predicted[2], observation.box[2])
-                height = max(predicted[3], observation.box[3])
-                horizontal_limit = max(48.0, frame_width * self.association_distance_ratio, width * 2.0)
-                strict_horizontal_limit = False
-                if not track.confirmed and track.identity_votes:
-                    leading_name, leading_votes = Counter(track.identity_votes).most_common(1)[0]
-                    if leading_votes >= 2 and observation.name != leading_name:
-                        # Exact names may still fluctuate on the same card, but
-                        # a different exact name hundreds of pixels away is an
-                        # adjacent blueprint, not another vote for this track.
-                        # Keep conflicting reads in the card's immediate
-                        # neighborhood instead of using the broad recovery gate.
-                        horizontal_limit = min(horizontal_limit, max(36.0, width * 0.75))
-                        strict_horizontal_limit = True
-                vertical_limit = max(18.0, height * 1.5)
-                overlap = _intersection_over_union(predicted, observation.box)
-                if dy > vertical_limit or (
-                    dx > horizontal_limit and (strict_horizontal_limit or overlap == 0.0)
-                ):
-                    continue
-                # Predicted center distance is primary; overlap breaks close
-                # calls without consulting the recognized identity.
-                cost = dx / horizontal_limit + dy / vertical_limit - overlap * 0.55
-                candidates.append((cost, -overlap, track.id, track_index, observation_index))
+                total, skips, negative_matches = state
+                if row < track_count:
+                    consider(
+                        row + 1,
+                        column,
+                        (total + skip_cost, skips + 1, negative_matches),
+                        (row, column, "track"),
+                    )
+                if column < observation_count:
+                    consider(
+                        row,
+                        column + 1,
+                        (total + skip_cost, skips + 1, negative_matches),
+                        (row, column, "observation"),
+                    )
+                if row < track_count and column < observation_count:
+                    _track_index, track = ordered_tracks[row]
+                    _observation_index, observation = ordered_observations[column]
+                    match_cost = self._association_cost(
+                        track,
+                        observation,
+                        now,
+                        frame_width,
+                        belt_shift,
+                    )
+                    if match_cost is not None:
+                        consider(
+                            row + 1,
+                            column + 1,
+                            (total + match_cost, skips, negative_matches - 1),
+                            (row, column, "match"),
+                        )
 
         assignments: dict[int, int] = {}
-        used_observations: set[int] = set()
-        for _, _, _, track_index, observation_index in sorted(candidates):
-            if track_index in assignments or observation_index in used_observations:
+        row, column = track_count, observation_count
+        while row or column:
+            origin = previous[row][column]
+            if origin is None:
+                break
+            previous_row, previous_column, action = origin
+            if action == "match":
+                track_index = ordered_tracks[previous_row][0]
+                observation_index = ordered_observations[previous_column][0]
+                assignments[track_index] = observation_index
+            row, column = previous_row, previous_column
+        return dict(sorted(assignments.items()))
+
+    def _association_cost(
+        self,
+        track: Track,
+        observation: _PreparedObservation,
+        now: float,
+        frame_width: int,
+        belt_shift: float,
+    ) -> float | None:
+        if track.confirmed and observation.name != track.name:
+            return None
+
+        predicted = self._association_box(track, now, frame_width)
+        if belt_shift:
+            predicted = (
+                predicted[0] + belt_shift,
+                predicted[1],
+                predicted[2],
+                predicted[3],
+            )
+        predicted_center = _center(predicted)
+        observed_center = _center(observation.box)
+        dx = abs(observed_center[0] - predicted_center[0])
+        dy = abs(observed_center[1] - predicted_center[1])
+        width = max(predicted[2], observation.box[2])
+        height = max(predicted[3], observation.box[3])
+        generic_limit = max(
+            48.0,
+            frame_width * self.association_distance_ratio,
+            width * 2.0,
+        )
+        leading_name, leading_votes = self._leading_identity(track)
+        exact_name = bool(leading_name) and observation.name == leading_name
+        horizontal_limit = generic_limit
+        strict_horizontal_limit = False
+        if exact_name:
+            # A 0.3 FPS card can move through more than one old card slot.
+            # Exact identity may bridge that distance, but order still prevents
+            # a same-named card from jumping across its neighbours.
+            horizontal_limit = max(horizontal_limit, frame_width * 0.65, width * 3.0)
+        elif leading_votes >= 2:
+            horizontal_limit = min(horizontal_limit, max(36.0, width * 0.75))
+            strict_horizontal_limit = True
+
+        vertical_limit = max(18.0, height * 1.5)
+        overlap = _intersection_over_union(predicted, observation.box)
+        if dy > vertical_limit or (
+            dx > horizontal_limit and (strict_horizontal_limit or overlap == 0.0)
+        ):
+            return None
+
+        cost = dx / horizontal_limit + dy / vertical_limit - overlap * 0.55
+        if exact_name:
+            cost -= 0.90
+        elif leading_name:
+            # A conflict is evidence, not a hard ban: the first OCR read can be
+            # wrong and geometry must still be able to retain the card.
+            cost += 0.60 if leading_votes >= 2 else 0.35
+        return cost
+
+    def _estimate_belt_shift(
+        self,
+        observations: list[_PreparedObservation],
+        now: float,
+        frame_width: int,
+    ) -> float:
+        """Estimate shared row motion from two or more consistent exact labels."""
+
+        tracks_by_name: dict[str, list[Track]] = {}
+        for track in self._tracks:
+            name, _votes = self._leading_identity(track)
+            if name:
+                tracks_by_name.setdefault(name, []).append(track)
+        observations_by_name: dict[str, list[_PreparedObservation]] = {}
+        for observation in observations:
+            observations_by_name.setdefault(observation.name, []).append(observation)
+
+        shifts: list[float] = []
+        widths: list[float] = []
+        for name, tracks in tracks_by_name.items():
+            matching_observations = observations_by_name.get(name, [])
+            # Duplicate labels are resolved by ordered geometry, not by an
+            # ambiguous global-motion anchor.
+            if len(tracks) != 1 or len(matching_observations) != 1:
                 continue
-            assignments[track_index] = observation_index
-            used_observations.add(observation_index)
-        return assignments
+            predicted = self._association_box(tracks[0], now, frame_width)
+            shifts.append(
+                _center(matching_observations[0].box)[0] - _center(predicted)[0]
+            )
+            widths.append(max(predicted[2], matching_observations[0].box[2]))
+        if len(shifts) < 2:
+            return 0.0
+
+        ordered_shifts = sorted(shifts)
+        middle = len(ordered_shifts) // 2
+        median_shift = (
+            ordered_shifts[middle]
+            if len(ordered_shifts) % 2
+            else (ordered_shifts[middle - 1] + ordered_shifts[middle]) / 2.0
+        )
+        ordered_widths = sorted(widths)
+        median_width = ordered_widths[len(ordered_widths) // 2]
+        tolerance = max(80.0, median_width * 1.5)
+        inliers = [value for value in shifts if abs(value - median_shift) <= tolerance]
+        if len(inliers) < 2:
+            return 0.0
+        return sum(inliers) / len(inliers)
+
+    @staticmethod
+    def _leading_identity(track: Track) -> tuple[str, int]:
+        if track.confirmed:
+            return track.name, len(track.identity_votes)
+        counts = Counter(track.identity_votes)
+        if not counts:
+            return "", 0
+        ranked = counts.most_common()
+        if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+            return "", ranked[0][1]
+        return ranked[0]
 
     def _is_quarantined_conflict(
         self,
@@ -386,6 +572,7 @@ class BeltTracker:
             identity_votes=deque([observation.name], maxlen=self.confirmation_window),
             vote_confidences=deque([observation.confidence], maxlen=self.confirmation_window),
             vote_raw_texts=deque([observation.raw_text], maxlen=self.confirmation_window),
+            vote_intervals=deque([0.0], maxlen=self.confirmation_window),
             family_votes=deque(
                 [(observation.name, observation.family, observation.family_confidence)]
                 if observation.family
@@ -427,7 +614,7 @@ class BeltTracker:
         # OCR cadence is hardware-dependent. The old fixed 0.75-second cap
         # expired between Windows results, freezing labels behind their cards.
         # Faster machines retain the conservative original horizon.
-        track.prediction_horizon = min(1.5, max(0.75, dt * 1.35))
+        track.prediction_horizon = min(12.0, max(0.75, dt * 1.35))
 
         track.box = observation.box
         track.last_seen_at = now
@@ -449,12 +636,15 @@ class BeltTracker:
             track.identity_votes.append(observation.name)
             track.vote_confidences.append(observation.confidence)
             track.vote_raw_texts.append(observation.raw_text)
-            candidate = self._confirmed_vote(track)
-            if candidate is not None:
+            track.vote_intervals.append(dt)
+            confirmed_vote = self._confirmed_vote(track)
+            if confirmed_vote is not None:
+                candidate, confirmation_mode = confirmed_vote
                 # This is the only assignment to a non-empty public identity.
                 # Conflicting future OCR readings therefore cannot rename it.
                 track.name = candidate
                 track.confirmed = True
+                track.confirmation_mode = confirmation_mode
                 matching = [
                     (confidence, raw_text)
                     for name, confidence, raw_text in zip(
@@ -507,17 +697,31 @@ class BeltTracker:
         setattr(track, value_attribute, value)
         setattr(track, confidence_attribute, sum(confidences) / len(confidences))
 
-    def _confirmed_vote(self, track: Track) -> str | None:
+    def _confirmed_vote(self, track: Track) -> tuple[str, str] | None:
         counts = Counter(track.identity_votes)
         if not counts:
             return None
         ranked = counts.most_common()
         candidate, votes = ranked[0]
-        if votes < self.confirmation_hits:
-            return None
-        if len(ranked) > 1 and ranked[1][1] == votes:
-            return None
-        return candidate
+        if votes >= self.confirmation_hits and not (
+            len(ranked) > 1 and ranked[1][1] == votes
+        ):
+            return candidate, "standard"
+
+        names = list(track.identity_votes)[-self.slow_confirmation_hits :]
+        confidences = list(track.vote_confidences)[-self.slow_confirmation_hits :]
+        intervals = list(track.vote_intervals)[-self.slow_confirmation_hits :]
+        if (
+            len(names) == self.slow_confirmation_hits
+            and len(set(names)) == 1
+            and all(value >= self.slow_minimum_confidence for value in confidences)
+            and all(
+                value >= self.slow_cadence_seconds
+                for value in intervals[1:]
+            )
+        ):
+            return names[-1], "slow-cadence"
+        return None
 
     @staticmethod
     def _should_emit_entered(track: Track) -> bool:
@@ -545,6 +749,7 @@ class BeltTracker:
             identity_votes=deque(track.identity_votes, maxlen=track.identity_votes.maxlen),
             vote_confidences=deque(track.vote_confidences, maxlen=track.vote_confidences.maxlen),
             vote_raw_texts=deque(track.vote_raw_texts, maxlen=track.vote_raw_texts.maxlen),
+            vote_intervals=deque(track.vote_intervals, maxlen=track.vote_intervals.maxlen),
             family_votes=deque(track.family_votes, maxlen=track.family_votes.maxlen),
             rarity_votes=deque(track.rarity_votes, maxlen=track.rarity_votes.maxlen),
         )

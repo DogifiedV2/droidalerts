@@ -44,29 +44,59 @@ class RapidOcrEngine:
     # capture while substantially reducing detector work. Keep the proven Mac
     # path unchanged.
     card_max_input_width = 1490 if sys.platform == "win32" else None
-    windows_intra_op_threads = 4
+    windows_intra_op_threads = 2
     windows_inter_op_threads = 1
+    detector_model_type = "small"
+    recognizer_model_type = "tiny"
+    ocr_version = "PP-OCRv6"
+    width_height_ratio = 13
 
     def __init__(self) -> None:
         try:
-            from rapidocr import RapidOCR
+            import rapidocr
         except ImportError as exc:
             raise RuntimeError(
                 "RapidOCR is not installed. Run: pip install -r requirements.txt"
             ) from exc
+        RapidOCR = rapidocr.RapidOCR
+        model_type = getattr(rapidocr, "ModelType", None)
+        ocr_version = getattr(rapidocr, "OCRVersion", None)
         params = {
             "Global.use_cls": False,
             "Global.log_level": "warning",
+            # The belt input is roughly 12.5:1 after cropping. RapidOCR's
+            # default ratio of 8 pads that strip with empty pixels before the
+            # detector runs, wasting a substantial part of every inference.
+            "Global.width_height_ratio": self.width_height_ratio,
             # Avoid expanding a thin, wide belt strip to several thousand
             # pixels while retaining enough detail for card names.
             "Det.limit_type": "max",
             "Det.limit_side_len": 1600,
+            # The small detector retained every accepted read in the supplied
+            # captures; the tiny detector did not. Recognition is the inverse:
+            # the PP-OCRv6 tiny recognizer kept all reads while cutting most of
+            # the inference time and model size.
+            "Det.ocr_version": (
+                ocr_version(self.ocr_version) if ocr_version else self.ocr_version
+            ),
+            "Det.model_type": (
+                model_type(self.detector_model_type)
+                if model_type
+                else self.detector_model_type
+            ),
+            "Rec.ocr_version": (
+                ocr_version(self.ocr_version) if ocr_version else self.ocr_version
+            ),
+            "Rec.model_type": (
+                model_type(self.recognizer_model_type)
+                if model_type
+                else self.recognizer_model_type
+            ),
         }
         if sys.platform == "win32":
             # ONNX defaults to every available core. Belt OCR is continuous,
-            # so that default held roughly half of a 16-thread CPU busy. Four
-            # inference threads retain most scan throughput without competing
-            # with the game for the entire processor.
+            # so that default competes directly with Fortnite. Two inference
+            # threads gave the best throughput-per-CPU in the belt captures.
             params.update(
                 {
                     "EngineConfig.onnxruntime.intra_op_num_threads": (
@@ -80,7 +110,11 @@ class RapidOcrEngine:
         started = time.perf_counter()
         self._engine = RapidOCR(params=params)
         self.init_seconds = time.perf_counter() - started
-        self.engine_params = dict(params)
+        # Dev logs are JSON. Preserve readable values without leaking Enum
+        # objects into the logger.
+        self.engine_params = {
+            key: getattr(value, "value", value) for key, value in params.items()
+        }
         self.last_diagnostics: dict[str, object] = {}
 
     def read(self, image_bgr: np.ndarray) -> list[TextObservation]:

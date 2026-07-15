@@ -340,6 +340,74 @@ class TrackingTests(unittest.TestCase):
         # The adaptive horizon continues following the moving card.
         self.assertGreater(predicted.tracks[0].box[0], 325)
 
+    def test_point_three_fps_keeps_order_and_confirms_moving_cards(self):
+        tracker = BeltTracker(timeout_seconds=8.0)
+        scans = (
+            (
+                observation("A", 100, width=180, height=70),
+                observation("B", 500, width=180, height=70),
+                observation("C", 900, width=180, height=70),
+            ),
+            (
+                observation("NEW-1", 100, width=180, height=70),
+                observation("A", 500, width=180, height=70),
+                observation("B", 900, width=180, height=70),
+                observation("C", 1_300, width=180, height=70),
+            ),
+            (
+                observation("NEW-2", 100, width=180, height=70),
+                observation("NEW-1", 500, width=180, height=70),
+                observation("A", 900, width=180, height=70),
+                observation("B", 1_300, width=180, height=70),
+                observation("C", 1_700, width=180, height=70),
+            ),
+        )
+
+        events = []
+        for index, scan in enumerate(scans):
+            events.extend(tracker.update(scan, index * (10.0 / 3.0), 2_000).events)
+
+        self.assertEqual(["A", "B", "C"], [event.track.name for event in events])
+        self.assertTrue(all(event.track.confirmation_mode == "slow-cadence" for event in events))
+
+    def test_slow_cadence_confirmation_requires_three_strong_consecutive_reads(self):
+        weak = BeltTracker(timeout_seconds=8.0)
+        for index in range(3):
+            update = weak.update(
+                [observation("GONK", 100 + index * 300, confidence=0.75)],
+                index * 2.0,
+                1_200,
+            )
+        self.assertEqual([], update.events)
+
+        standard = weak.update(
+            [observation("GONK", 1_000, confidence=0.75)],
+            6.0,
+            1_200,
+        )
+        self.assertEqual(["entered"], [event.kind for event in standard.events])
+        self.assertEqual("standard", standard.events[0].track.confirmation_mode)
+
+        noisy = BeltTracker(timeout_seconds=8.0)
+        names = ("R6", "GONK", "R6")
+        for index, name in enumerate(names):
+            update = noisy.update(
+                [observation(name, 100 + index * 300)],
+                index * 2.0,
+                1_200,
+            )
+        self.assertEqual([], update.events)
+
+    def test_normal_cadence_still_requires_four_of_five_reads(self):
+        tracker = BeltTracker()
+        for index in range(3):
+            update = tracker.update([observation("R8", 100 + index * 20)], index * 0.3, 800)
+        self.assertEqual([], update.events)
+
+        confirmed = tracker.update([observation("R8", 160)], 0.9, 800)
+        self.assertEqual(["entered"], [event.kind for event in confirmed.events])
+        self.assertEqual("standard", confirmed.events[0].track.confirmation_mode)
+
     def test_outside_prediction_cannot_discard_video_style_votes(self):
         tracker = BeltTracker(timeout_seconds=2.0)
         for index, x in enumerate((100, 120, 140)):

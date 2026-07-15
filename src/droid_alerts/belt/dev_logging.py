@@ -112,7 +112,7 @@ class BeltDevLogger:
         if self.session_dir is None:
             return ""
         try:
-            return str(self.session_dir.relative_to(data_dir()))
+            return self.session_dir.relative_to(data_dir()).as_posix()
         except ValueError:
             return str(self.session_dir)
 
