@@ -188,6 +188,9 @@ class BeltTemplateSampleCollectorTests(unittest.TestCase):
             metadata = json.loads(review_metadata.read_text(encoding="utf-8"))
             self.assertEqual("conflicting_track_names", metadata["review_reason"])
             self.assertEqual({"MOUSE": 3, "R4": 1}, metadata["observed_names"])
+            self.assertEqual("MOUSE", metadata["confirmed_name"])
+            self.assertEqual("MOUSE", metadata["name"])
+            self.assertEqual("MOUSE", metadata["detected_name"])
 
     def test_edge_clipped_cards_are_not_saved_as_templates(self):
         with tempfile.TemporaryDirectory() as directory:
