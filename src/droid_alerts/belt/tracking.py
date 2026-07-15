@@ -109,13 +109,12 @@ class BeltTracker:
     track. Once confirmed, a contradictory name cannot advance or keep that
     identity alive.
 
-    Four matching labels in the latest five observations are required by
-    default. On hardware producing less than 0.75 OCR FPS, three consecutive,
-    high-confidence exact reads are accepted instead so short-lived cards still
-    have a physically possible path to confirmation. An ``entered`` event is
-    emitted immediately on confirmation, with no motion or screen-position
-    requirement. The track ID prevents duplicate alerts for later reads of the
-    same visible card.
+    Template identities require four consecutive labels by default. On hardware
+    producing less than 0.75 scan FPS, three consecutive, high-confidence exact
+    reads are accepted instead so short-lived cards still have a physically
+    possible path to confirmation. Template events also wait for three stable
+    family and rarity reads. The track ID prevents duplicate alerts for later
+    reads of the same visible card.
     """
 
     def __init__(
@@ -130,18 +129,24 @@ class BeltTracker:
         slow_cadence_seconds: float = 4.0 / 3.0,
         slow_minimum_confidence: float = 0.78,
         template_conflict_grace_seconds: float = 0.50,
+        template_attribute_confirmation_hits: int = 3,
     ) -> None:
         self.confirmation_hits = max(1, int(confirmation_hits))
         self.slow_confirmation_hits = max(2, int(slow_confirmation_hits))
         self.confirmation_window = max(
             self.confirmation_hits,
             self.slow_confirmation_hits,
+            int(template_attribute_confirmation_hits),
             int(confirmation_window),
         )
         # A lone color/component read is not enough to label an alert. Keep
         # name confirmation just as fast, while requiring one repeat for the
         # optional card attributes whenever the tracker itself uses >1 read.
         self.attribute_confirmation_hits = min(2, self.confirmation_hits)
+        self.template_attribute_confirmation_hits = max(
+            2,
+            int(template_attribute_confirmation_hits),
+        )
         self.timeout_seconds = max(0.2, float(timeout_seconds))
         self.association_distance_ratio = min(1.0, max(0.02, float(association_distance_ratio)))
         self.outside_margin = max(0.0, float(outside_margin))
@@ -707,6 +712,19 @@ class BeltTracker:
             for name, value, confidence in votes
             if name == track.name and value
         ]
+        if self._is_template_track(track):
+            recent = matching[-self.template_attribute_confirmation_hits :]
+            if (
+                len(recent) < self.template_attribute_confirmation_hits
+                or len({value for value, _confidence in recent}) != 1
+            ):
+                return
+            value = recent[-1][0]
+            confidences = [confidence for _value, confidence in recent]
+            setattr(track, value_attribute, value)
+            setattr(track, confidence_attribute, sum(confidences) / len(confidences))
+            return
+
         counts = Counter(value for value, _confidence in matching)
         if not counts:
             return
@@ -726,7 +744,14 @@ class BeltTracker:
             return None
         ranked = counts.most_common()
         candidate, votes = ranked[0]
-        if votes >= self.confirmation_hits and not (
+        if self._is_template_track(track):
+            recent_names = list(track.identity_votes)[-self.confirmation_hits :]
+            if (
+                len(recent_names) == self.confirmation_hits
+                and len(set(recent_names)) == 1
+            ):
+                return recent_names[-1], "standard"
+        elif votes >= self.confirmation_hits and not (
             len(ranked) > 1 and ranked[1][1] == votes
         ):
             return candidate, "standard"
@@ -748,7 +773,18 @@ class BeltTracker:
 
     @staticmethod
     def _should_emit_entered(track: Track) -> bool:
-        return track.confirmed and not track.entered_emitted
+        if not track.confirmed or track.entered_emitted:
+            return False
+        if BeltTracker._is_template_track(track):
+            return bool(track.family and track.rarity)
+        return True
+
+    @staticmethod
+    def _is_template_track(track: Track) -> bool:
+        raw_texts = tuple(track.vote_raw_texts)
+        return bool(raw_texts) and all(
+            raw_text.startswith("template:") for raw_text in raw_texts
+        )
 
     def _is_outside(self, box: Box, frame_width: int) -> bool:
         center_x, _ = _center(box)

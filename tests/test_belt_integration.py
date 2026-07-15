@@ -14,7 +14,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.belt.events import log_track_event
-from droid_alerts.belt.region import RelativeRegion, load_region, save_region
+from droid_alerts.belt.region import DEFAULT_REGION, RelativeRegion, load_region, save_region
 from droid_alerts.belt.targets import (
     BELT_FAMILY_ORDER,
     belt_family_meets_minimum,
@@ -250,7 +250,7 @@ class BeltConfigAndRegionTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch("droid_alerts.belt.region.regions_path", return_value=path):
-                self.assertIsNone(load_region(monitor))
+                self.assertEqual(DEFAULT_REGION, load_region(monitor))
 
 
 class BeltUiWindowsTests(unittest.TestCase):
@@ -266,6 +266,7 @@ class BeltUiWindowsTests(unittest.TestCase):
         )
         app.setting_vars = {"belt_overlay_enabled": FakeVar(True)}
         app.belt_overlay = FakeOverlay()
+        app._belt_overlay_requested = False
         app._current_monitor_info = lambda: MonitorInfo(
             left=0,
             top=0,
@@ -276,13 +277,34 @@ class BeltUiWindowsTests(unittest.TestCase):
         )
         return app
 
-    def test_enabled_overlay_previews_region_before_tracking(self):
+    def test_enabled_overlay_waits_for_belt_setup_before_previewing_region(self):
         app = self.fake_overlay_app()
 
         DroidAlertsApp._configure_belt_overlay(app)
 
+        self.assertIsNone(app.belt_overlay.configured)
+        app._belt_overlay_requested = True
+        DroidAlertsApp._configure_belt_overlay(app)
+
         self.assertEqual(app.belt_region, app.belt_overlay.configured[1])
         self.assertEqual([], app.belt_overlay.tracks)
+
+    def test_opening_belt_tab_starts_overlay_preview(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.belt_tab = object()
+        app.notebook = Mock()
+        app.notebook.select.return_value = "belt-tab"
+        app.root = Mock()
+        app.root.nametowidget.return_value = app.belt_tab
+        app._show_belt_cpu_warning_if_needed = Mock()
+        app._configure_belt_overlay = Mock()
+        app._belt_overlay_requested = False
+
+        DroidAlertsApp._on_belt_tab_opened(app)
+
+        self.assertTrue(app._belt_overlay_requested)
+        app._show_belt_cpu_warning_if_needed.assert_called_once_with()
+        app._configure_belt_overlay.assert_called_once_with()
 
     def test_region_selection_minimizes_before_capture_and_restores_on_cancel(self):
         app = self.fake_overlay_app()

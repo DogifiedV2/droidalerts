@@ -25,7 +25,7 @@ MINIMUM_LABEL_READS = 3
 MINIMUM_SAMPLE_IDENTITY_CONFIDENCE = 0.90
 DUPLICATE_HASH_DISTANCE = 6
 STALE_APPEARANCE_SECONDS = 75.0
-_INDEX_VERSION = 2
+_INDEX_VERSION = 3
 
 
 def belt_template_samples_dir() -> Path:
@@ -60,6 +60,9 @@ class _BestCrop:
     rarity: str
     rarity_confidence: float
     identity_confidence: float
+    raw_best_similarity: float
+    runner_up_identity: str
+    identity_margin: float
     quality_score: float
     quality_components: dict[str, float]
     perceptual_hash: int
@@ -443,6 +446,9 @@ class BeltTemplateSampleCollector:
                 sum(confidences) / len(confidences) if confidences else 0.0
             ),
             "best_identity_confidence": best.identity_confidence,
+            "raw_best_similarity": best.raw_best_similarity,
+            "runner_up_identity": best.runner_up_identity,
+            "identity_margin": best.identity_margin,
             "quality_score": best.quality_score,
             "quality_components": best.quality_components,
             "perceptual_hash": f"{best.perceptual_hash:016x}",
@@ -514,16 +520,16 @@ def _build_best_crop(
         context_width + round(2.0 * name_height),
     )
     left = round(center_x - card_width / 2.0)
-    top = max(0, context_y)
+    top = context_y
     right = left + card_width
-    bottom = min(frame_height, context_y + reference_height)
+    bottom = context_y + reference_height
     art_left = left + round(card_width * 0.18)
     art_top = max(top + round(reference_height * 0.08), round(y - reference_height * 0.58))
     art_right = right - round(card_width * 0.18)
     art_bottom = round(y - 0.1 * name_height)
     # A crop touching an edge may be missing pixels even when its identity can
     # still be matched. Those partial cards are unsuitable review examples.
-    if left < 0 or right > frame_width:
+    if left <= 0 or top <= 0 or right >= frame_width or bottom >= frame_height:
         return None
     if (
         right - left < 24
@@ -573,6 +579,9 @@ def _build_best_crop(
         rarity=str(candidate.rarity),
         rarity_confidence=float(candidate.rarity_confidence),
         identity_confidence=confidence,
+        raw_best_similarity=float(candidate.raw_best_similarity),
+        runner_up_identity=str(candidate.runner_up_identity),
+        identity_margin=float(candidate.identity_margin),
         quality_score=quality_score,
         quality_components=quality_components,
         perceptual_hash=_difference_hash(art),

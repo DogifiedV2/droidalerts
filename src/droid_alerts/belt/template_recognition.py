@@ -229,7 +229,10 @@ class BeltTemplateIndex:
 @dataclass(frozen=True)
 class TemplateRecognitionConfig:
     minimum_identity_similarity: float = 0.80
-    minimum_identity_margin: float = 0.025
+    # The retained stress captures contain repeatable 2BB/BB, DRK-1/VECT-ARM,
+    # R3/R9, and PIT/ID10 confusions below this separation. It is safer to
+    # wait for a clearer frame than publish a plausible but wrong identity.
+    minimum_identity_margin: float = 0.060
     minimum_nameplate_dark_fraction: float = 0.33
     nameplate_dark_value: int = 45
     nameplate_top_ratio: float = 0.62
@@ -243,6 +246,7 @@ class TemplateRecognitionConfig:
 class _Proposal:
     x: int
     name: str
+    runner_up_name: str
     similarity: float
     margin: float
     dark_fraction: float
@@ -301,7 +305,11 @@ class TemplateCardRecognizer:
             vertical_anchor,
         )
         result = self._analyze_aligned(crop)
-        accepted_count = int(result.diagnostics.get("accepted_count", 0))
+        accepted_count = self._safe_geometry_accepted_count(
+            result,
+            crop_top=crop_top,
+            full_height=frame_height,
+        )
         if accepted_count:
             self._geometry_misses = 0
         else:
@@ -353,9 +361,28 @@ class TemplateCardRecognizer:
         accepted_attempts = [
             attempt
             for attempt in attempt_values
-            if int(attempt[4].diagnostics.get("accepted_count", 0)) > 0
+            if self._safe_geometry_accepted_count(
+                attempt[4],
+                crop_top=attempt[2],
+                full_height=frame_bgr.shape[0],
+            )
+            > 0
         ]
-        if accepted_attempts:
+        edge_spanning_attempts = [
+            attempt
+            for attempt in attempt_values
+            if attempt[2] == 0
+            and int(attempt[4].diagnostics.get("frame_shape", [0])[0])
+            >= frame_bgr.shape[0]
+            and int(attempt[4].diagnostics.get("accepted_count", 0)) > 0
+        ]
+        if edge_spanning_attempts:
+            # If the unscaled full region already looks like a card, a smaller
+            # internal retry would merely crop a card that touches the capture
+            # boundary and pretend it is complete. Keep the edge-spanning
+            # result so _geometry_result can quarantine it explicitly.
+            selected = max(edge_spanning_attempts, key=self._geometry_score)
+        elif accepted_attempts:
             selected = max(accepted_attempts, key=self._geometry_score)
         else:
             # An empty belt contains no evidence with which to calibrate. Keep
@@ -426,6 +453,18 @@ class TemplateCardRecognizer:
         )
 
     @staticmethod
+    def _safe_geometry_accepted_count(
+        result: CardFrameResult,
+        *,
+        crop_top: int,
+        full_height: int,
+    ) -> int:
+        crop_height = int(result.diagnostics.get("frame_shape", [0])[0])
+        if crop_top <= 0 or crop_top + crop_height >= full_height:
+            return 0
+        return sum(candidate.accepted for candidate in result.candidates)
+
+    @staticmethod
     def _geometry_score(
         attempt: tuple[float, float, int, float, CardFrameResult],
     ) -> tuple[int, float, int, float]:
@@ -454,24 +493,44 @@ class TemplateCardRecognizer:
     ) -> CardFrameResult:
         crop_height = int(result.diagnostics.get("frame_shape", [full_frame.shape[0]])[0])
         candidates = result.candidates
-        if crop_top:
-            translated: list[CardCandidate] = []
-            for candidate in candidates:
-                context = replace(
-                    candidate.context,
-                    art_box=_offset_box_y(candidate.context.art_box, crop_top),
-                    card_box=_offset_box_y(candidate.context.card_box, crop_top),
+        translated: list[CardCandidate] = []
+        for candidate in candidates:
+            context = replace(
+                candidate.context,
+                art_box=_offset_box_y(candidate.context.art_box, crop_top),
+                card_box=_offset_box_y(candidate.context.card_box, crop_top),
+            )
+            card_x, card_y, card_width, card_height = context.card_box
+            touches_edge = (
+                card_x <= 0
+                or card_y <= 0
+                or card_x + card_width >= full_frame.shape[1]
+                or card_y + card_height >= full_frame.shape[0]
+            )
+            accepted = candidate.accepted and not touches_edge
+            reason = (
+                "card_touches_region_edge"
+                if candidate.accepted and touches_edge
+                else candidate.reason
+            )
+            if touches_edge and context.accepted:
+                context = replace(context, accepted=False, reason="card_touches_region_edge")
+            translated.append(
+                replace(
+                    candidate,
+                    name_box=_offset_box_y(candidate.name_box, crop_top),
+                    context=context,
+                    accepted=accepted,
+                    reason=reason,
                 )
-                translated.append(
-                    replace(
-                        candidate,
-                        name_box=_offset_box_y(candidate.name_box, crop_top),
-                        context=context,
-                    )
-                )
-            candidates = tuple(translated)
+            )
+        candidates = tuple(translated)
 
         diagnostics = dict(result.diagnostics)
+        diagnostics["accepted_count"] = sum(candidate.accepted for candidate in candidates)
+        diagnostics["edge_rejected_count"] = sum(
+            candidate.reason == "card_touches_region_edge" for candidate in candidates
+        )
         diagnostics.update(
             {
                 "frame_shape": list(full_frame.shape),
@@ -548,7 +607,8 @@ class TemplateCardRecognizer:
             best_scores = name_scores[np.arange(len(name_scores)), best_name_indices]
             runner_up = name_scores.copy()
             runner_up[np.arange(len(runner_up)), best_name_indices] = -1.0
-            margins = best_scores - np.max(runner_up, axis=1)
+            runner_up_indices = np.argmax(runner_up, axis=1)
+            margins = best_scores - runner_up[np.arange(len(runner_up)), runner_up_indices]
 
             for row, source_index in enumerate(evidence_indices):
                 similarity = float(best_scores[row])
@@ -563,6 +623,7 @@ class TemplateCardRecognizer:
                     _Proposal(
                         x=int(x_positions[source_index]),
                         name=self.index.identity_names[int(best_name_indices[row])],
+                        runner_up_name=self.index.identity_names[int(runner_up_indices[row])],
                         similarity=similarity,
                         margin=margin,
                         dark_fraction=float(dark_fractions[source_index]),
@@ -659,7 +720,7 @@ class TemplateCardRecognizer:
         art_width = max(16, round(frame_height * self.index.art_width_ratio))
         art_left = round(frame_height * self.index.art_left_ratio)
         card_lefts = x_positions - art_left
-        fully_visible = (card_lefts >= 0) & (card_lefts + card_width <= frame_width)
+        fully_visible = (card_lefts > 0) & (card_lefts + card_width < frame_width)
 
         band_top = max(0, round(frame_height * self.config.nameplate_top_ratio))
         band_bottom = min(
@@ -766,6 +827,9 @@ class TemplateCardRecognizer:
             family_confidence=family_confidence,
             rarity=rarity,
             rarity_confidence=rarity_confidence,
+            raw_best_similarity=proposal.similarity,
+            runner_up_identity=proposal.runner_up_name,
+            identity_margin=proposal.margin,
         )
 
     def _classify_family(

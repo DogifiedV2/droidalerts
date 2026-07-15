@@ -213,6 +213,10 @@ class DroidAlertsApp:
         self.belt_selector = None
         self._belt_selector_root_state: str | None = None
         self.belt_overlay = BeltOverlay(self.root)
+        # Loading settings at application startup resolves the default region,
+        # but the overlay is opt-in until the user opens Belt setup or starts
+        # tracking. This keeps normal chat-only launches unobstructed.
+        self._belt_overlay_requested = False
         self._belt_visible_tracks: list[dict[str, object]] = []
         self.region_overlay: tk.Toplevel | None = None
         self.region_overlay_windows: list[tk.Toplevel] = []
@@ -1240,6 +1244,8 @@ class DroidAlertsApp:
             return
         if selected is self.belt_tab:
             self._show_belt_cpu_warning_if_needed()
+            self._belt_overlay_requested = True
+            self._configure_belt_overlay()
 
     def _show_belt_cpu_warning_if_needed(self) -> None:
         config = getattr(self, "config", None) or load_config()
@@ -1709,6 +1715,7 @@ class DroidAlertsApp:
             return
         if not self._confirm_belt_region_guide_if_needed():
             return
+        self._belt_overlay_requested = True
         self.belt_overlay.close()
         try:
             self._belt_selector_root_state = str(self.root.state())
@@ -2011,6 +2018,7 @@ class DroidAlertsApp:
 
     def _belt_overlay_changed(self) -> None:
         if bool(self._value("belt_overlay_enabled")):
+            self._belt_overlay_requested = True
             self._configure_belt_overlay()
         else:
             self.belt_overlay.close()
@@ -2027,7 +2035,8 @@ class DroidAlertsApp:
     def _configure_belt_overlay(self) -> None:
         self.belt_overlay.close()
         if (
-            not bool(self._value("belt_overlay_enabled"))
+            not getattr(self, "_belt_overlay_requested", False)
+            or not bool(self._value("belt_overlay_enabled"))
             or self.belt_region is None
         ):
             return
@@ -2229,8 +2238,8 @@ class DroidAlertsApp:
             steps=(
                 "Use the recommended and only officially supported setup shown during the first "
                 "belt selection: stand at the start of the belt and keep the same camera angle.",
-                "Click Select Belt Region, then match the cyan example box with two complete "
-                "blueprint cards visible. Price labels may be inside the box; they are ignored.",
+                "Click Select Belt Region, then click and drag to match the cyan example box with "
+                "two complete blueprint cards visible. Price labels may be inside the box; they are ignored.",
                 "Press Enter to save the selected region.",
                 "Enable Show belt overlay and confirm the box matches the official example. Other "
                 "angles, distances, and framing are not officially supported.",
@@ -2277,6 +2286,8 @@ class DroidAlertsApp:
         if monitor is None:
             self.belt_status_var.set("Display unavailable")
             self.belt_detail_var.set("Choose an available game display from Dashboard.")
+            return
+        if not self._confirm_belt_region_guide_if_needed():
             return
         relative = load_belt_region(monitor)
         self.belt_region = relative.to_pixels(monitor) if relative is not None else None
@@ -2331,6 +2342,7 @@ class DroidAlertsApp:
         self._set_belt_header_state("Running")
         self._set_belt_loading_state()
         self._set_belt_controls(running=True)
+        self._belt_overlay_requested = True
         self._configure_belt_overlay()
         self.detail_var.set("Belt Tracker started")
 
