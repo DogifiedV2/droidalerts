@@ -131,6 +131,25 @@ class TemplateCardRecognizerTests(unittest.TestCase):
         self.assertEqual([], result.observations)
         self.assertEqual(0, result.diagnostics["card_window_count"])
 
+    def test_geometry_search_handles_space_above_and_below_cards(self):
+        frame_height = 405
+        crop_top = 71
+        frame = np.full((frame_height, 820, 3), (110, 95, 80), dtype=np.uint8)
+        r2_index = DROID_NAMES.index("R2")
+        gonk_index = DROID_NAMES.index("GONK")
+        frame[crop_top : crop_top + HEIGHT, 90 : 90 + CARD_WIDTH] = card(r2_index + 1)
+        frame[crop_top : crop_top + HEIGHT, 480 : 480 + CARD_WIDTH] = card(gonk_index + 1)
+
+        result = TemplateCardRecognizer(
+            synthetic_index(),
+            config=TemplateRecognitionConfig(minimum_identity_margin=0.01),
+        ).analyze(frame)
+
+        self.assertEqual(["R2", "GONK"], [item.match.name for item in result.observations])
+        self.assertEqual(crop_top, result.diagnostics["geometry_crop_top"])
+        self.assertEqual(HEIGHT, result.diagnostics["geometry_crop_height"])
+        self.assertAlmostEqual(crop_top / frame_height, result.diagnostics["geometry_top_ratio"], places=4)
+
     def test_marginal_beskar_match_stays_unknown(self):
         index = synthetic_index()
         histograms = np.zeros_like(index.family_histograms)

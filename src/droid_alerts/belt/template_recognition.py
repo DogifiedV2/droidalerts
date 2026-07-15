@@ -55,12 +55,11 @@ _FAMILY_MINIMUM_MARGINS = {
     "Beskar": 0.020,
 }
 
-# Belt regions are often selected with the card row filling the full height,
-# but some users include the price labels above it. Probe a small set of
-# bottom-anchored heights once, then keep the winning geometry for normal
-# single-pass scans. The lower bound still retains the whole printed
-# nameplate in the price-inclusive layout used by the game.
-_GEOMETRY_HEIGHT_RATIOS = (1.0, 0.92, 0.84, 0.76, 0.72)
+# Belt regions can include price labels above the cards and conveyor scenery
+# below them. Probe a small set of heights at top, center, and bottom anchors,
+# then keep the winning geometry for normal single-pass scans.
+_GEOMETRY_HEIGHT_RATIOS = (1.0, 0.84, 0.76, 0.72, 0.65, 0.58)
+_GEOMETRY_VERTICAL_ANCHORS = (0.0, 0.25, 0.45, 0.5, 0.75, 1.0)
 _GEOMETRY_RETRY_MISSES = 8
 
 
@@ -274,7 +273,7 @@ class TemplateCardRecognizer:
         started = time.perf_counter()
         self.index = index or BeltTemplateIndex.load(index_path)
         self.config = config or TemplateRecognitionConfig()
-        self._geometry_height_ratio: float | None = None
+        self._geometry: tuple[float, float] | None = None
         self._geometry_misses = 0
         self.init_seconds = time.perf_counter() - started
 
@@ -292,12 +291,14 @@ class TemplateCardRecognizer:
         if frame_height < 80 or frame_width < 80:
             return self._analyze_aligned(frame_bgr)
 
-        if self._geometry_height_ratio is None:
+        if self._geometry is None:
             return self._search_geometry(frame_bgr, started=started)
 
-        crop, crop_top, actual_ratio = self._geometry_crop(
+        requested_ratio, vertical_anchor = self._geometry
+        crop, crop_top, actual_ratio, actual_top_ratio = self._geometry_crop(
             frame_bgr,
-            self._geometry_height_ratio,
+            requested_ratio,
+            vertical_anchor,
         )
         result = self._analyze_aligned(crop)
         accepted_count = int(result.diagnostics.get("accepted_count", 0))
@@ -309,13 +310,13 @@ class TemplateCardRecognizer:
                 return self._search_geometry(
                     frame_bgr,
                     started=started,
-                    existing=(actual_ratio, crop_top, result),
                 )
         return self._geometry_result(
             result,
             frame_bgr,
             crop_top=crop_top,
             ratio=actual_ratio,
+            top_ratio=actual_top_ratio,
             searched=False,
             started=started,
         )
@@ -325,68 +326,82 @@ class TemplateCardRecognizer:
         frame_bgr: np.ndarray,
         *,
         started: float,
-        existing: tuple[float, int, CardFrameResult] | None = None,
     ) -> CardFrameResult:
-        attempts: dict[int, tuple[float, int, CardFrameResult]] = {}
-        if existing is not None:
-            ratio, crop_top, result = existing
-            attempts[result.diagnostics.get("frame_shape", [0])[0]] = (
-                ratio,
-                crop_top,
-                result,
-            )
-
+        attempts: dict[
+            tuple[int, int],
+            tuple[float, float, int, float, CardFrameResult],
+        ] = {}
         for requested_ratio in _GEOMETRY_HEIGHT_RATIOS:
-            crop, crop_top, actual_ratio = self._geometry_crop(frame_bgr, requested_ratio)
-            crop_height = crop.shape[0]
-            if crop_height in attempts:
-                continue
-            attempts[crop_height] = (
-                actual_ratio,
-                crop_top,
-                self._analyze_aligned(crop),
-            )
+            for vertical_anchor in _GEOMETRY_VERTICAL_ANCHORS:
+                crop, crop_top, actual_ratio, actual_top_ratio = self._geometry_crop(
+                    frame_bgr,
+                    requested_ratio,
+                    vertical_anchor,
+                )
+                key = crop.shape[0], crop_top
+                if key in attempts:
+                    continue
+                attempts[key] = (
+                    requested_ratio,
+                    vertical_anchor,
+                    crop_top,
+                    actual_top_ratio,
+                    self._analyze_aligned(crop),
+                )
 
         attempt_values = list(attempts.values())
         accepted_attempts = [
             attempt
             for attempt in attempt_values
-            if int(attempt[2].diagnostics.get("accepted_count", 0)) > 0
+            if int(attempt[4].diagnostics.get("accepted_count", 0)) > 0
         ]
         if accepted_attempts:
             selected = max(accepted_attempts, key=self._geometry_score)
         else:
             # An empty belt contains no evidence with which to calibrate. Keep
             # the full-height/default geometry until cards enter the region.
-            selected = max(attempt_values, key=lambda attempt: attempt[0])
-
-        ratio, crop_top, result = selected
-        self._geometry_height_ratio = ratio
-        self._geometry_misses = 0
-        summaries = [
-            {
-                "height_ratio": round(attempt_ratio, 4),
-                "accepted_count": int(attempt_result.diagnostics.get("accepted_count", 0)),
-                "candidate_count": len(attempt_result.candidates),
-                "accepted_confidence": round(
-                    sum(
-                        candidate.ocr_confidence
-                        for candidate in attempt_result.candidates
-                        if candidate.accepted
-                    ),
-                    4,
-                ),
-            }
-            for attempt_ratio, _attempt_top, attempt_result in sorted(
+            selected = max(
                 attempt_values,
-                key=lambda attempt: -attempt[0],
+                key=lambda attempt: attempt[4].diagnostics["frame_shape"][0],
             )
-        ]
+
+        requested_ratio, vertical_anchor, crop_top, top_ratio, result = selected
+        actual_ratio = result.diagnostics["frame_shape"][0] / frame_bgr.shape[0]
+        self._geometry = requested_ratio, vertical_anchor
+        self._geometry_misses = 0
+        summaries = []
+        for _requested_ratio, attempt_anchor, attempt_top, attempt_top_ratio, attempt_result in sorted(
+            attempt_values,
+            key=lambda attempt: (-attempt[4].diagnostics["frame_shape"][0], attempt[2]),
+        ):
+            summaries.append(
+                {
+                    "height_ratio": round(
+                        attempt_result.diagnostics["frame_shape"][0] / frame_bgr.shape[0],
+                        4,
+                    ),
+                    "top_ratio": round(attempt_top_ratio, 4),
+                    "vertical_anchor": attempt_anchor,
+                    "accepted_count": int(
+                        attempt_result.diagnostics.get("accepted_count", 0)
+                    ),
+                    "candidate_count": len(attempt_result.candidates),
+                    "accepted_confidence": round(
+                        sum(
+                            candidate.ocr_confidence
+                            for candidate in attempt_result.candidates
+                            if candidate.accepted
+                        ),
+                        4,
+                    ),
+                }
+            )
         return self._geometry_result(
             result,
             frame_bgr,
             crop_top=crop_top,
-            ratio=ratio,
+            ratio=actual_ratio,
+            top_ratio=top_ratio,
             searched=True,
             started=started,
             attempts=summaries,
@@ -396,17 +411,26 @@ class TemplateCardRecognizer:
     def _geometry_crop(
         frame_bgr: np.ndarray,
         ratio: float,
-    ) -> tuple[np.ndarray, int, float]:
+        vertical_anchor: float,
+    ) -> tuple[np.ndarray, int, float, float]:
         frame_height = frame_bgr.shape[0]
         crop_height = min(frame_height, max(80, round(frame_height * ratio)))
-        crop_top = frame_height - crop_height
-        return frame_bgr[crop_top:], crop_top, crop_height / frame_height
+        available = frame_height - crop_height
+        crop_top = round(available * min(1.0, max(0.0, vertical_anchor)))
+        crop_bottom = crop_top + crop_height
+        return (
+            frame_bgr[crop_top:crop_bottom],
+            crop_top,
+            crop_height / frame_height,
+            crop_top / frame_height,
+        )
 
     @staticmethod
     def _geometry_score(
-        attempt: tuple[float, int, CardFrameResult],
+        attempt: tuple[float, float, int, float, CardFrameResult],
     ) -> tuple[int, float, int, float]:
-        ratio, _crop_top, result = attempt
+        _requested_ratio, _vertical_anchor, _crop_top, _top_ratio, result = attempt
+        ratio = result.diagnostics["frame_shape"][0]
         accepted = [candidate for candidate in result.candidates if candidate.accepted]
         rejected_count = len(result.candidates) - len(accepted)
         return (
@@ -423,10 +447,12 @@ class TemplateCardRecognizer:
         *,
         crop_top: int,
         ratio: float,
+        top_ratio: float,
         searched: bool,
         started: float,
         attempts: list[dict[str, object]] | None = None,
     ) -> CardFrameResult:
+        crop_height = int(result.diagnostics.get("frame_shape", [full_frame.shape[0]])[0])
         candidates = result.candidates
         if crop_top:
             translated: list[CardCandidate] = []
@@ -450,8 +476,9 @@ class TemplateCardRecognizer:
             {
                 "frame_shape": list(full_frame.shape),
                 "geometry_crop_top": crop_top,
-                "geometry_crop_height": full_frame.shape[0] - crop_top,
+                "geometry_crop_height": crop_height,
                 "geometry_height_ratio": round(ratio, 4),
+                "geometry_top_ratio": round(top_ratio, 4),
                 "geometry_searched": searched,
                 "total_seconds": time.perf_counter() - started,
             }
