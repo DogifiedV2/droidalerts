@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+import time
 from typing import Iterable
 
 import cv2
@@ -241,6 +242,7 @@ class CardFrameResult:
 
     text_observations: tuple[TextObservation, ...]
     candidates: tuple[CardCandidate, ...]
+    diagnostics: dict[str, object] = field(default_factory=dict)
 
     @property
     def observations(self) -> list[DroidObservation]:
@@ -286,13 +288,30 @@ class CardRecognizer:
         }
 
     def analyze(self, frame_bgr: np.ndarray) -> CardFrameResult:
+        started = time.perf_counter()
         _validate_bgr_frame(frame_bgr)
         text_observations = tuple(self._read_text(frame_bgr))
+        read_at = time.perf_counter()
         exact_candidates = _exact_text_candidates(text_observations, frame_bgr.shape)
+        matched_at = time.perf_counter()
         candidates = tuple(self._analyze_candidate(frame_bgr, item) for item in exact_candidates)
+        context_at = time.perf_counter()
         candidates = self._keep_dominant_card_row(candidates)
+        row_at = time.perf_counter()
         candidates = self._attach_card_attributes(candidates, text_observations, frame_bgr)
-        return CardFrameResult(text_observations, candidates)
+        completed_at = time.perf_counter()
+        diagnostics = {
+            "frame_shape": list(frame_bgr.shape),
+            "ocr_read_seconds": read_at - started,
+            "exact_match_seconds": matched_at - read_at,
+            "card_context_seconds": context_at - matched_at,
+            "row_filter_seconds": row_at - context_at,
+            "attribute_seconds": completed_at - row_at,
+            "total_seconds": completed_at - started,
+            "ocr_input": dict(getattr(self, "_last_ocr_input_details", {})),
+            "engine": dict(getattr(self.ocr_engine, "last_diagnostics", {})),
+        }
+        return CardFrameResult(text_observations, candidates, diagnostics)
 
     def recognize(self, frame_bgr: np.ndarray) -> list[DroidObservation]:
         return self.analyze(frame_bgr).observations
@@ -350,6 +369,15 @@ class CardRecognizer:
                 fy=scale,
                 interpolation=cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA,
             )
+        self._last_ocr_input_details = {
+            "frame_shape": list(frame_bgr.shape),
+            "band_shape": list(source.shape),
+            "ocr_input_shape": list(ocr_input.shape),
+            "band": list(band) if isinstance(band, (tuple, list)) else None,
+            "y_offset": y_offset,
+            "scale": scale,
+            "max_input_width": max_width or None,
+        }
         observations: list[TextObservation] = []
         for item in self.ocr_engine.read(ocr_input):
             x, y, width, height = item.box

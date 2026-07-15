@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import sys
+import time
 from typing import Any, Protocol
 
 import cv2
@@ -76,12 +77,29 @@ class RapidOcrEngine:
                     ),
                 }
             )
+        started = time.perf_counter()
         self._engine = RapidOCR(params=params)
+        self.init_seconds = time.perf_counter() - started
+        self.engine_params = dict(params)
+        self.last_diagnostics: dict[str, object] = {}
 
     def read(self, image_bgr: np.ndarray) -> list[TextObservation]:
+        started = time.perf_counter()
         rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        converted_at = time.perf_counter()
         result = self._engine(rgb, use_cls=False)
-        return _parse_rapidocr_result(result)
+        inferred_at = time.perf_counter()
+        observations = _parse_rapidocr_result(result)
+        completed_at = time.perf_counter()
+        self.last_diagnostics = {
+            "input_shape": list(image_bgr.shape),
+            "color_conversion_seconds": converted_at - started,
+            "inference_seconds": inferred_at - converted_at,
+            "parse_seconds": completed_at - inferred_at,
+            "total_seconds": completed_at - started,
+            "observation_count": len(observations),
+        }
+        return observations
 
 
 def _quad_to_box(points: Any) -> tuple[int, int, int, int] | None:

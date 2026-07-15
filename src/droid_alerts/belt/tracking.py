@@ -132,6 +132,22 @@ class BeltTracker:
         self._tracks.clear()
         self._next_id = 1
 
+    def diagnostic_state(self) -> list[dict[str, object]]:
+        return [
+            {
+                "id": track.id,
+                "name": track.name,
+                "confirmed": track.confirmed,
+                "hits": track.hits,
+                "identity_votes": list(track.identity_votes),
+                "last_seen_at": track.last_seen_at,
+                "velocity_x": track.velocity_x,
+                "velocity_y": track.velocity_y,
+                "box": list(track.box),
+            }
+            for track in self._tracks
+        ]
+
     def update(
         self,
         observations: Sequence[DroidObservation],
