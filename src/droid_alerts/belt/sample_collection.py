@@ -501,23 +501,23 @@ def _build_best_crop(
     x, y, name_width, name_height = (int(value) for value in candidate.name_box)
     if name_height <= 0:
         return None
-    # The selected belt region already defines the complete vertical card area.
-    # Use its height as the card-scale reference so long names rendered with a
-    # smaller font do not produce vertically clipped crops. The recognizer's
-    # context box and a name-relative anchor establish the horizontal center.
-    context_x, _context_y, context_width, _context_height = candidate.context.card_box
+    # The recognizer may align a price-inclusive belt selection to a smaller,
+    # bottom-anchored card area. Respect that vertical context so review images
+    # contain the blueprint itself instead of the price label above it.
+    context_x, context_y, context_width, context_height = candidate.context.card_box
+    reference_height = context_height if context_height > 0 else frame_height
     context_center_x = context_x + context_width / 2.0
     center_x = max(context_center_x, x + 2.6 * name_height)
     card_width = max(
-        round(frame_height * 0.90),
+        round(reference_height * 0.90),
         context_width + round(2.0 * name_height),
     )
     left = round(center_x - card_width / 2.0)
-    top = 0
+    top = max(0, context_y)
     right = left + card_width
-    bottom = frame_height
+    bottom = min(frame_height, context_y + reference_height)
     art_left = left + round(card_width * 0.18)
-    art_top = max(round(frame_height * 0.08), round(y - frame_height * 0.58))
+    art_top = max(top + round(reference_height * 0.08), round(y - reference_height * 0.58))
     art_right = right - round(card_width * 0.18)
     art_bottom = round(y - 0.1 * name_height)
     # A crop touching an edge may be missing pixels even when its identity can

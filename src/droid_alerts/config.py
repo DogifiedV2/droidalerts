@@ -164,7 +164,7 @@ class AppConfig:
     belt_active_scan_fps: int = 8
     belt_cpu_warning_confirmed: bool = False
     belt_region_guide_confirmed: bool = False
-    # Droid name -> minimum family tier. Empty means no Belt Tracker alerts.
+    # Droid name -> minimum visual rarity tier. Empty means no Belt Tracker alerts.
     belt_target_tiers: dict[str, str] = field(default_factory=dict)
     retention_days: int = 30
     max_storage_mb: int = 500

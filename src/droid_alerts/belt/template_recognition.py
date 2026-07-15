@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import time
 
@@ -8,14 +8,13 @@ import cv2
 import numpy as np
 
 from ..config import templates_dir
-from .names import DROID_NAMES
+from .names import DROID_NAMES, droid_class
 from .recognition import (
     CARD_FAMILIES,
     CardCandidate,
     CardContext,
     CardFrameResult,
     classify_card_family_border,
-    classify_card_rarity,
 )
 
 
@@ -55,6 +54,14 @@ _FAMILY_MINIMUM_MARGINS = {
     # later, clearer frames can still attach the family to the confirmed track.
     "Beskar": 0.020,
 }
+
+# Belt regions are often selected with the card row filling the full height,
+# but some users include the price labels above it. Probe a small set of
+# bottom-anchored heights once, then keep the winning geometry for normal
+# single-pass scans. The lower bound still retains the whole printed
+# nameplate in the price-inclusive layout used by the game.
+_GEOMETRY_HEIGHT_RATIOS = (1.0, 0.92, 0.84, 0.76, 0.72)
+_GEOMETRY_RETRY_MISSES = 8
 
 
 def belt_template_index_path() -> Path:
@@ -231,7 +238,6 @@ class TemplateRecognitionConfig:
     minimum_proposal_spacing_ratio: float = 0.60
     name_y_ratio: float = 0.64
     name_height_ratio: float = 0.105
-    minimum_rarity_confidence: float = 0.45
 
 
 @dataclass(frozen=True)
@@ -243,6 +249,14 @@ class _Proposal:
     dark_fraction: float
     accepted: bool
     reason: str
+
+
+def _offset_box_y(
+    box: tuple[int, int, int, int],
+    offset: int,
+) -> tuple[int, int, int, int]:
+    x, y, width, height = box
+    return x, y + offset, width, height
 
 
 class TemplateCardRecognizer:
@@ -260,9 +274,193 @@ class TemplateCardRecognizer:
         started = time.perf_counter()
         self.index = index or BeltTemplateIndex.load(index_path)
         self.config = config or TemplateRecognitionConfig()
+        self._geometry_height_ratio: float | None = None
+        self._geometry_misses = 0
         self.init_seconds = time.perf_counter() - started
 
     def analyze(self, frame_bgr: np.ndarray) -> CardFrameResult:
+        started = time.perf_counter()
+        if (
+            not isinstance(frame_bgr, np.ndarray)
+            or frame_bgr.ndim != 3
+            or frame_bgr.shape[2] != 3
+            or frame_bgr.size == 0
+        ):
+            raise ValueError("TemplateCardRecognizer requires a non-empty HxWx3 BGR frame")
+
+        frame_height, frame_width = frame_bgr.shape[:2]
+        if frame_height < 80 or frame_width < 80:
+            return self._analyze_aligned(frame_bgr)
+
+        if self._geometry_height_ratio is None:
+            return self._search_geometry(frame_bgr, started=started)
+
+        crop, crop_top, actual_ratio = self._geometry_crop(
+            frame_bgr,
+            self._geometry_height_ratio,
+        )
+        result = self._analyze_aligned(crop)
+        accepted_count = int(result.diagnostics.get("accepted_count", 0))
+        if accepted_count:
+            self._geometry_misses = 0
+        else:
+            self._geometry_misses += 1
+            if self._geometry_misses >= _GEOMETRY_RETRY_MISSES:
+                return self._search_geometry(
+                    frame_bgr,
+                    started=started,
+                    existing=(actual_ratio, crop_top, result),
+                )
+        return self._geometry_result(
+            result,
+            frame_bgr,
+            crop_top=crop_top,
+            ratio=actual_ratio,
+            searched=False,
+            started=started,
+        )
+
+    def _search_geometry(
+        self,
+        frame_bgr: np.ndarray,
+        *,
+        started: float,
+        existing: tuple[float, int, CardFrameResult] | None = None,
+    ) -> CardFrameResult:
+        attempts: dict[int, tuple[float, int, CardFrameResult]] = {}
+        if existing is not None:
+            ratio, crop_top, result = existing
+            attempts[result.diagnostics.get("frame_shape", [0])[0]] = (
+                ratio,
+                crop_top,
+                result,
+            )
+
+        for requested_ratio in _GEOMETRY_HEIGHT_RATIOS:
+            crop, crop_top, actual_ratio = self._geometry_crop(frame_bgr, requested_ratio)
+            crop_height = crop.shape[0]
+            if crop_height in attempts:
+                continue
+            attempts[crop_height] = (
+                actual_ratio,
+                crop_top,
+                self._analyze_aligned(crop),
+            )
+
+        attempt_values = list(attempts.values())
+        accepted_attempts = [
+            attempt
+            for attempt in attempt_values
+            if int(attempt[2].diagnostics.get("accepted_count", 0)) > 0
+        ]
+        if accepted_attempts:
+            selected = max(accepted_attempts, key=self._geometry_score)
+        else:
+            # An empty belt contains no evidence with which to calibrate. Keep
+            # the full-height/default geometry until cards enter the region.
+            selected = max(attempt_values, key=lambda attempt: attempt[0])
+
+        ratio, crop_top, result = selected
+        self._geometry_height_ratio = ratio
+        self._geometry_misses = 0
+        summaries = [
+            {
+                "height_ratio": round(attempt_ratio, 4),
+                "accepted_count": int(attempt_result.diagnostics.get("accepted_count", 0)),
+                "candidate_count": len(attempt_result.candidates),
+                "accepted_confidence": round(
+                    sum(
+                        candidate.ocr_confidence
+                        for candidate in attempt_result.candidates
+                        if candidate.accepted
+                    ),
+                    4,
+                ),
+            }
+            for attempt_ratio, _attempt_top, attempt_result in sorted(
+                attempt_values,
+                key=lambda attempt: -attempt[0],
+            )
+        ]
+        return self._geometry_result(
+            result,
+            frame_bgr,
+            crop_top=crop_top,
+            ratio=ratio,
+            searched=True,
+            started=started,
+            attempts=summaries,
+        )
+
+    @staticmethod
+    def _geometry_crop(
+        frame_bgr: np.ndarray,
+        ratio: float,
+    ) -> tuple[np.ndarray, int, float]:
+        frame_height = frame_bgr.shape[0]
+        crop_height = min(frame_height, max(80, round(frame_height * ratio)))
+        crop_top = frame_height - crop_height
+        return frame_bgr[crop_top:], crop_top, crop_height / frame_height
+
+    @staticmethod
+    def _geometry_score(
+        attempt: tuple[float, int, CardFrameResult],
+    ) -> tuple[int, float, int, float]:
+        ratio, _crop_top, result = attempt
+        accepted = [candidate for candidate in result.candidates if candidate.accepted]
+        rejected_count = len(result.candidates) - len(accepted)
+        return (
+            len(accepted),
+            sum(candidate.ocr_confidence for candidate in accepted),
+            -rejected_count,
+            ratio,
+        )
+
+    @staticmethod
+    def _geometry_result(
+        result: CardFrameResult,
+        full_frame: np.ndarray,
+        *,
+        crop_top: int,
+        ratio: float,
+        searched: bool,
+        started: float,
+        attempts: list[dict[str, object]] | None = None,
+    ) -> CardFrameResult:
+        candidates = result.candidates
+        if crop_top:
+            translated: list[CardCandidate] = []
+            for candidate in candidates:
+                context = replace(
+                    candidate.context,
+                    art_box=_offset_box_y(candidate.context.art_box, crop_top),
+                    card_box=_offset_box_y(candidate.context.card_box, crop_top),
+                )
+                translated.append(
+                    replace(
+                        candidate,
+                        name_box=_offset_box_y(candidate.name_box, crop_top),
+                        context=context,
+                    )
+                )
+            candidates = tuple(translated)
+
+        diagnostics = dict(result.diagnostics)
+        diagnostics.update(
+            {
+                "frame_shape": list(full_frame.shape),
+                "geometry_crop_top": crop_top,
+                "geometry_crop_height": full_frame.shape[0] - crop_top,
+                "geometry_height_ratio": round(ratio, 4),
+                "geometry_searched": searched,
+                "total_seconds": time.perf_counter() - started,
+            }
+        )
+        if attempts is not None:
+            diagnostics["geometry_attempts"] = attempts
+        return CardFrameResult(result.text_observations, candidates, diagnostics)
+
+    def _analyze_aligned(self, frame_bgr: np.ndarray) -> CardFrameResult:
         started = time.perf_counter()
         if (
             not isinstance(frame_bgr, np.ndarray)
@@ -505,9 +703,8 @@ class TemplateCardRecognizer:
                 name_box,
                 card_box,
             )
-            rarity, rarity_confidence = classify_card_rarity(frame_bgr, name_box)
-            if rarity_confidence < self.config.minimum_rarity_confidence:
-                rarity, rarity_confidence = "", 0.0
+            rarity = droid_class(proposal.name)
+            rarity_confidence = 1.0 if rarity else 0.0
 
         art = frame_bgr[
             art_box[1] : art_box[1] + art_box[3],

@@ -16,7 +16,6 @@ from droid_alerts.belt.recognition import (
     UNKNOWN,
     CardRecognizer,
     classify_card_family_border,
-    classify_card_rarity,
     exact_canonical_name,
     exact_card_family,
 )
@@ -152,35 +151,6 @@ class CardRecognitionTests(unittest.TestCase):
         self.assertEqual("Rainbow", exact_card_family("rainbow"))
         self.assertIsNone(exact_card_family("COMMON"))
         self.assertIsNone(exact_card_family("BESKXR"))
-
-    def test_color_classifier_recognizes_all_five_rarity_pills(self):
-        for rarity in ("Common", "Rare", "Epic", "Legendary", "Mythic"):
-            with self.subTest(rarity=rarity):
-                frame = blank_frame()
-                name_box = draw_card(frame, (130, 270, 85, 30), "GONK")
-                draw_rarity_pill(frame, name_box, rarity)
-
-                detected, confidence = classify_card_rarity(frame, name_box)
-
-                self.assertEqual(rarity, detected)
-                self.assertGreater(confidence, 0.5)
-
-    def test_color_classifier_accepts_wide_real_card_pills(self):
-        for rarity in ("Common", "Legendary"):
-            with self.subTest(rarity=rarity):
-                frame = blank_frame()
-                name_box = draw_card(frame, (130, 270, 85, 30), "GONK")
-                draw_rarity_pill(
-                    frame,
-                    name_box,
-                    rarity,
-                    x_offset=1.2,
-                    width_ratio=2.25,
-                )
-
-                detected, _confidence = classify_card_rarity(frame, name_box)
-
-                self.assertEqual(rarity, detected)
 
     def test_border_fallback_recognizes_only_distinctive_card_families(self):
         name_box = (100, 100, 100, 20)
@@ -320,14 +290,14 @@ class CardRecognitionTests(unittest.TestCase):
 
         self.assertEqual(["IMPERIAL PROBE"], [item.match.name for item in result.observations])
 
-    def test_existing_frame_provides_family_and_rarity_for_each_card(self):
+    def test_identity_supplies_fixed_class_regardless_of_visible_pill(self):
         frame = blank_frame(width=1_050)
         opti = draw_card(frame, (130, 270, 150, 30), "OPTI-STRK")
         bal = draw_card(frame, (430, 270, 135, 30), "BAL-CORE")
         cb = draw_card(frame, (730, 270, 55, 30), "CB")
-        draw_rarity_pill(frame, opti, "Legendary")
-        draw_rarity_pill(frame, bal, "Rare")
-        draw_rarity_pill(frame, cb, "Common")
+        draw_rarity_pill(frame, opti, "Common")
+        draw_rarity_pill(frame, bal, "Mythic")
+        draw_rarity_pill(frame, cb, "Legendary")
         ocr = StaticOcr(
             [
                 TextObservation("OPTI-STRK", 0.99, opti),
@@ -351,7 +321,7 @@ class CardRecognitionTests(unittest.TestCase):
             [(item.match.name, item.family, item.rarity) for item in result.observations],
         )
 
-    def test_right_rarity_badge_does_not_become_card_family(self):
+    def test_right_badge_does_not_change_fixed_class_or_visual_tier(self):
         frame = blank_frame()
         name_box = draw_card(frame, (130, 270, 55, 30), "R2")
         draw_rarity_pill(frame, name_box, "Common")
@@ -365,7 +335,8 @@ class CardRecognitionTests(unittest.TestCase):
         ).analyze(frame)
 
         self.assertEqual("", result.observations[0].family)
-        self.assertEqual("Common", result.observations[0].rarity)
+        self.assertEqual("Epic", result.observations[0].rarity)
+        self.assertEqual(1.0, result.observations[0].rarity_confidence)
 
 
 if __name__ == "__main__":

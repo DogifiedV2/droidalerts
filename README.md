@@ -40,14 +40,16 @@ controls stay behind the **Advanced settings** toggle in Settings.
 ## Belt Tracker
 
 The **Belt Tracker** tab watches the moving blueprint belt and can alert from a
-different minimum family tier for each droid. It can run at the same time as
+different minimum rarity tier for each droid. It can run at the same time as
 chat alerts.
 
 1. Choose the Fortnite display once on the Dashboard.
 2. Open Belt Tracker and click **Select Belt Region**.
-3. Select the area you'll angle the belt in from the bottom of the blueprints
-   to the top, excluding the price, then press Enter. Standing at the start of
-   the belt with around three blueprints in the box is recommended.
+3. Use the recommended and only officially supported setup shown in the guide:
+   stand at the start of the belt and match the cyan example box with two
+   complete blueprint cards visible. Price labels may be inside the box; Belt
+   Tracker ignores them. Other camera angles, distances, and framing may not
+   detect reliably. Press Enter to save it.
 4. Under **Priority Alerts**, click **Modify**, search for a droid, and assign
    its minimum alert tier. You can edit several selected rows at once. A droid
    set to Off has no Belt Tracker alerts.
@@ -56,12 +58,14 @@ chat alerts.
 The detector identifies cards from a compact local artwork-template index and
 does not use OCR. A dark-nameplate gate and confidence
 margin reject scenery, ambiguous lookalikes, and incomplete edge cards. The
-frame/label supplies the family (Default, Gold, Diamond, Rainbow, or Beskar),
-while the colored pill supplies Common, Rare, Epic, Legendary, or Mythic.
+frame/label supplies the rarity tier (Default, Gold, Diamond, Rainbow, or
+Beskar). Common, Rare, Epic, Legendary, or Mythic is a fixed class for each
+droid and comes directly from the bundled identity table; the colored pill is
+not scanned.
 Normally a card is reported as soon as four recent scans agree. Active regions
-scan at up to 8 FPS and empty regions back off to 4 FPS. Minimum tiers follow
+scan at up to 8 FPS and empty regions back off to 4 FPS. Minimum rarity tiers follow
 Default → Gold → Diamond → Rainbow → Beskar, so Gold+ includes Gold and every
-tier above it. The Common–Mythic pill does not affect this filter. Configured
+tier above it. The fixed Common–Mythic class does not affect this filter. Configured
 droids use the same Alert Channels as Dashboard alerts. Saved Belt Tracker
 regions are separate for each display, and its events appear with other alerts
 in History.
@@ -71,13 +75,14 @@ Both accept 1–20 FPS, default to 4/8 for every install, and the idle value is
 automatically kept at or below the active value. Higher active rates confirm
 cards sooner but use proportionally more CPU.
 
-To collect examples for detector review, keep roughly three or four blueprints
-visible and enable **Save detections for review** before starting Belt Tracker.
+To collect examples for detector review, keep two complete blueprints visible
+in the officially supported framing and enable **Save detections for review**
+before starting Belt Tracker.
 Tracking stays on the same fast template path. It retains the sharpest fully
 visible crop from each confirmed appearance under
 `data/belt_template_samples/detections`, rejects near-duplicates, and keeps at
-most 20 diverse samples per detected droid. Each JSON sidecar records exactly
-what name, family, and rarity the tracker predicted. These predictions never
+most 20 diverse samples per detected droid. Each JSON sidecar records the
+detected name and rarity tier plus the identity's fixed class. These results never
 enter `confirmed/` and do not alter the live template index automatically.
 
 If Belt Tracker is unusually slow or misses cards, enable **Dev mode** before

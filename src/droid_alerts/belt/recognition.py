@@ -8,13 +8,12 @@ import cv2
 import numpy as np
 
 from .matching import NameMatch, compact
-from .names import DROID_NAMES
+from .names import DROID_NAMES, droid_class
 from .ocr import DroidObservation, OcrEngine, TextObservation
 
 
 UNKNOWN = "UNKNOWN"
 CARD_FAMILIES = ("Default", "Gold", "Diamond", "Beskar", "Rainbow")
-CARD_RARITIES = ("Common", "Rare", "Epic", "Legendary", "Mythic")
 
 _CANONICAL_BY_COMPACT = {compact(name): name for name in DROID_NAMES}
 _FAMILY_BY_COMPACT = {compact(family): family for family in CARD_FAMILIES}
@@ -46,75 +45,6 @@ def exact_card_family(raw_text: str) -> str | None:
         if key.startswith(family_key):
             return family
     return None
-
-
-def classify_card_rarity(
-    frame_bgr: np.ndarray,
-    name_box: tuple[int, int, int, int],
-) -> tuple[str, float]:
-    """Classify the small colored rarity pill beside the family word.
-
-    The crop and component limits are relative to the already-recognized name
-    height, so this is scale independent. It uses only a tiny HSV crop and no
-    additional OCR/model pass.
-    """
-
-    x, y, _width, name_height = name_box
-    if name_height <= 0:
-        return "", 0.0
-    frame_height, frame_width = frame_bgr.shape[:2]
-    x1 = max(0, round(x - 0.05 * name_height))
-    x2 = min(frame_width, round(x + 4.55 * name_height))
-    y1 = max(0, round(y + 0.78 * name_height))
-    y2 = min(frame_height, round(y + 1.28 * name_height))
-    crop = frame_bgr[y1:y2, x1:x2]
-    if crop.size == 0:
-        return "", 0.0
-
-    hue, saturation, value = cv2.split(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV))
-    masks = (
-        (
-            "Legendary",
-            (hue >= 5) & (hue <= 30) & (saturation >= 80) & (value >= 100),
-        ),
-        (
-            "Rare",
-            (hue >= 75) & (hue <= 105) & (saturation >= 70) & (value >= 100),
-        ),
-        (
-            "Epic",
-            (hue >= 110) & (hue <= 145) & (saturation >= 70) & (value >= 100),
-        ),
-        (
-            "Mythic",
-            ((hue >= 145) | (hue <= 3)) & (saturation >= 70) & (value >= 100),
-        ),
-        ("Common", (saturation < 60) & (value >= 100)),
-    )
-    candidates: list[tuple[float, float, str]] = []
-    scale_area = float(name_height * name_height)
-    for rarity, condition in masks:
-        mask = condition.astype(np.uint8) * 255
-        _count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
-            mask,
-            connectivity=8,
-        )
-        for component_x, _component_y, width, height, area in stats[1:]:
-            normalized_x = float(component_x) / name_height
-            normalized_width = float(width) / name_height
-            normalized_height = float(height) / name_height
-            area_ratio = float(area) / scale_area
-            if (
-                0.60 <= normalized_x <= 3.50
-                and 0.55 <= normalized_width <= 2.35
-                and 0.18 <= normalized_height <= 0.55
-                and area_ratio >= 0.10
-            ):
-                candidates.append((area_ratio, normalized_x, rarity))
-    if not candidates:
-        return "", 0.0
-    area_ratio, _normalized_x, rarity = max(candidates, key=lambda item: (item[0], item[1]))
-    return rarity, min(1.0, area_ratio / 0.30)
 
 
 def classify_card_family_border(
@@ -473,12 +403,7 @@ class CardRecognizer:
         text_observations: tuple[TextObservation, ...],
         frame_bgr: np.ndarray,
     ) -> tuple[CardCandidate, ...]:
-        """Pair family text and classify the rarity pill for each card.
-
-        Family detection deliberately reuses the existing OCR result. Rarity
-        classification is a tiny color/component check. Neither runs another
-        OCR or neural-model pass.
-        """
+        """Pair the visual tier and attach the identity's fixed droid class."""
 
         updated: list[CardCandidate] = []
         for candidate in candidates:
@@ -530,11 +455,11 @@ class CardRecognizer:
                     family=family,
                     family_confidence=family_confidence,
                 )
-            rarity, rarity_confidence = classify_card_rarity(frame_bgr, candidate.name_box)
+            rarity = droid_class(candidate.canonical_name)
             candidate = replace(
                 candidate,
                 rarity=rarity,
-                rarity_confidence=rarity_confidence,
+                rarity_confidence=1.0 if rarity else 0.0,
             )
             updated.append(candidate)
         return tuple(updated)

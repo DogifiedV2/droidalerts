@@ -15,6 +15,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.belt.recognition import CardCandidate, CardContext
+from droid_alerts.belt.names import droid_class
 from droid_alerts.belt.sample_collection import BeltTemplateSampleCollector
 
 
@@ -77,8 +78,8 @@ def card_candidate(
         reason="accepted_exact",
         family="Gold",
         family_confidence=0.96,
-        rarity="Rare",
-        rarity_confidence=0.91,
+        rarity=droid_class(name),
+        rarity_confidence=1.0,
     )
 
 
@@ -135,7 +136,7 @@ class BeltTemplateSampleCollectorTests(unittest.TestCase):
             self.assertEqual(3, metadata["strong_label_reads"])
             self.assertEqual({"MOUSE": 3}, metadata["observed_names"])
             self.assertEqual("Gold", metadata["family"])
-            self.assertEqual("Rare", metadata["rarity"])
+            self.assertEqual("Common", metadata["rarity"])
             self.assertEqual(1, collector.total_samples)
 
     def test_cap_and_duplicate_index_persist_across_restarts(self):

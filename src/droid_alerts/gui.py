@@ -119,9 +119,9 @@ UPDATE_POLL_INTERVAL_MS = 15 * 60 * 1000
 DISCORD_COMMUNITY_URL = "https://discord.gg/ZmFPjS4784"
 IDENTIFY_INSTALL_URL = "https://gonk.tools/identify"
 BELT_REGION_INSTRUCTIONS = (
-    "Select the area you'll angle the belt in from the bottom of the blueprints to the top "
-    "(excluding the price). Recommended to stand at the start of the belt and have 3 or so "
-    "blueprints in the box."
+    "Officially supported setup: stand at the start of the belt and match the guide with two "
+    "complete blueprints visible. Price labels may be inside the box; they are ignored. Other "
+    "camera angles and framing are not officially supported."
 )
 
 
@@ -1726,13 +1726,16 @@ class DroidAlertsApp:
         if config.belt_region_guide_confirmed:
             return True
         confirmed = self._setup_dialog(
-            "Set Up Your Belt Region",
+            "Official Belt Tracker Setup",
             intro=(
-                "It is highly recommended you set up the region similar to the picture below, "
-                "ensuring the cards in the background are not included."
+                "This is the recommended and only officially supported Belt Tracker setup. "
+                "Stand at the start of the belt and match the cyan box as closely as possible, "
+                "with two complete blueprint cards visible. Price labels may be inside the box; "
+                "Belt Tracker ignores them."
             ),
             image_path=assets_dir() / "belt_region_guide.png",
-            ok_text="Confirm",
+            note="Other camera angles, distances, and framing may not detect reliably.",
+            ok_text="Use This Setup",
             cancel_text="",
         )
         if confirmed is None:
@@ -2224,11 +2227,14 @@ class DroidAlertsApp:
         self._setup_dialog(
             "Belt Tracker Guide",
             steps=(
-                "Click Select Belt Region, then click and drag around the belt area.",
+                "Use the recommended and only officially supported setup shown during the first "
+                "belt selection: stand at the start of the belt and keep the same camera angle.",
+                "Click Select Belt Region, then match the cyan example box with two complete "
+                "blueprint cards visible. Price labels may be inside the box; they are ignored.",
                 "Press Enter to save the selected region.",
-                "Enable Show belt overlay and check in-game that the selected area is tall "
-                "enough to cover the blueprints from bottom to top, excluding the prices.",
-                "For detector review, keep roughly three or four blueprints visible, enable "
+                "Enable Show belt overlay and confirm the box matches the official example. Other "
+                "angles, distances, and framing are not officially supported.",
+                "For detector review, keep two complete blueprints visible, enable "
                 "Save detections for review before starting, and leave tracking running. It keeps "
                 "one best complete crop per appearance and at most 20 diverse crops per detected "
                 "droid without slowing or changing the template detector.",

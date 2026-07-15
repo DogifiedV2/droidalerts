@@ -346,7 +346,8 @@ class BeltUiWindowsTests(unittest.TestCase):
         save.assert_called_once_with(config)
         call = app._setup_dialog.call_args
         self.assertEqual("belt_region_guide.png", call.kwargs["image_path"].name)
-        self.assertIn("cards in the background are not included", call.kwargs["intro"])
+        self.assertIn("only officially supported", call.kwargs["intro"])
+        self.assertEqual("Use This Setup", call.kwargs["ok_text"])
 
     def test_closing_first_time_notices_does_not_acknowledge_them(self):
         app = DroidAlertsApp.__new__(DroidAlertsApp)

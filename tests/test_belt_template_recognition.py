@@ -13,7 +13,7 @@ import numpy as np
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from droid_alerts.belt.names import DROID_NAMES
+from droid_alerts.belt.names import DROID_CLASS_BY_NAME, DROID_NAMES, droid_class
 from droid_alerts.belt.template_recognition import (
     BeltTemplateIndex,
     TemplateCardRecognizer,
@@ -79,6 +79,11 @@ def synthetic_index() -> BeltTemplateIndex:
 
 
 class BeltTemplateIndexTests(unittest.TestCase):
+    def test_every_template_identity_has_one_fixed_droid_class(self):
+        self.assertEqual(set(DROID_NAMES), set(DROID_CLASS_BY_NAME))
+        self.assertEqual("Common", droid_class("B1 BATTLE"))
+        self.assertEqual("Mythic", droid_class("CYCLENS"))
+
     def test_production_index_covers_every_known_droid(self):
         index = BeltTemplateIndex.load()
 
@@ -102,6 +107,8 @@ class TemplateCardRecognizerTests(unittest.TestCase):
         ).analyze(frame)
 
         self.assertEqual(["R2", "GONK"], [item.match.name for item in result.observations])
+        self.assertEqual(["Epic", "Common"], [item.rarity for item in result.observations])
+        self.assertEqual([1.0, 1.0], [item.rarity_confidence for item in result.observations])
         self.assertEqual("templates", result.diagnostics["detector"])
         self.assertEqual(2, result.diagnostics["accepted_count"])
         self.assertEqual((), result.text_observations)
