@@ -15,7 +15,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.belt.ocr import TextObservation
-from droid_alerts.belt.watcher import run_belt_watcher
+from droid_alerts.belt.watcher import adaptive_track_timeout, run_belt_watcher
 from droid_alerts.belt.worker import run_belt_worker_process
 from droid_alerts.capture import PixelBox
 
@@ -55,8 +55,10 @@ class RecordingQueue:
 class WorkerProcessEntryTests(unittest.TestCase):
     def test_process_entry_forwards_watcher_status(self):
         status_queue = RecordingQueue()
+        received = {}
 
-        def fake_watcher(*_args, status_callback, **_kwargs):
+        def fake_watcher(*_args, status_callback, **kwargs):
+            received.update(kwargs)
             status_callback({"type": "ready"})
 
         with patch("droid_alerts.belt.worker.run_belt_watcher", side_effect=fake_watcher):
@@ -66,9 +68,11 @@ class WorkerProcessEntryTests(unittest.TestCase):
                 ("R2",),
                 threading.Event(),
                 status_queue,
+                True,
             )
 
         self.assertEqual([{"type": "ready"}], status_queue.events)
+        self.assertTrue(received["dev_mode"])
 
     def test_process_entry_reports_uncaught_failure(self):
         status_queue = RecordingQueue()
@@ -137,6 +141,11 @@ def card_frame():
 
 
 class WatcherTests(unittest.TestCase):
+    def test_track_timeout_expands_for_slow_ocr_and_is_capped(self):
+        self.assertEqual(3.5, adaptive_track_timeout(0.5))
+        self.assertEqual(13.0, adaptive_track_timeout(5.0))
+        self.assertEqual(60.0, adaptive_track_timeout(999.0))
+
     def test_ocr_result_is_predicted_forward_to_completion_time(self):
         frame, _ = card_frame()
         stop_event = threading.Event()
@@ -165,6 +174,7 @@ class WatcherTests(unittest.TestCase):
         scan = next(event for event in events if event["type"] == "scan")
         self.assertAlmostEqual(0.8, scan["ocr_seconds"])
         self.assertAlmostEqual(1.25, scan["ocr_fps"])
+        self.assertEqual(3.5, scan["track_timeout_seconds"])
 
     def test_watcher_uses_independent_mss_and_reports_safe_counts(self):
         frame, name_box = card_frame()

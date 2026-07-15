@@ -13,6 +13,7 @@ def run_belt_worker_process(
     target_names: Iterable[str],
     stop_event: Any,
     status_queue: Any,
+    dev_mode: bool = False,
 ) -> None:
     """Run Belt Tracker outside the GUI process.
 
@@ -28,6 +29,7 @@ def run_belt_worker_process(
             target_names=target_names,
             stop_event=stop_event,
             status_callback=status_queue.put,
+            dev_mode=dev_mode,
         )
     except Exception as exc:
         status_queue.put(

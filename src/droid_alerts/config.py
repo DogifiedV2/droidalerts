@@ -138,6 +138,7 @@ class AppConfig:
     extra_checks: bool = False
     start_watcher_on_launch: bool = False
     belt_overlay_enabled: bool = True
+    belt_dev_mode: bool = False
     belt_cpu_warning_confirmed: bool = False
     belt_region_guide_confirmed: bool = False
     # Empty means Belt Tracker does not send any priority alerts.
@@ -246,6 +247,7 @@ class AppConfig:
             extra_checks=bool(data.get("extra_checks", False)),
             start_watcher_on_launch=bool(data.get("start_watcher_on_launch", False)),
             belt_overlay_enabled=bool(data.get("belt_overlay_enabled", True)),
+            belt_dev_mode=bool(data.get("belt_dev_mode", False)),
             belt_cpu_warning_confirmed=bool(
                 data.get("belt_cpu_warning_confirmed", False)
             ),
@@ -334,6 +336,7 @@ class AppConfig:
             "extra_checks": self.extra_checks,
             "start_watcher_on_launch": self.start_watcher_on_launch,
             "belt_overlay_enabled": self.belt_overlay_enabled,
+            "belt_dev_mode": self.belt_dev_mode,
             "belt_cpu_warning_confirmed": self.belt_cpu_warning_confirmed,
             "belt_region_guide_confirmed": self.belt_region_guide_confirmed,
             "belt_target_names": self.belt_target_names,

@@ -110,6 +110,7 @@ class BeltConfigAndRegionTests(unittest.TestCase):
         config = AppConfig.from_dict(
             {
                 "belt_overlay_enabled": False,
+                "belt_dev_mode": True,
                 "belt_cpu_warning_confirmed": True,
                 "belt_region_guide_confirmed": True,
                 "belt_target_names": [" r2 ", "GONK", "R2", 123],
@@ -117,6 +118,7 @@ class BeltConfigAndRegionTests(unittest.TestCase):
         )
 
         self.assertFalse(config.belt_overlay_enabled)
+        self.assertTrue(config.belt_dev_mode)
         self.assertTrue(config.belt_cpu_warning_confirmed)
         self.assertTrue(config.belt_region_guide_confirmed)
         self.assertEqual(["R2", "GONK"], config.belt_target_names)
@@ -124,6 +126,7 @@ class BeltConfigAndRegionTests(unittest.TestCase):
         self.assertEqual(["R2", "GONK"], restored.belt_target_names)
         self.assertTrue(restored.belt_cpu_warning_confirmed)
         self.assertTrue(restored.belt_region_guide_confirmed)
+        self.assertTrue(restored.belt_dev_mode)
 
     def test_belt_events_are_written_to_shared_history(self):
         track = SimpleNamespace(
@@ -456,6 +459,7 @@ class BeltAlertDeliveryTests(unittest.TestCase):
         self.assertTrue(any("click and drag" in step for step in steps))
         self.assertTrue(any("Press Enter" in step for step in steps))
         self.assertTrue(any("Show belt overlay" in step for step in steps))
+        self.assertTrue(any("Dev mode" in step and "Support Bundle" in step for step in steps))
 
     def test_selected_belt_droid_uses_every_enabled_alert_channel(self):
         app = DroidAlertsApp.__new__(DroidAlertsApp)

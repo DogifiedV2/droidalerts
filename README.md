@@ -59,6 +59,14 @@ reads agree; it does not need to cross a boundary. Selected droids use the same
 Alert Channels as Dashboard alerts. Saved Belt Tracker regions are separate for
 each display, and its events appear with other alerts in History.
 
+If Belt Tracker is unusually slow or misses cards, enable **Dev mode** before
+starting it. Dev mode keeps detailed local timing, OCR, candidate-rejection,
+and tracker-state logs under `data/belt_dev` and saves at most eight diagnostic
+frames per run. Stop after reproducing the issue and create a Support Bundle in
+Diagnostics; the bundle includes the latest Belt dev log and up to four of its
+frames. Belt Tracker also automatically keeps tracks alive longer when OCR is
+slow, so a machine running at 0.2 OCR FPS can still accumulate repeat reads.
+
 Optional behaviour includes automatic watcher startup and pausing while
 Fortnite is closed. Diagnostics can create a redacted support ZIP, show or
 reposition the chat region, report local disk usage, and clear debug captures

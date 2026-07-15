@@ -28,6 +28,7 @@ except Exception:
 from . import __version__
 from .alerts import AlertPolicy
 from .belt.names import DROID_NAMES as BELT_DROID_NAMES
+from .belt.dev_logging import belt_dev_dir
 from .belt.overlay import BeltOverlay
 from .belt.region import RelativeRegion as BeltRelativeRegion
 from .belt.region import load_region as load_belt_region
@@ -190,6 +191,7 @@ class DroidAlertsApp:
         self._autosave_ready = False
         self.share_debug_detections_check = None
         self.timer_reminders_check = None
+        self.belt_dev_mode_check = None
         self.session_detection_count = 0
         self.session_alert_count = 0
         self.session_monitoring_seconds = 0.0
@@ -753,19 +755,36 @@ class DroidAlertsApp:
             command=self._belt_overlay_changed,
             **bootstyle("round-toggle"),
         ).grid(row=1, column=0, sticky="w", pady=(12, 14))
+        dev_controls = ttk.Frame(view)
+        dev_controls.grid(row=2, column=0, sticky="ew", pady=(0, 14))
+        self.setting_vars["belt_dev_mode"] = BooleanVar(value=False)
+        self.belt_dev_mode_check = ttk.Checkbutton(
+            dev_controls,
+            text="Dev mode",
+            variable=self.setting_vars["belt_dev_mode"],
+            command=self._schedule_auto_save,
+            **bootstyle("round-toggle"),
+        )
+        self.belt_dev_mode_check.grid(row=0, column=0, sticky="w")
+        ttk.Button(
+            dev_controls,
+            text="Open logs",
+            command=lambda: self.open_path(belt_dev_dir()),
+            **bootstyle("info-outline"),
+        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
         ttk.Label(
             view,
             textvariable=self.belt_tracks_var,
             font=self._font(10, "bold"),
             **bootstyle("info"),
-        ).grid(row=2, column=0, sticky="w")
+        ).grid(row=3, column=0, sticky="w")
         ttk.Label(
             view,
             textvariable=self.belt_last_scan_var,
             wraplength=360,
             justify="left",
             **muted_style(),
-        ).grid(row=3, column=0, sticky="w", pady=(4, 0))
+        ).grid(row=4, column=0, sticky="w", pady=(4, 0))
 
     def _build_logs_tab(self) -> None:
         page = self.logs_tab
@@ -1407,6 +1426,7 @@ class DroidAlertsApp:
                 "start_watcher_on_launch",
                 "timer_reminders_enabled",
                 "belt_overlay_enabled",
+                "belt_dev_mode",
             ):
                 var = self.setting_vars.get(key)
                 if isinstance(var, BooleanVar):
@@ -1961,6 +1981,8 @@ class DroidAlertsApp:
                 "Press Enter to save the selected region.",
                 "Enable Show belt overlay and check in-game that the selected area is tall "
                 "enough to cover the blueprints from bottom to top, excluding the prices.",
+                "For troubleshooting, enable Dev mode before starting Belt Tracker. Reproduce "
+                "the issue for about a minute, stop tracking, then create a Support Bundle in Diagnostics.",
             ),
             ok_text="Close",
             cancel_text="",
@@ -2008,6 +2030,7 @@ class DroidAlertsApp:
         config = load_config()
         config.monitor_index = monitor.index
         config.belt_overlay_enabled = bool(self._value("belt_overlay_enabled"))
+        config.belt_dev_mode = bool(self._value("belt_dev_mode"))
         save_config(config)
         self.config = config
 
@@ -2028,6 +2051,7 @@ class DroidAlertsApp:
                 tuple(config.belt_target_names),
                 self.belt_stop_event,
                 self.belt_status_queue,
+                config.belt_dev_mode,
             ),
             name="DroidAlertsBeltTracker",
             daemon=True,
@@ -2102,11 +2126,15 @@ class DroidAlertsApp:
             accepted = int(event.get("accepted_count") or 0)
             candidates = int(event.get("candidate_count") or 0)
             ocr_fps = float(event.get("ocr_fps") or 0.0)
+            track_timeout = float(event.get("track_timeout_seconds") or 0.0)
             self.belt_status_var.set("Tracking blueprint belt")
-            self.belt_last_scan_var.set(
+            scan_text = (
                 f"Latest scan: {accepted} accepted · {candidates} exact candidates"
                 f" · {ocr_fps:.1f} OCR FPS"
             )
+            if bool(self._value("belt_dev_mode")) and track_timeout > 0:
+                scan_text += f" · {track_timeout:.1f}s track timeout"
+            self.belt_last_scan_var.set(scan_text)
         elif event_type == "tracks":
             tracks = event.get("tracks")
             if isinstance(tracks, list):
@@ -2131,6 +2159,9 @@ class DroidAlertsApp:
             self._set_belt_header_state("Warning")
             self.belt_status_var.set("Belt Tracker warning")
             self.belt_detail_var.set(message)
+        elif event_type == "dev_log":
+            path = str(event.get("path") or "belt_dev")
+            self.detail_var.set(f"Belt dev log: data/{path}")
 
     def _send_belt_alert(self, record: dict[str, object]) -> None:
         droid = str(record.get("droid") or "").strip()
@@ -2263,12 +2294,16 @@ class DroidAlertsApp:
             )
             self.belt_region_button.configure(state="disabled")
             self.belt_targets_button.configure(state="disabled")
+            if self.belt_dev_mode_check is not None:
+                self.belt_dev_mode_check.configure(state="disabled")
         else:
             self.belt_watch_button.configure(
                 text="Start Tracking", state="normal", **bootstyle("success")
             )
             self.belt_region_button.configure(state="normal")
             self.belt_targets_button.configure(state="normal")
+            if self.belt_dev_mode_check is not None:
+                self.belt_dev_mode_check.configure(state="normal")
 
     def _belt_worker_finished(
         self,
@@ -2697,6 +2732,7 @@ class DroidAlertsApp:
         config.extra_checks = bool(self._value("extra_checks"))
         config.start_watcher_on_launch = bool(self._value("start_watcher_on_launch"))
         config.belt_overlay_enabled = bool(self._value("belt_overlay_enabled"))
+        config.belt_dev_mode = bool(self._value("belt_dev_mode"))
         config.timer_reminders_enabled = config.droid_timers_enabled and bool(
             self._value("timer_reminders_enabled")
         )
@@ -3701,7 +3737,7 @@ class DroidAlertsApp:
         text = (
             f"Runtime data: {format_bytes(summary['total'])}\n"
             f"History {format_bytes(summary['logs'])} · Alert samples {format_bytes(summary['samples'])} · "
-            f"Debug {format_bytes(summary['debug'])}"
+            f"Debug {format_bytes(summary['debug'])} · Belt dev {format_bytes(summary['belt_dev'])}"
         )
         if cleanup is not None and cleanup.deleted_files:
             text += f"\nAutomatic cleanup removed {cleanup.deleted_files} file(s)."

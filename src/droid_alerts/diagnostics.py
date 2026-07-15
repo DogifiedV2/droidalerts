@@ -8,6 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import __version__
+from .belt.dev_logging import belt_dev_dir
 from .belt.region import regions_path as belt_regions_path
 from .capture import list_monitors
 from .config import AppConfig, data_dir, project_root
@@ -58,9 +59,28 @@ def create_support_bundle(config: AppConfig) -> Path:
                 bundle.write(screenshot, f"debug/{index:02d}_{screenshot.name}")
             except OSError:
                 continue
+        latest_belt_log = _latest_files(belt_dev_dir(), "belt_dev.jsonl", 1)
+        if latest_belt_log:
+            belt_log = latest_belt_log[0]
+            bundle.writestr(
+                "belt_dev/belt_dev.jsonl",
+                _redacted_dev_log(belt_log),
+            )
+            for index, screenshot in enumerate(
+                _latest_files(belt_log.parent, "frame_*.png", 4),
+                start=1,
+            ):
+                try:
+                    bundle.write(
+                        screenshot,
+                        f"belt_dev/frames/{index:02d}_{screenshot.name}",
+                    )
+                except OSError:
+                    continue
         bundle.writestr(
             "README.txt",
-            "This bundle excludes Discord webhooks, ntfy tokens, Pushover credentials, and anonymous IDs.\n",
+            "This bundle excludes Discord webhooks, ntfy tokens, Pushover credentials, and anonymous IDs.\n"
+            "If Belt Tracker Dev mode was used, its latest log and up to four diagnostic frames are included.\n",
         )
     return out_path
 
@@ -90,6 +110,23 @@ def _redacted_event_tail(path: Path, count: int) -> str:
         if source:
             text = text.replace(source, replacement)
             text = text.replace(source.replace("\\", "/"), replacement)
+    return text
+
+
+def _redacted_dev_log(path: Path) -> str:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    if len(lines) > 2_005:
+        lines = lines[:5] + lines[-2_000:]
+    text = "\n".join(lines)
+    if text:
+        text += "\n"
+    source = str(project_root())
+    if source:
+        text = text.replace(source, "<app-folder>")
+        text = text.replace(source.replace("\\", "/"), "<app-folder>")
     return text
 
 

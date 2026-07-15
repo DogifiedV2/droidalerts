@@ -42,6 +42,7 @@ def storage_summary() -> dict[str, int]:
         "logs": directory_size(logs_dir()),
         "samples": directory_size(alert_samples_dir()),
         "debug": directory_size(debug_dir()),
+        "belt_dev": directory_size(data_dir() / "belt_dev"),
         "total": directory_size(data_dir()),
     }
 
@@ -79,6 +80,7 @@ def cleanup_runtime_data(retention_days: int, max_storage_mb: int) -> CleanupRes
         logs_dir(),
         alert_samples_dir(),
         debug_dir(),
+        data_dir() / "belt_dev",
         data_dir() / "support_bundles",
     ]
     protected_log = logs_dir() / "events.jsonl"

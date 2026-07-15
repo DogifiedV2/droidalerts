@@ -76,6 +76,13 @@ where that global hotkey is unreliable, it saves the chat-box region and
 candidate overlay every five seconds. Other platforms log debug detections but
 do not currently offer a global capture hotkey.
 
+That setting diagnoses the chat detector. Belt Tracker has a separate **Dev
+mode** in its Belt Area panel. Enable it before starting Belt Tracker to record
+capture and OCR stage timings, exact OCR text, candidate rejection reasons,
+adaptive track timeout, tracker state, and a limited set of frames under
+`data/belt_dev`. The latest session is included when Diagnostics creates a
+Support Bundle.
+
 ## Testing
 
 `python main.py test` runs every fixture in `tests/fixtures/` and writes a
