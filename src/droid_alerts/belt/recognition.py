@@ -9,7 +9,7 @@ import numpy as np
 
 from .matching import NameMatch, compact
 from .names import DROID_NAMES
-from .ocr import DroidObservation, OcrEngine, RapidOcrEngine, TextObservation
+from .ocr import DroidObservation, OcrEngine, TextObservation
 
 
 UNKNOWN = "UNKNOWN"
@@ -34,7 +34,7 @@ def exact_canonical_name(raw_text: str) -> str | None:
 def exact_card_family(raw_text: str) -> str | None:
     """Return the card family printed below a blueprint name.
 
-    RapidOCR can join the left rarity word to the smaller badge beside it, for
+    A text detector can join the left rarity word to the smaller badge beside it, for
     example ``DEFAULT RARE`` or ``BESKARC``. The card geometry check below
     restricts this prefix match to the expected left badge position.
     """
@@ -271,12 +271,12 @@ class CardRecognizer:
 
     def __init__(
         self,
-        ocr_engine: OcrEngine | None = None,
+        ocr_engine: OcrEngine,
         *,
         target_names: Iterable[str] | None = None,
         config: CardRecognitionConfig | None = None,
     ) -> None:
-        self.ocr_engine = ocr_engine or RapidOcrEngine()
+        self.ocr_engine = ocr_engine
         self.config = config or CardRecognitionConfig()
 
         raw_targets = tuple(target_names or ())
@@ -623,7 +623,7 @@ def _exact_text_candidates(
         if name is not None:
             candidates.append(_ExactTextCandidate(name, item.text, item.confidence, item.box))
 
-    # RapidOCR occasionally splits a multiword card name. Joining only adjacent
+    # Text detectors can split a multiword card name. Joining only adjacent
     # words on the same baseline preserves exact matching without fuzzy edits.
     ordered = sorted(clean, key=lambda item: (item.box[1] + item.box[3] / 2, item.box[0]))
     for index, first in enumerate(ordered):

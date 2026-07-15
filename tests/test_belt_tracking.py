@@ -26,9 +26,10 @@ def observation(
     family_confidence=0.9,
     rarity="",
     rarity_confidence=0.9,
+    raw_text=None,
 ):
     return DroidObservation(
-        NameMatch(name, score, name),
+        NameMatch(name, score, raw_text or name),
         confidence,
         (x, y, width, height),
         family=family,
@@ -39,6 +40,23 @@ def observation(
 
 
 class TrackingTests(unittest.TestCase):
+    def test_update_exposes_each_accepted_observations_physical_track_id(self):
+        tracker = BeltTracker()
+
+        first = tracker.update(
+            [observation("MOUSE", 30), observation("R4", 180)],
+            0.0,
+            500,
+        )
+        second = tracker.update(
+            [observation("MOUSE", 55), observation("R4", 205)],
+            0.2,
+            500,
+        )
+
+        self.assertEqual({0: 1, 1: 2}, first.observation_track_ids)
+        self.assertEqual(first.observation_track_ids, second.observation_track_ids)
+
     def test_card_attributes_confirm_with_name_without_delaying_entry(self):
         tracker = BeltTracker()
         families = ("Beskar", "", "Beskar", "Beskar")
@@ -241,6 +259,30 @@ class TrackingTests(unittest.TestCase):
         correct_label = tracker.update([observation("GONK", 180)], 1.0, 400)
         self.assertEqual([], correct_label.events)
         self.assertEqual("GONK", correct_label.tracks[0].name)
+
+    def test_repeated_template_identity_can_replace_a_stale_same_slot_card(self):
+        tracker = BeltTracker()
+        for index in range(4):
+            tracker.update(
+                [observation("GONK", 100, raw_text="template:GONK")],
+                index / 8,
+                400,
+            )
+
+        entered = []
+        for index in range(8):
+            update = tracker.update(
+                [observation("R6", 100, raw_text="template:R6")],
+                0.5 + index / 8,
+                400,
+            )
+            entered.extend(
+                event.track.name for event in update.events if event.kind == "entered"
+            )
+
+        self.assertEqual(["R6"], entered)
+        self.assertIn("GONK", [track.name for track in tracker._tracks])
+        self.assertIn("R6", [track.name for track in tracker._tracks])
 
     def test_conflicting_names_cannot_keep_an_entered_identity_alive(self):
         tracker = BeltTracker(

@@ -9,6 +9,7 @@ import numpy as np
 import tkinter as tk
 
 from .capture import format_tk_geometry, monitor_key_from_mapping, set_dpi_awareness
+from .image_io import write_cv_image
 from .region import Calibration, calibration_path
 
 MIN_SIZE = 20
@@ -70,7 +71,7 @@ class RegionSelector:
 
         self.temp_image = tempfile.NamedTemporaryFile(prefix="droid_alerts_region_", suffix=".png", delete=False)
         self.temp_image.close()
-        cv2.imwrite(self.temp_image.name, self.full_image)
+        write_cv_image(self.temp_image.name, self.full_image)
         self.background = tk.PhotoImage(file=self.temp_image.name)
         self.canvas.create_image(0, 0, image=self.background, anchor="nw")
 

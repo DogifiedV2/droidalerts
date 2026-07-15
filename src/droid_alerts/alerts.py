@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -63,20 +66,72 @@ class AlertPolicy:
         cutoff = now - max(self.dedupe_seconds, self.cooldown_seconds) * 4
         self._recent_hashes = {k: v for k, v in self._recent_hashes.items() if v >= cutoff}
 
-    def notify(self, detection: Detection) -> None:
+    def notify(self, detection: Detection) -> bool:
         if not self.sound_enabled:
-            return
-        try:
-            import winsound
+            return False
 
-            wav = _alert_wav(self.sound_file)
+        wav = _alert_wav(self.sound_file)
+        if sys.platform == "win32":
+            try:
+                import winsound
+
+                if wav is not None:
+                    winsound.PlaySound(str(wav), winsound.SND_FILENAME | winsound.SND_ASYNC)
+                else:
+                    winsound.Beep(1200, 220)
+                    winsound.Beep(1600, 220)
+            except Exception as exc:
+                raise RuntimeError(f"Windows could not play the alert sound: {exc}") from exc
+            return True
+
+        command: list[str] | None = None
+        if sys.platform == "darwin":
             if wav is not None:
-                winsound.PlaySound(str(wav), winsound.SND_FILENAME | winsound.SND_ASYNC)
+                player = shutil.which("afplay")
+                if player:
+                    command = [player, str(wav)]
             else:
-                winsound.Beep(1200, 220)
-                winsound.Beep(1600, 220)
-        except Exception:
-            pass
+                player = shutil.which("osascript")
+                if player:
+                    command = [player, "-e", "beep 2"]
+        elif wav is not None:
+            player = next(
+                (path for name in ("paplay", "aplay", "play") if (path := shutil.which(name))),
+                None,
+            )
+            if player:
+                command = [player, str(wav)]
+        else:
+            player = shutil.which("canberra-gtk-play")
+            if player:
+                command = [player, "-i", "dialog-warning"]
+            else:
+                player = shutil.which("play")
+                if player:
+                    command = [
+                        player,
+                        "-q",
+                        "-n",
+                        "synth",
+                        "0.35",
+                        "sine",
+                        "1400",
+                    ]
+
+        if command is None:
+            raise RuntimeError(
+                "No supported sound player was found. Install paplay, aplay, SoX, or libcanberra."
+            )
+        try:
+            subprocess.Popen(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise RuntimeError(f"Could not start the alert sound player: {exc}") from exc
+        return True
 
 
 def _alert_wav(preferred: str = "") -> Path | None:

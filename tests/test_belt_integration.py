@@ -15,12 +15,17 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.belt.events import log_track_event
 from droid_alerts.belt.region import RelativeRegion, load_region, save_region
+from droid_alerts.belt.targets import (
+    BELT_FAMILY_ORDER,
+    belt_family_meets_minimum,
+    normalize_belt_target_tiers,
+)
 from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox
 from droid_alerts.config import AppConfig
 from droid_alerts.gui import DroidAlertsApp
 from droid_alerts.notifications import alert_title, event_text
 from droid_alerts.classifier import Detection
-from droid_alerts.popup import _title_segments
+from droid_alerts.popup import _calculate_popup_layout, _title_lines, _title_segments
 
 
 class FakeVar:
@@ -111,22 +116,57 @@ class BeltConfigAndRegionTests(unittest.TestCase):
             {
                 "belt_overlay_enabled": False,
                 "belt_dev_mode": True,
+                "belt_template_collection_enabled": True,
                 "belt_cpu_warning_confirmed": True,
                 "belt_region_guide_confirmed": True,
-                "belt_target_names": [" r2 ", "GONK", "R2", 123],
+                "belt_target_names": ["GONK"],
+                "belt_target_tiers": {
+                    " r2 ": "gold",
+                    "GONK": "Beskar",
+                    "not-a-droid": "Default",
+                    "IG": "not-a-tier",
+                },
             }
         )
 
         self.assertFalse(config.belt_overlay_enabled)
         self.assertTrue(config.belt_dev_mode)
+        self.assertTrue(config.belt_template_collection_enabled)
         self.assertTrue(config.belt_cpu_warning_confirmed)
         self.assertTrue(config.belt_region_guide_confirmed)
-        self.assertEqual(["R2", "GONK"], config.belt_target_names)
+        self.assertEqual({"GONK": "Beskar", "R2": "Gold"}, config.belt_target_tiers)
         restored = AppConfig.from_dict(config.to_dict())
-        self.assertEqual(["R2", "GONK"], restored.belt_target_names)
+        self.assertEqual(config.belt_target_tiers, restored.belt_target_tiers)
+        self.assertNotIn("belt_target_names", config.to_dict())
         self.assertTrue(restored.belt_cpu_warning_confirmed)
         self.assertTrue(restored.belt_region_guide_confirmed)
         self.assertTrue(restored.belt_dev_mode)
+        self.assertTrue(restored.belt_template_collection_enabled)
+
+    def test_belt_family_threshold_uses_requested_progression(self):
+        self.assertEqual(
+            ("Default", "Gold", "Diamond", "Rainbow", "Beskar"),
+            BELT_FAMILY_ORDER,
+        )
+        self.assertTrue(belt_family_meets_minimum("Gold", "Gold"))
+        self.assertTrue(belt_family_meets_minimum("Beskar", "Gold"))
+        self.assertTrue(belt_family_meets_minimum("Rainbow", "Diamond"))
+        self.assertFalse(belt_family_meets_minimum("Gold", "Diamond"))
+        self.assertTrue(belt_family_meets_minimum("", "Default"))
+        self.assertFalse(belt_family_meets_minimum("", "Gold"))
+
+    def test_target_normalization_keeps_only_real_droids_and_tiers(self):
+        self.assertEqual(
+            {"CYCLENS": "Gold", "IG": "Default"},
+            normalize_belt_target_tiers(
+                {
+                    "ig": "default",
+                    " cyclens ": "GOLD",
+                    "unknown": "Beskar",
+                    "R2": "Ultra",
+                }
+            ),
+        )
 
     def test_belt_events_are_written_to_shared_history(self):
         track = SimpleNamespace(
@@ -472,7 +512,7 @@ class BeltAlertDeliveryTests(unittest.TestCase):
         app.refresh_logs = lambda **_kwargs: None
 
         config = AppConfig(
-            belt_target_names=["R2"],
+            belt_target_tiers={"R2": "Gold"},
             popup_enabled=True,
             sound_enabled=True,
             discord_enabled=True,
@@ -506,6 +546,7 @@ class BeltAlertDeliveryTests(unittest.TestCase):
                 {
                     "droid": "R2",
                     "rarity": "Diamond Common",
+                    "card_family": "Diamond",
                     "confidence": 0.93,
                     "rarity_confidence": 0.97,
                     "alerted": True,
@@ -528,7 +569,7 @@ class BeltAlertDeliveryTests(unittest.TestCase):
     def test_unselected_belt_droid_sends_nothing(self):
         app = DroidAlertsApp.__new__(DroidAlertsApp)
         with (
-            patch("droid_alerts.gui.load_config", return_value=AppConfig(belt_target_names=[])),
+            patch("droid_alerts.gui.load_config", return_value=AppConfig(belt_target_tiers={})),
             patch("droid_alerts.gui.show_popup") as popup,
         ):
             DroidAlertsApp._send_belt_alert(
@@ -536,6 +577,27 @@ class BeltAlertDeliveryTests(unittest.TestCase):
                 {"droid": "R2", "confidence": 0.93, "alerted": False},
             )
 
+        popup.assert_not_called()
+
+    def test_belt_alert_below_the_droids_minimum_tier_is_suppressed(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        config = AppConfig(belt_target_tiers={"R2": "Gold"})
+        with (
+            patch("droid_alerts.gui.load_config", return_value=config),
+            patch("droid_alerts.gui.AlertPolicy") as policy,
+            patch("droid_alerts.gui.show_popup") as popup,
+        ):
+            DroidAlertsApp._send_belt_alert(
+                app,
+                {
+                    "droid": "R2",
+                    "rarity": "Default Common",
+                    "card_family": "Default",
+                    "confidence": 0.93,
+                },
+            )
+
+        policy.assert_not_called()
         popup.assert_not_called()
 
     def test_actual_rarity_keeps_belt_alert_wording_and_title(self):
@@ -560,6 +622,34 @@ class BeltAlertDeliveryTests(unittest.TestCase):
             ],
             _title_segments(detection),
         )
+        self.assertEqual(
+            [
+                [("BESKAR ", "#e8eaf0"), ("RARE", "#3fd9ff")],
+                [("BAL-CORE", "#ffffff")],
+            ],
+            _title_lines(detection),
+        )
+
+    def test_popup_layout_keeps_card_and_icon_inside_monitor_at_every_scale(self):
+        for screen_width, screen_height in ((800, 600), (1280, 720), (1920, 1080)):
+            for scale in (0.7, 1.0, 1.5):
+                with self.subTest(screen=(screen_width, screen_height), scale=scale):
+                    layout = _calculate_popup_layout(
+                        screen_width,
+                        screen_height,
+                        scale,
+                        icon_width=128,
+                        icon_height=128,
+                    )
+                    self.assertLessEqual(layout.width + layout.margin * 2, screen_width)
+                    self.assertLessEqual(layout.height + layout.margin * 2, screen_height)
+                    self.assertLessEqual(layout.panel_width, layout.width)
+                    self.assertLessEqual(layout.panel_height, layout.height)
+                    if layout.show_icon:
+                        self.assertEqual(
+                            layout.width,
+                            layout.panel_width + 128 - 34 + 22,
+                        )
 
 
 if __name__ == "__main__":

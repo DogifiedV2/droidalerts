@@ -93,6 +93,10 @@ class TrackEvent:
 class TrackerUpdate:
     tracks: list[Track] = field(default_factory=list)
     events: list[TrackEvent] = field(default_factory=list)
+    # Accepted-observation index -> physical track ID. Consumers such as the
+    # local template collector can retain the best source pixels for an
+    # appearance without reimplementing the association algorithm.
+    observation_track_ids: dict[int, int] = field(default_factory=dict)
 
 
 class BeltTracker:
@@ -125,6 +129,7 @@ class BeltTracker:
         slow_confirmation_hits: int = 3,
         slow_cadence_seconds: float = 4.0 / 3.0,
         slow_minimum_confidence: float = 0.78,
+        template_conflict_grace_seconds: float = 0.50,
     ) -> None:
         self.confirmation_hits = max(1, int(confirmation_hits))
         self.slow_confirmation_hits = max(2, int(slow_confirmation_hits))
@@ -144,6 +149,10 @@ class BeltTracker:
         self.slow_minimum_confidence = min(
             1.0,
             max(0.0, float(slow_minimum_confidence)),
+        )
+        self.template_conflict_grace_seconds = max(
+            0.1,
+            float(template_conflict_grace_seconds),
         )
         self._tracks: list[Track] = []
         self._next_id = 1
@@ -193,11 +202,13 @@ class BeltTracker:
         prepared = self._deduplicate_observations(prepared)
         matches = self._associate(prepared, now, frame_width)
         matched_observations = {observation_index for observation_index in matches.values()}
+        observation_track_ids: dict[int, int] = {}
 
         for track_index, observation_index in matches.items():
             track = self._tracks[track_index]
             observation = prepared[observation_index]
             self._apply_observation(track, observation, now)
+            observation_track_ids[observation.source_index] = track.id
             if self._should_emit_entered(track):
                 track.entered_emitted = True
                 events.append(TrackEvent("entered", self._snapshot(track)))
@@ -209,6 +220,7 @@ class BeltTracker:
                 continue
             track = self._new_track(observation, now)
             self._tracks.append(track)
+            observation_track_ids[observation.source_index] = track.id
 
         visible: list[Track] = []
         for track in self._tracks:
@@ -220,7 +232,7 @@ class BeltTracker:
             # implausible, keep the overlay on the last real observation too.
             if track.confirmed and not self._is_outside(predicted, frame_width):
                 visible.append(self._snapshot(track, box=predicted))
-        return TrackerUpdate(visible, events)
+        return TrackerUpdate(visible, events, observation_track_ids)
 
     def predict(self, now: float, frame_width: int) -> TrackerUpdate:
         return self.update([], now, frame_width)
@@ -536,6 +548,17 @@ class BeltTracker:
         observed_center = _center(observation.box)
         for track in self._tracks:
             if not track.confirmed or track.name == observation.name:
+                continue
+            # Template identities are exact, repeat quickly, and do not have
+            # OCR's transient character substitutions. If a different visual
+            # identity persists after the old card stopped being seen, let it
+            # start its own confirmation instead of quarantining it for the
+            # full low-OCR timeout. This also handles a belt frame that was
+            # held for several seconds and then jumps to the next card.
+            if (
+                observation.raw_text.startswith("template:")
+                and now - track.last_seen_at >= self.template_conflict_grace_seconds
+            ):
                 continue
             predicted = self._association_box(track, now, frame_width)
             predicted_center = _center(predicted)

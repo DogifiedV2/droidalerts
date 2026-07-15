@@ -188,9 +188,13 @@ def projection_candidates(mask: np.ndarray) -> list[RowCandidate]:
             max_value = max(max_value, float(value))
 
         if (value < threshold or y == h - 1) and in_run:
-            end = y
-            height = end - start + 1
-            if 5 <= height <= 64:
+            # RowCandidate.y1 is exclusive everywhere else in this module.
+            end = y + 1 if value >= threshold and y == h - 1 else y
+            height = end - start
+            # The previous inclusive calculation effectively accepted four
+            # active rows except at the image boundary. Keep that proven
+            # sensitivity while making the coordinate/height contract exact.
+            if 4 <= height <= 64:
                 score = min(1.0, max_value / max(1.0, w * 0.22))
                 candidates.append(RowCandidate(start, end, score))
             in_run = False

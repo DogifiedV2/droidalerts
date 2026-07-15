@@ -5,7 +5,7 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
@@ -18,6 +18,7 @@ from droid_alerts.belt.ocr import TextObservation
 from droid_alerts.belt.watcher import (
     OCR_INTERVAL_SECONDS,
     adaptive_ocr_interval,
+    adaptive_template_interval,
     adaptive_track_timeout,
     run_belt_watcher,
 )
@@ -97,14 +98,17 @@ class WorkerProcessEntryTests(unittest.TestCase):
             run_belt_worker_process(
                 1,
                 PixelBox(0, 0, 900, 520),
-                ("R2",),
+                {"R2": "Gold"},
                 threading.Event(),
                 status_queue,
+                True,
                 True,
             )
 
         self.assertEqual([{"type": "ready"}], status_queue.events)
         self.assertTrue(received["dev_mode"])
+        self.assertTrue(received["collect_template_samples"])
+        self.assertEqual({"R2": "Gold"}, received["target_tiers"])
 
     def test_process_entry_reports_uncaught_failure(self):
         status_queue = RecordingQueue()
@@ -115,7 +119,7 @@ class WorkerProcessEntryTests(unittest.TestCase):
             run_belt_worker_process(
                 1,
                 PixelBox(0, 0, 900, 520),
-                (),
+                {},
                 threading.Event(),
                 status_queue,
             )
@@ -125,8 +129,11 @@ class WorkerProcessEntryTests(unittest.TestCase):
 
 
 class EnteringTracker:
+    def __init__(self, family):
+        self.family = family
+
     def update(self, _observations, _now, _frame_width):
-        track = SimpleNamespace(id=1, name="R2", confidence=0.93)
+        track = SimpleNamespace(id=1, name="R2", family=self.family, confidence=0.93)
         return SimpleNamespace(
             events=[SimpleNamespace(kind="entered", track=track)],
             tracks=[],
@@ -179,6 +186,12 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(0.5, adaptive_ocr_interval(3))
         self.assertEqual(1.0, adaptive_ocr_interval(4))
         self.assertEqual(1.0, adaptive_ocr_interval(100))
+
+    def test_empty_template_scans_back_off_to_four_fps(self):
+        self.assertAlmostEqual(1.0 / 8.0, adaptive_template_interval(0))
+        self.assertAlmostEqual(1.0 / 8.0, adaptive_template_interval(11))
+        self.assertEqual(0.25, adaptive_template_interval(12))
+        self.assertEqual(0.25, adaptive_template_interval(100))
 
     def test_track_timeout_expands_for_slow_ocr_and_is_capped(self):
         self.assertEqual(3.5, adaptive_track_timeout(0.5))
@@ -261,15 +274,25 @@ class WatcherTests(unittest.TestCase):
         self.assertTrue(capture.closed)
         self.assertEqual("stopped", events[-1]["type"])
 
-    def test_rapidocr_start_failure_does_not_fall_back_to_templates(self):
+    def test_normal_watcher_uses_templates_without_starting_ocr(self):
         frame, _ = card_frame()
         stop_event = threading.Event()
         capture = OneFrameCapture(frame, stop_event)
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = SimpleNamespace(
+            observations=[],
+            candidates=(),
+            text_observations=(),
+            diagnostics={"detector": "templates", "card_window_count": 0},
+        )
         events = []
 
         with (
             patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
-            patch("droid_alerts.belt.watcher.RapidOcrEngine", side_effect=RuntimeError("missing model")),
+            patch(
+                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                return_value=recognizer,
+            ) as template_factory,
         ):
             run_belt_watcher(
                 1,
@@ -278,8 +301,73 @@ class WatcherTests(unittest.TestCase):
                 status_callback=events.append,
             )
 
-        self.assertIn("Belt OCR could not start: missing model", events[0]["message"])
+        template_factory.assert_called_once_with()
+        recognizer.analyze.assert_called_once()
+        ready = next(event for event in events if event["type"] == "ready")
+        scan = next(event for event in events if event["type"] == "scan")
+        self.assertEqual("templates", ready["detector"])
+        self.assertEqual("templates", scan["detector"])
+
+    def test_optional_template_collector_receives_tracked_accepted_candidates(self):
+        frame, name_box = card_frame()
+        stop_event = threading.Event()
+        capture = OneFrameCapture(frame, stop_event)
+        collector = MagicMock()
+        collector.status.return_value = {
+            "enabled": True,
+            "path": "belt_template_samples",
+            "total_samples": 0,
+            "droid_count": 0,
+            "review_count": 0,
+            "max_per_droid": 20,
+        }
+        collector.process_events.return_value = []
+        collector.expire.return_value = []
+        collector.close.return_value = []
+
+        with (
+            patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
+            patch(
+                "droid_alerts.belt.watcher.BeltTemplateSampleCollector",
+                return_value=collector,
+            ) as collector_factory,
+        ):
+            run_belt_watcher(
+                1,
+                PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                stop_event=stop_event,
+                ocr_engine=StaticOcr([TextObservation("R2", 0.99, name_box)]),
+                collect_template_samples=True,
+            )
+
+        collector_factory.assert_called_once_with()
+        self.assertEqual({0: 1}, collector.observe.call_args.args[2])
+        self.assertEqual("R2", collector.observe.call_args.args[1][0].canonical_name)
+        collector.close.assert_called_once_with()
+
+    def test_template_index_failure_is_reported(self):
+        frame, _ = card_frame()
+        stop_event = threading.Event()
+        capture = OneFrameCapture(frame, stop_event)
+        events = []
+
+        with (
+            patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
+            patch(
+                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                side_effect=RuntimeError("missing index"),
+            ),
+        ):
+            run_belt_watcher(
+                1,
+                PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                stop_event=stop_event,
+                status_callback=events.append,
+            )
+
         self.assertTrue(capture.closed)
+        self.assertIn("Belt template recognition could not start", events[0]["message"])
+        self.assertIn("missing index", events[0]["message"])
         self.assertNotIn("ready", [event["type"] for event in events])
         self.assertEqual("stopped", events[-1]["type"])
 
@@ -301,16 +389,28 @@ class WatcherTests(unittest.TestCase):
         self.assertIn("Screen capture could not start", events[0]["message"])
         self.assertEqual("stopped", events[-1]["type"])
 
-    def test_selected_names_control_alerts_without_filtering_recognition(self):
+    def test_per_droid_minimum_tier_controls_alerts_without_filtering_recognition(self):
         frame, _ = card_frame()
 
-        for targets, expected_alerted in (((), False), (("R2",), True)):
+        cases = (
+            ({}, "Default", False),
+            ({"R2": "Default"}, "", True),
+            ({"R2": "Gold"}, "Default", False),
+            ({"R2": "Gold"}, "Gold", True),
+            ({"R2": "Diamond"}, "Rainbow", True),
+            ({"R2": "Rainbow"}, "Diamond", False),
+            ({"R2": "Rainbow"}, "Beskar", True),
+        )
+        for targets, detected_family, expected_alerted in cases:
             stop_event = threading.Event()
             capture = OneFrameCapture(frame, stop_event)
             ocr = StaticOcr([])
             with (
                 patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
-                patch("droid_alerts.belt.watcher.BeltTracker", return_value=EnteringTracker()),
+                patch(
+                    "droid_alerts.belt.watcher.BeltTracker",
+                    return_value=EnteringTracker(detected_family),
+                ),
                 patch(
                     "droid_alerts.belt.watcher.log_track_event",
                     return_value={"droid": "R2", "alerted": expected_alerted},
@@ -319,7 +419,7 @@ class WatcherTests(unittest.TestCase):
                 run_belt_watcher(
                     1,
                     PixelBox(0, 0, frame.shape[1], frame.shape[0]),
-                    target_names=targets,
+                    target_tiers=targets,
                     stop_event=stop_event,
                     ocr_engine=ocr,
                 )

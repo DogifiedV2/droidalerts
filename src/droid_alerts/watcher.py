@@ -18,6 +18,7 @@ from .config import (
     load_config,
     templates_dir,
 )
+from .image_io import write_cv_image
 from .logging_io import alert_samples_dir, append_event, debug_dir, timestamp
 from .notifications import (
     DeliveryResult,
@@ -32,6 +33,22 @@ from .pipeline import Pipeline
 from .popup import popup_icon_path, show_popup
 from .region import RegionResolver
 from .telemetry import AnonymousTelemetryClient
+
+
+def _append_event_safely(
+    event: dict[str, object],
+    *,
+    emit: Callable[..., None] | None = None,
+) -> bool:
+    """Best-effort logging: notification delivery must not depend on disk I/O."""
+    try:
+        append_event(event)
+        return True
+    except Exception as exc:
+        print(f"[LOG] Failed to write {event.get('event_type', 'event')}: {exc}")
+        if emit is not None:
+            emit("log_error", message=str(exc), failed_event_type=event.get("event_type", ""))
+        return False
 
 
 def run_watch(
@@ -174,7 +191,7 @@ def run_watch(
             "is_priority": True,
             "score": event.get("score"),
         }
-        append_event(delivery_event)
+        _append_event_safely(delivery_event, emit=emit)
         emit("delivery", result=delivery_event)
 
     # Live settings: the GUI autosaves config.json (and region nudges save
@@ -211,6 +228,7 @@ def run_watch(
                     config = new_config
                     policy.apply_config(config)
                     telemetry.apply_config(config)
+                    pipeline.apply_thresholds(config.thresholds)
                     pipeline.detector.extra_checks = config.extra_checks
                     log_dedupe_seconds = max(12.0, config.dedupe_seconds)
                     webhook_url = None
@@ -337,17 +355,35 @@ def run_watch(
                         event["sample_path"] = str(sample_paths[1])
                 should_log_event = fire or debug or not recently_logged
                 if should_log_event:
-                    append_event(event)
+                    _append_event_safely(event, emit=emit)
                     emit("alert" if fire else "detection", event=event)
                 if fire:
                     print(f"[ALERT] {event['ts']} {label} score={detection.score:.2f}")
                     logged_spawn_keys[spawn_key] = now
-                    policy.notify(detection)
+                    try:
+                        policy.notify(detection)
+                    except Exception as exc:
+                        print(f"[SOUND] Failed to play alert: {exc}")
+                        emit("sound_error", message=str(exc))
                     telemetry.submit_alert_detection(detection=detection, detected_at=event["ts"])
                     if debug and config.share_debug_detections:
-                        debug_paths = _save_debug(band, result, reason="shared_alert")
-                        append_event(_debug_snapshot_event(frame_index, result, debug_paths, reason="shared_alert"))
-                        telemetry.submit_debug_detection(detection=detection, event=event, screenshot_paths=debug_paths)
+                        try:
+                            debug_paths = _save_debug(band, result, reason="shared_alert")
+                        except Exception as exc:
+                            print(f"[DEBUG] Failed to save shared alert snapshot: {exc}")
+                            emit("debug_save_error", message=str(exc))
+                        else:
+                            _append_event_safely(
+                                _debug_snapshot_event(
+                                    frame_index, result, debug_paths, reason="shared_alert"
+                                ),
+                                emit=emit,
+                            )
+                            telemetry.submit_debug_detection(
+                                detection=detection,
+                                event=event,
+                                screenshot_paths=debug_paths,
+                            )
                     if config.popup_enabled:
                         show_popup(
                             detection,
@@ -429,7 +465,7 @@ def run_watch(
                         "is_priority": False,
                         "score": None,
                     }
-                    append_event(rejected_event)
+                    _append_event_safely(rejected_event, emit=emit)
                     detail = f" {rejection['detail']}" if rejection.get("detail") else ""
                     print(
                         f"[REJECTED] {rejected_event['ts']} y={rejection['y']} "
@@ -437,17 +473,35 @@ def run_watch(
                     )
 
             if debug and debug_hotkey is not None and debug_hotkey():
-                saved = _save_debug(band, result, reason="manual")
-                append_event(_debug_snapshot_event(frame_index, result, saved, reason="manual"))
-                print("[debug] saved manual chat-box snapshot:")
-                for path in saved:
-                    print(f"        {path}")
+                try:
+                    saved = _save_debug(band, result, reason="manual")
+                except Exception as exc:
+                    print(f"[DEBUG] Failed to save manual snapshot: {exc}")
+                    emit("debug_save_error", message=str(exc))
+                else:
+                    _append_event_safely(
+                        _debug_snapshot_event(frame_index, result, saved, reason="manual"),
+                        emit=emit,
+                    )
+                    print("[debug] saved manual chat-box snapshot:")
+                    for path in saved:
+                        print(f"        {path}")
             if debug and next_debug_snapshot_at is not None and time.monotonic() >= next_debug_snapshot_at:
-                saved = _save_debug(band, result, reason="macos_interval")
-                append_event(_debug_snapshot_event(frame_index, result, saved, reason="macos_interval"))
-                print("[debug] saved timed macOS chat-box snapshot:")
-                for path in saved:
-                    print(f"        {path}")
+                try:
+                    saved = _save_debug(band, result, reason="macos_interval")
+                except Exception as exc:
+                    print(f"[DEBUG] Failed to save timed macOS snapshot: {exc}")
+                    emit("debug_save_error", message=str(exc))
+                else:
+                    _append_event_safely(
+                        _debug_snapshot_event(
+                            frame_index, result, saved, reason="macos_interval"
+                        ),
+                        emit=emit,
+                    )
+                    print("[debug] saved timed macOS chat-box snapshot:")
+                    for path in saved:
+                        print(f"        {path}")
                 next_debug_snapshot_at = time.monotonic() + debug_interval_seconds
 
             elapsed = time.monotonic() - started
@@ -469,8 +523,8 @@ def _save_sample(normalized_band, detection, label: str) -> tuple[Path, Path]:
     folder.mkdir(parents=True, exist_ok=True)
     raw_path = folder / f"{stamp}_raw.png"
     det_path = folder / f"{stamp}_det.png"
-    cv2.imwrite(str(raw_path), normalized_band)
-    cv2.imwrite(str(det_path), draw_detections(normalized_band, [detection]))
+    write_cv_image(raw_path, normalized_band)
+    write_cv_image(det_path, draw_detections(normalized_band, [detection]))
     return raw_path, det_path
 
 
@@ -525,12 +579,12 @@ def _save_debug(band, result, *, reason: str) -> list[str]:
     out.mkdir(parents=True, exist_ok=True)
     prefix = f"{reason}_roi_{stamp}"
     paths = [str(out / f"{prefix}.png")]
-    cv2.imwrite(paths[0], band)
+    write_cv_image(paths[0], band)
     if result.normalized_image is not None:
         overlay_path = str(out / f"{prefix}_candidate_check.png")
         overlay = _draw_debug_overlay(result.normalized_image, result)
         overlay = draw_detections(overlay, result.detections)
-        cv2.imwrite(overlay_path, overlay)
+        write_cv_image(overlay_path, overlay)
         paths.append(overlay_path)
     return paths
 

@@ -39,36 +39,54 @@ controls stay behind the **Advanced settings** toggle in Settings.
 
 ## Belt Tracker
 
-The **Belt Tracker** tab watches the moving blueprint belt and can alert for
-selected droid names. It can run at the same time as chat alerts.
+The **Belt Tracker** tab watches the moving blueprint belt and can alert from a
+different minimum family tier for each droid. It can run at the same time as
+chat alerts.
 
 1. Choose the Fortnite display once on the Dashboard.
 2. Open Belt Tracker and click **Select Belt Region**.
 3. Select the area you'll angle the belt in from the bottom of the blueprints
    to the top, excluding the price, then press Enter. Standing at the start of
    the belt with around three blueprints in the box is recommended.
-4. Under **Priority Alerts**, click **Modify** and select the droids you want
-   alerts for. No selection means no Belt Tracker alerts.
+4. Under **Priority Alerts**, click **Modify**, search for a droid, and assign
+   its minimum alert tier. You can edit several selected rows at once. A droid
+   set to Off has no Belt Tracker alerts.
 5. Click **Start Tracking**.
 
-The detector reads exact card names, the card family shown by the border and
-left label (Default, Gold, Diamond, Beskar, or Rainbow), and the rarity pill
-(Common, Rare, Epic, Legendary, or Mythic). It checks the surrounding card
-artwork and nameplate. Normally a card is reported as soon as four of its latest
-five reads agree. Below 0.75 OCR FPS, three consecutive high-confidence reads
-are accepted so slower PCs can still catch short-lived cards; it does not need
-to cross a boundary. Selected droids use the same Alert Channels as Dashboard
-alerts. Saved Belt Tracker regions are separate for each display, and its events
-appear with other alerts in History.
+The detector identifies cards from a compact local artwork-template index and
+does not use OCR. A dark-nameplate gate and confidence
+margin reject scenery, ambiguous lookalikes, and incomplete edge cards. The
+frame/label supplies the family (Default, Gold, Diamond, Rainbow, or Beskar),
+while the colored pill supplies Common, Rare, Epic, Legendary, or Mythic.
+Normally a card is reported as soon as four recent scans agree. Active regions
+scan at up to 8 FPS and empty regions back off to 4 FPS. Minimum tiers follow
+Default → Gold → Diamond → Rainbow → Beskar, so Gold+ includes Gold and every
+tier above it. The Common–Mythic pill does not affect this filter. Configured
+droids use the same Alert Channels as Dashboard alerts. Saved Belt Tracker
+regions are separate for each display, and its events appear with other alerts
+in History.
+
+Advanced Settings exposes **Belt idle scan FPS** and **Belt active scan FPS**.
+Both accept 1–20 FPS, default to 4/8 for every install, and the idle value is
+automatically kept at or below the active value. Higher active rates confirm
+cards sooner but use proportionally more CPU.
+
+To collect examples for detector review, keep roughly three or four blueprints
+visible and enable **Save detections for review** before starting Belt Tracker.
+Tracking stays on the same fast template path. It retains the sharpest fully
+visible crop from each confirmed appearance under
+`data/belt_template_samples/detections`, rejects near-duplicates, and keeps at
+most 20 diverse samples per detected droid. Each JSON sidecar records exactly
+what name, family, and rarity the tracker predicted. These predictions never
+enter `confirmed/` and do not alter the live template index automatically.
 
 If Belt Tracker is unusually slow or misses cards, enable **Dev mode** before
-starting it. Dev mode keeps detailed local timing, OCR, candidate-rejection,
-and tracker-state logs under `data/belt_dev` and saves at most eight diagnostic
+starting it. Dev mode records detector-stage timings, candidate rejection
+reasons, and tracker state under `data/belt_dev`, with at most eight diagnostic
 frames per run. Stop after reproducing the issue and create a Support Bundle in
-Diagnostics; the bundle includes the latest Belt dev log and up to four of its
-frames. Belt Tracker also automatically keeps tracks alive longer and follows
-the shared motion of the card row when OCR is slow, so a machine running at
-0.2 OCR FPS can still accumulate repeat reads.
+Diagnostics; the bundle includes the latest Belt dev log and up to four frames.
+If the bundled template index is unavailable or corrupt, Belt Tracker reports
+the problem instead of silently switching detectors.
 
 Optional behaviour includes automatic watcher startup and pausing while
 Fortnite is closed. Diagnostics can create a redacted support ZIP, show or
@@ -129,11 +147,12 @@ When a priority alert fires, it also sends the timestamp plus the detected
 droid/rarity combo so the site can count which rare droids are being found. Belt
 Tracker has a separate heartbeat while it is running. It periodically sends
 only confirmed droid names and compact cumulative counts grouped by anonymous
-session and hour. Raw OCR reads, confidence values, boxes, and exit events are
+session and hour. Raw detector details, confidence values, boxes, and exit events are
 not uploaded. Failed belt-count uploads stay in a small local retry file.
 
 Normal telemetry does **not** send screenshots, player names, notification
-credentials, machine names, chat text, or raw Belt Tracker OCR.
+credentials, machine names, chat text, or raw Belt Tracker frames.
+Locally collected Belt template samples are never uploaded.
 
 In **Settings**, **Identify This Install** shows the random install ID and links
 to <https://gonk.tools/identify>. Identification is optional and requires a

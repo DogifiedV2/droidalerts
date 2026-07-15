@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,13 +39,39 @@ def directory_size(path: Path) -> int:
 
 
 def storage_summary() -> dict[str, int]:
-    return {
-        "logs": directory_size(logs_dir()),
-        "samples": directory_size(alert_samples_dir()),
-        "debug": directory_size(debug_dir()),
-        "belt_dev": directory_size(data_dir() / "belt_dev"),
-        "total": directory_size(data_dir()),
+    summary = {"logs": 0, "samples": 0, "debug": 0, "belt_dev": 0, "total": 0}
+    root = data_dir()
+    if not root.exists():
+        return summary
+
+    categories = {
+        logs_dir(): "logs",
+        alert_samples_dir(): "samples",
+        debug_dir(): "debug",
+        root / "belt_dev": "belt_dev",
     }
+    pending: list[tuple[Path, str | None]] = [(root, None)]
+    while pending:
+        folder, inherited_key = pending.pop()
+        try:
+            entries = list(os.scandir(folder))
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    child = Path(entry.path)
+                    pending.append((child, inherited_key or categories.get(child)))
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                size = entry.stat(follow_symlinks=False).st_size
+            except OSError:
+                continue
+            summary["total"] += size
+            if inherited_key is not None:
+                summary[inherited_key] += size
+    return summary
 
 
 def clear_directory(path: Path) -> CleanupResult:

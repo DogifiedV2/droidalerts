@@ -124,24 +124,36 @@ class Calibration:
             return cls()
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except Exception:
+            if not isinstance(data, dict):
+                return cls()
+            profiles = data.get("profiles")
+            if isinstance(profiles, dict):
+                profile = profiles.get(monitor_key or "default") or profiles.get("default")
+                if profile is None and monitor_key is None and profiles:
+                    profile = next(iter(profiles.values()))
+                data = profile if isinstance(profile, dict) else {}
+
+            ratios = data.get("ratios")
+            if not isinstance(ratios, dict):
+                ratios = {}
+            signature = data.get("monitor_signature")
+            if not isinstance(signature, dict):
+                signature = {}
+            calibration = cls(
+                mode=str(data.get("mode", "auto")),
+                monitor_signature={str(k): int(v) for k, v in signature.items()},
+            )
+            keys = ("left", "top", "width", "height")
+            if all(key in ratios for key in keys):
+                calibration.ratios = {key: float(ratios[key]) for key in keys}
+                if not calibration.ratios_valid():
+                    calibration.mode = "auto"
+                    calibration.ratios = dict(AUTO_BOX_PERCENT)
+            else:
+                calibration.mode = "auto"
+            return calibration
+        except (OSError, json.JSONDecodeError, TypeError, ValueError, OverflowError):
             return cls()
-        profiles = data.get("profiles")
-        if isinstance(profiles, dict):
-            profile = profiles.get(monitor_key or "default") or profiles.get("default")
-            if profile is None and monitor_key is None and profiles:
-                profile = next(iter(profiles.values()))
-            data = profile if isinstance(profile, dict) else {}
-        ratios = data.get("ratios") or {}
-        calibration = cls(
-            mode=str(data.get("mode", "auto")),
-            monitor_signature={k: int(v) for k, v in (data.get("monitor_signature") or {}).items()},
-        )
-        if all(k in ratios for k in ("left", "top", "width", "height")):
-            calibration.ratios = {k: float(ratios[k]) for k in ("left", "top", "width", "height")}
-        else:
-            calibration.mode = "auto"
-        return calibration
 
     def save(self, monitor_key: str | None = None) -> None:
         path = calibration_path()
@@ -150,7 +162,9 @@ class Calibration:
         if path.exists():
             try:
                 existing = json.loads(path.read_text(encoding="utf-8-sig"))
-            except Exception:
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                existing = {}
+            if not isinstance(existing, dict):
                 existing = {}
             if isinstance(existing.get("profiles"), dict):
                 profiles = dict(existing["profiles"])
@@ -174,13 +188,16 @@ class Calibration:
         }
 
     def ratios_valid(self) -> bool:
-        r = self.ratios
-        return (
-            0.0 <= r["left"] < 1.0
-            and 0.0 <= r["top"] < 1.0
-            and 0.01 <= r["width"] <= 1.0 - r["left"]
-            and 0.01 <= r["height"] <= 1.0 - r["top"]
-        )
+        try:
+            r = self.ratios
+            return (
+                0.0 <= r["left"] < 1.0
+                and 0.0 <= r["top"] < 1.0
+                and 0.01 <= r["width"] <= 1.0 - r["left"]
+                and 0.01 <= r["height"] <= 1.0 - r["top"]
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
 
 
 def calibration_path() -> Path:

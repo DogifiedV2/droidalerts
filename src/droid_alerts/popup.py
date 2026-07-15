@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 from .classifier import Detection
@@ -46,6 +47,87 @@ RARITY_COLORS = {
 }
 CARD_BG = "#12141f"
 CARD_BG_SOFT = "#1a1d2c"
+ICON_HAND_X = 34
+ICON_HAND_Y = 50
+ICON_HAND_DROP = 10
+
+
+@dataclass(frozen=True)
+class _PopupLayout:
+    width: int
+    height: int
+    panel_width: int
+    panel_height: int
+    margin: int
+    ui_scale: float
+    show_icon: bool
+
+
+def _calculate_popup_layout(
+    screen_width: int,
+    screen_height: int,
+    scale: float,
+    *,
+    icon_width: int = 0,
+    icon_height: int = 0,
+) -> _PopupLayout:
+    """Fit the card and optional character inside the selected monitor."""
+
+    screen_width = max(1, int(screen_width))
+    screen_height = max(1, int(screen_height))
+    ui_scale = min(1.5, max(0.7, float(scale)))
+    margin = max(16, int(24 * ui_scale))
+    available_width = max(1, screen_width - margin * 2)
+    available_height = max(1, screen_height - margin * 2)
+    desired_panel_height = int(
+        min(185, max(150, screen_height - 160)) * ui_scale
+    )
+
+    icon_overhang = max(0, int(icon_width) - ICON_HAND_X + 22)
+    icon_height_extra = max(
+        0,
+        int(icon_height) - ICON_HAND_Y + ICON_HAND_DROP,
+    ) + 10
+    minimum_panel_height = max(88, int(105 * ui_scale))
+    show_icon = bool(
+        icon_width > 0
+        and icon_height > 0
+        and available_width - icon_overhang >= 220
+        and available_height - icon_height_extra >= minimum_panel_height
+    )
+
+    if show_icon:
+        desired_panel_width = int(
+            min(
+                880,
+                max(620, screen_width - int(icon_width) - 90 + ICON_HAND_X),
+            )
+            * ui_scale
+        )
+        panel_width = min(desired_panel_width, available_width - icon_overhang)
+        panel_height = min(desired_panel_height, available_height - icon_height_extra)
+        return _PopupLayout(
+            width=panel_width + icon_overhang,
+            height=panel_height + icon_height_extra,
+            panel_width=panel_width,
+            panel_height=panel_height,
+            margin=margin,
+            ui_scale=ui_scale,
+            show_icon=True,
+        )
+
+    desired_width = int(min(1050, max(420, screen_width - 80)) * ui_scale)
+    width = min(desired_width, available_width)
+    panel_height = min(desired_panel_height, available_height)
+    return _PopupLayout(
+        width=width,
+        height=panel_height,
+        panel_width=width,
+        panel_height=panel_height,
+        margin=margin,
+        ui_scale=ui_scale,
+        show_icon=False,
+    )
 
 
 def _apply_win32_color_key(window: "tk.Misc", color_hex: str) -> bool:
@@ -110,6 +192,58 @@ def _title_segments(detection: Detection) -> list[tuple[str, str]]:
     else:
         segments.append((name, DROID_TEXT_COLORS.get(detection.droid, "#ffffff")))
     return segments
+
+
+def _title_lines(detection: Detection) -> list[list[tuple[str, str]]]:
+    """Split belt attributes from the droid name to keep long alerts legible."""
+
+    segments = _title_segments(detection)
+    if not _is_belt_detection(detection) or detection.rarity == "Belt":
+        return [segments]
+    attribute_count = len(detection.rarity.split())
+    attributes = list(segments[:attribute_count])
+    if attributes:
+        text, color = attributes[-1]
+        attributes[-1] = (text.rstrip(), color)
+    name = list(segments[attribute_count:])
+    return [line for line in (attributes, name) if line]
+
+
+def _fitted_font(
+    window: "tk.Misc",
+    segments: list[tuple[str, str]],
+    *,
+    family: str,
+    preferred_size: int,
+    minimum_size: int,
+    max_width: int,
+    weight: str | None = None,
+) -> "tkfont.Font":
+    """Create the largest font that keeps every segment inside max_width."""
+
+    preferred_size = max(1, int(preferred_size))
+    minimum_size = max(1, min(preferred_size, int(minimum_size)))
+    font_options: dict[str, object] = {
+        "root": window,
+        "family": family,
+        "size": preferred_size,
+    }
+    if weight is not None:
+        font_options["weight"] = weight
+    font_obj = tkfont.Font(**font_options)
+
+    def measured_width() -> int:
+        return sum(font_obj.measure(text) for text, _color in segments)
+
+    width = measured_width()
+    if width <= max_width or width <= 0:
+        return font_obj
+    size = max(minimum_size, int(preferred_size * max_width / width))
+    font_obj.configure(size=size)
+    while size > minimum_size and measured_width() > max_width:
+        size -= 1
+        font_obj.configure(size=size)
+    return font_obj
 
 
 def _draw_segments(
@@ -190,13 +324,8 @@ def show_popup(
         screen_h = monitor.height if monitor is not None else window.winfo_screenheight()
         screen_left = monitor.left if monitor is not None else 0
         screen_top = monitor.top if monitor is not None else 0
-        ui_scale = min(1.5, max(0.7, float(scale)))
-        # Native 128px icon looks crisp; 2x zoom was blurry. 1.5x via
-        # zoom(3)/subsample(2) if a bigger character is ever wanted again.
-        panel_height = int(min(185, max(150, screen_h - 160)) * ui_scale)
         icon = None
-        has_icon = bool(icon_path and icon_path.exists())
-        if has_icon:
+        if icon_path and icon_path.exists():
             try:
                 # master= binds the image to THIS window's interpreter; the
                 # process default root may belong to another overlay's Tk
@@ -206,26 +335,22 @@ def show_popup(
             except Exception as exc:
                 print(f"[POPUP] Failed to load icon: {exc}")
                 icon = None
-                has_icon = False
 
-        if icon is not None:
-            # Original image hand point. The panel's bottom-right corner
-            # lands just above here so the box sits on the raised hand.
-            hand_x = 34
-            hand_y = 50
-            hand_drop = 10
-            panel_width = int(min(880, max(620, screen_w - icon.width() - 90 + hand_x)) * ui_scale)
-            width = panel_width + icon.width() - hand_x + 22
-            height = panel_height + max(0, icon.height() - hand_y + hand_drop) + 10
-        else:
-            width = int(min(1050, max(420, screen_w - 80)) * ui_scale)
-            panel_width = width
-            height = panel_height
-
-        margin = max(16, int(24 * ui_scale))
-        width = min(width, max(220, screen_w - margin * 2))
-        height = min(height, max(120, screen_h - margin * 2))
-        panel_width = min(panel_width, width)
+        layout = _calculate_popup_layout(
+            screen_w,
+            screen_h,
+            scale,
+            icon_width=icon.width() if icon is not None else 0,
+            icon_height=icon.height() if icon is not None else 0,
+        )
+        if not layout.show_icon:
+            icon = None
+        width = layout.width
+        height = layout.height
+        panel_width = layout.panel_width
+        panel_height = layout.panel_height
+        margin = layout.margin
+        ui_scale = layout.ui_scale
         if position.endswith("left"):
             x = screen_left + margin
         elif position.endswith("right"):
@@ -259,15 +384,32 @@ def show_popup(
         _rounded_rect(canvas, 3, 3, panel_width - 4, panel_height - 4, 18, fill=accent, outline="")
         _rounded_rect(canvas, 6, 6, panel_width - 7, panel_height - 7, 16, fill=CARD_BG, outline="")
         # Subtle inner header band.
-        _rounded_rect(canvas, 6, 6, panel_width - 7, 56, 16, fill=CARD_BG_SOFT, outline="")
-        canvas.create_rectangle(6, 40, panel_width - 7, 56, fill=CARD_BG_SOFT, outline="")
+        header_height = min(
+            max(40, int(56 * ui_scale)),
+            max(40, panel_height - 44),
+        )
+        _rounded_rect(
+            canvas,
+            6,
+            6,
+            panel_width - 7,
+            header_height,
+            16,
+            fill=CARD_BG_SOFT,
+            outline="",
+        )
+        canvas.create_rectangle(
+            6,
+            max(6, header_height - 16),
+            panel_width - 7,
+            header_height,
+            fill=CARD_BG_SOFT,
+            outline="",
+        )
 
         center_x = panel_width // 2
         caption_font = tkfont.Font(
             root=window, family="Segoe UI", size=max(9, int(13 * ui_scale)), weight="bold"
-        )
-        title_font = tkfont.Font(
-            root=window, family="Segoe UI Black", size=max(20, int(32 * ui_scale))
         )
 
         caption = (
@@ -276,18 +418,60 @@ def show_popup(
             else ("PRIORITY SPAWN" if detection.is_priority else "DROID SPAWN")
         )
         canvas.create_text(
-            center_x, 32, text=" ".join(caption), fill=accent, font=caption_font, anchor="center"
+            center_x,
+            header_height // 2 + 3,
+            text=" ".join(caption),
+            fill=accent,
+            font=caption_font,
+            anchor="center",
         )
 
-        # Single title line, e.g. "MYTHIC BESKAR", centered in the body
-        # below the header band.
-        title_y = (56 + panel_height - 8) // 2
-        _draw_segments(canvas, _title_segments(detection), center_x, title_y, title_font)
+        title_lines = _title_lines(detection)
+        title_width = max(40, panel_width - max(28, int(40 * ui_scale)))
+        body_top = header_height + max(4, int(6 * ui_scale))
+        body_bottom = panel_height - max(6, int(10 * ui_scale))
+        body_center = (body_top + body_bottom) // 2
+        if len(title_lines) == 1:
+            title_font = _fitted_font(
+                window,
+                title_lines[0],
+                family="Segoe UI Black",
+                preferred_size=max(20, int(32 * ui_scale)),
+                minimum_size=max(11, int(14 * ui_scale)),
+                max_width=title_width,
+            )
+            _draw_segments(canvas, title_lines[0], center_x, body_center, title_font)
+        else:
+            attribute_font = _fitted_font(
+                window,
+                title_lines[0],
+                family="Segoe UI",
+                preferred_size=max(12, int(18 * ui_scale)),
+                minimum_size=max(9, int(11 * ui_scale)),
+                max_width=title_width,
+                weight="bold",
+            )
+            name_font = _fitted_font(
+                window,
+                title_lines[1],
+                family="Segoe UI Black",
+                preferred_size=max(19, int(31 * ui_scale)),
+                minimum_size=max(11, int(14 * ui_scale)),
+                max_width=title_width,
+            )
+            attribute_height = int(attribute_font.metrics("linespace"))
+            name_height = int(name_font.metrics("linespace"))
+            line_gap = max(2, int(4 * ui_scale))
+            total_height = attribute_height + line_gap + name_height
+            attribute_y = body_center - total_height // 2 + attribute_height // 2
+            name_y = attribute_y + attribute_height // 2 + line_gap + name_height // 2
+            _draw_segments(canvas, title_lines[0], center_x, attribute_y, attribute_font)
+            _draw_segments(canvas, title_lines[1], center_x, name_y, name_font)
 
         if icon is not None:
             window._droid_alerts_popup_icon = icon  # type: ignore[attr-defined]
-            icon_left = panel_width - hand_x + 3
-            icon_top = panel_height - hand_y + hand_drop
+            icon_left = panel_width - ICON_HAND_X + 3
+            icon_top = panel_height - ICON_HAND_Y + ICON_HAND_DROP
             canvas.create_image(icon_left, icon_top, image=icon, anchor="nw")
 
         window.update_idletasks()

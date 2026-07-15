@@ -78,10 +78,20 @@ do not currently offer a global capture hotkey.
 
 That setting diagnoses the chat detector. Belt Tracker has a separate **Dev
 mode** in its Belt Area panel. Enable it before starting Belt Tracker to record
-capture and OCR stage timings, exact OCR text, candidate rejection reasons,
-adaptive track timeout, tracker state, and a limited set of frames under
-`data/belt_dev`. The latest session is included when Diagnostics creates a
-Support Bundle.
+capture and recognition-stage timings, detector mode, candidate rejection
+reasons, tracker state, and a limited set of frames under `data/belt_dev`.
+The latest session is included when Diagnostics creates a Support Bundle.
+
+The separate **Save detections for review** switch creates a bounded local
+dataset under `data/belt_template_samples/detections`. Tracking continues to
+use the normal template matcher. For each physical track, the collector retains
+the best fully visible crop and writes at most one image after temporal
+confirmation. A 64-bit perceptual hash rejects near-duplicates, and each
+predicted droid keeps at most 20 samples across restarts. Metadata beside every
+PNG records `detected_name`, `detected_family`, `detected_rarity`, confidence,
+crop coordinates, quality components, and the artwork subregion. The folder is
+review-only: it is never read by the template-index builder, uploaded, or used
+to alter the live index automatically.
 
 ## Testing
 

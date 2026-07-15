@@ -80,7 +80,7 @@ class BeltTelemetryTests(unittest.TestCase):
         config = AppConfig(
             anonymous_belt_stats_url="https://example.test/belt-heartbeat",
             anonymous_belt_counts_url="https://example.test/belt-counts",
-            belt_target_names=["R2", "GONK"],
+            belt_target_tiers={"R2": "Default", "GONK": "Gold"},
         )
         with tempfile.TemporaryDirectory() as directory:
             pending_path = Path(directory) / "pending.json"

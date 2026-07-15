@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .belt.targets import normalize_belt_target_tiers
+
 
 def app_root() -> Path:
     """Writable app folder.
@@ -69,6 +71,24 @@ CALIBRATION_FILE = "calibration.json"
 REFERENCE_ROW_HEIGHT_PX = 44
 REFERENCE_SCREEN_HEIGHT = 1440
 REFERENCE_SCREEN_WIDTH = 2560
+BELT_SCAN_FPS_MIN = 1
+BELT_SCAN_FPS_MAX = 20
+
+
+def normalize_belt_scan_fps(idle_fps: Any, active_fps: Any) -> tuple[int, int]:
+    """Clamp persisted belt rates and keep idle no higher than active."""
+
+    try:
+        idle = int(idle_fps)
+    except (TypeError, ValueError):
+        idle = 4
+    try:
+        active = int(active_fps)
+    except (TypeError, ValueError):
+        active = 8
+    idle = min(BELT_SCAN_FPS_MAX, max(BELT_SCAN_FPS_MIN, idle))
+    active = min(BELT_SCAN_FPS_MAX, max(BELT_SCAN_FPS_MIN, active))
+    return min(idle, active), active
 
 
 @dataclass
@@ -139,10 +159,13 @@ class AppConfig:
     start_watcher_on_launch: bool = False
     belt_overlay_enabled: bool = True
     belt_dev_mode: bool = False
+    belt_template_collection_enabled: bool = False
+    belt_idle_scan_fps: int = 4
+    belt_active_scan_fps: int = 8
     belt_cpu_warning_confirmed: bool = False
     belt_region_guide_confirmed: bool = False
-    # Empty means Belt Tracker does not send any priority alerts.
-    belt_target_names: list[str] = field(default_factory=list)
+    # Droid name -> minimum family tier. Empty means no Belt Tracker alerts.
+    belt_target_tiers: dict[str, str] = field(default_factory=dict)
     retention_days: int = 30
     max_storage_mb: int = 500
     timer_reminders_enabled: bool = False
@@ -162,16 +185,20 @@ class AppConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AppConfig":
-        thresholds = data.get("thresholds") or {}
-        belt_target_names: list[str] = []
-        raw_belt_targets = data.get("belt_target_names")
-        if isinstance(raw_belt_targets, (list, tuple)):
-            for value in raw_belt_targets:
-                if not isinstance(value, str):
-                    continue
-                name = value.strip().upper()
-                if name and name not in belt_target_names:
-                    belt_target_names.append(name)
+        if not isinstance(data, dict):
+            raise ValueError("Config must contain a JSON object")
+        raw_thresholds = data.get("thresholds")
+        if raw_thresholds is None:
+            thresholds: dict[str, Any] = {}
+        elif isinstance(raw_thresholds, dict):
+            thresholds = raw_thresholds
+        else:
+            raise ValueError("Config thresholds must contain a JSON object")
+        belt_target_tiers = normalize_belt_target_tiers(data.get("belt_target_tiers"))
+        belt_idle_scan_fps, belt_active_scan_fps = normalize_belt_scan_fps(
+            data.get("belt_idle_scan_fps", 4),
+            data.get("belt_active_scan_fps", 8),
+        )
         config = cls(
             config_version=max(2, int(data.get("config_version", 1))),
             monitor_index=int(data.get("monitor_index", 1)),
@@ -248,13 +275,18 @@ class AppConfig:
             start_watcher_on_launch=bool(data.get("start_watcher_on_launch", False)),
             belt_overlay_enabled=bool(data.get("belt_overlay_enabled", True)),
             belt_dev_mode=bool(data.get("belt_dev_mode", False)),
+            belt_template_collection_enabled=bool(
+                data.get("belt_template_collection_enabled", False)
+            ),
+            belt_idle_scan_fps=belt_idle_scan_fps,
+            belt_active_scan_fps=belt_active_scan_fps,
             belt_cpu_warning_confirmed=bool(
                 data.get("belt_cpu_warning_confirmed", False)
             ),
             belt_region_guide_confirmed=bool(
                 data.get("belt_region_guide_confirmed", False)
             ),
-            belt_target_names=belt_target_names,
+            belt_target_tiers=belt_target_tiers,
             retention_days=int(data.get("retention_days", 30)),
             max_storage_mb=int(data.get("max_storage_mb", 500)),
             timer_reminders_enabled=bool(data.get("timer_reminders_enabled", False)),
@@ -337,9 +369,12 @@ class AppConfig:
             "start_watcher_on_launch": self.start_watcher_on_launch,
             "belt_overlay_enabled": self.belt_overlay_enabled,
             "belt_dev_mode": self.belt_dev_mode,
+            "belt_template_collection_enabled": self.belt_template_collection_enabled,
+            "belt_idle_scan_fps": self.belt_idle_scan_fps,
+            "belt_active_scan_fps": self.belt_active_scan_fps,
             "belt_cpu_warning_confirmed": self.belt_cpu_warning_confirmed,
             "belt_region_guide_confirmed": self.belt_region_guide_confirmed,
-            "belt_target_names": self.belt_target_names,
+            "belt_target_tiers": normalize_belt_target_tiers(self.belt_target_tiers),
             "retention_days": self.retention_days,
             "max_storage_mb": self.max_storage_mb,
             "timer_reminders_enabled": self.timer_reminders_enabled,

@@ -339,7 +339,10 @@ def load_phone_alert_credentials(config: AppConfig) -> tuple[dict[str, str] | No
 
 
 def phone_alerts_configured(config: AppConfig) -> bool:
-    credentials, _source = load_phone_alert_credentials(config)
+    try:
+        credentials, _source = load_phone_alert_credentials(config)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return False
     return credentials is not None
 
 

@@ -3,8 +3,6 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -13,7 +11,7 @@ import numpy as np
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from droid_alerts.belt.ocr import RapidOcrEngine, TextObservation, _parse_rapidocr_result
+from droid_alerts.belt.ocr import TextObservation
 from droid_alerts.belt.recognition import (
     UNKNOWN,
     CardRecognizer,
@@ -368,60 +366,6 @@ class CardRecognitionTests(unittest.TestCase):
 
         self.assertEqual("", result.observations[0].family)
         self.assertEqual("Common", result.observations[0].rarity)
-
-
-class ResultObject:
-    txts = ["GONK"]
-    scores = [0.91]
-    boxes = [[[1, 2], [31, 2], [31, 12], [1, 12]]]
-
-
-class OcrCompatibilityTests(unittest.TestCase):
-    def test_live_card_input_scale_uses_moving_belt_regression_value(self):
-        self.assertEqual(1.25, RapidOcrEngine.card_input_scale)
-
-    def test_current_result_object(self):
-        result = _parse_rapidocr_result(ResultObject())
-        self.assertEqual("GONK", result[0].text)
-        self.assertEqual((1, 2, 30, 10), result[0].box)
-
-    def test_legacy_list_result(self):
-        result = _parse_rapidocr_result([[[[2, 3], [22, 3], [22, 13], [2, 13]], "R6", 0.8]])
-        self.assertEqual("R6", result[0].text)
-        self.assertEqual((2, 3, 20, 10), result[0].box)
-
-    def test_runtime_caps_detector_size_and_disables_rotation_classifier(self):
-        calls = []
-
-        class FakeRapidOcr:
-            def __init__(self, *, params):
-                calls.append(("init", params))
-
-            def __call__(self, image, **kwargs):
-                calls.append(("call", image.shape, kwargs))
-                return []
-
-        with patch.dict("sys.modules", {"rapidocr": SimpleNamespace(RapidOCR=FakeRapidOcr)}):
-            engine = RapidOcrEngine()
-            engine.read(np.zeros((80, 300, 3), dtype=np.uint8))
-
-        params = calls[0][1]
-        self.assertEqual("max", params["Det.limit_type"])
-        self.assertEqual(1600, params["Det.limit_side_len"])
-        self.assertFalse(params["Global.use_cls"])
-        if sys.platform == "win32":
-            self.assertEqual(
-                2,
-                params["EngineConfig.onnxruntime.intra_op_num_threads"],
-            )
-            self.assertEqual(
-                1,
-                params["EngineConfig.onnxruntime.inter_op_num_threads"],
-            )
-        self.assertEqual(13, params["Global.width_height_ratio"])
-        self.assertEqual("small", getattr(params["Det.model_type"], "value", params["Det.model_type"]))
-        self.assertEqual("tiny", getattr(params["Rec.model_type"], "value", params["Rec.model_type"]))
-        self.assertEqual({"use_cls": False}, calls[1][2])
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from typing import Any
 
 from . import __version__
 from .belt.names import DROID_NAMES as BELT_DROID_NAMES
+from .belt.targets import belt_target_names
 from .config import AppConfig, config_dir
 
 INSTALL_ID_FILE = "anonymous_install_id.txt"
@@ -35,6 +36,8 @@ VALID_PRIORITY_ALERT_KEYS = frozenset(
         "beskarmythic",
     }
 )
+_INSTALL_ID_LOCK = threading.Lock()
+_EPHEMERAL_INSTALL_ID: str | None = None
 
 
 def anonymous_install_id_path() -> Path:
@@ -46,23 +49,28 @@ def belt_pending_counts_path() -> Path:
 
 
 def load_or_create_anonymous_install_id() -> str:
-    path = anonymous_install_id_path()
-    try:
-        value = path.read_text(encoding="utf-8-sig").strip().lower()
-        if _valid_uuid(value):
-            return value
-    except OSError:
-        pass
+    global _EPHEMERAL_INSTALL_ID
+    with _INSTALL_ID_LOCK:
+        path = anonymous_install_id_path()
+        try:
+            value = path.read_text(encoding="utf-8-sig").strip().lower()
+            if _valid_uuid(value):
+                return value
+        except OSError:
+            pass
 
-    value = str(uuid.uuid4())
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(value + "\n", encoding="utf-8")
-    except OSError:
-        # If the config folder is temporarily unwritable, keep telemetry working
-        # for this run with an ephemeral anonymous id instead of crashing watch.
-        pass
-    return value
+        if _EPHEMERAL_INSTALL_ID is not None:
+            return _EPHEMERAL_INSTALL_ID
+
+        value = str(uuid.uuid4())
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(value + "\n", encoding="utf-8")
+        except OSError:
+            # Keep one stable in-memory id when the config folder is
+            # temporarily unwritable instead of generating one per client.
+            _EPHEMERAL_INSTALL_ID = value
+        return value
 
 
 class AnonymousAppTelemetryClient:
@@ -661,12 +669,7 @@ def _priority_alert_keys(config: AppConfig) -> tuple[str, ...]:
 
 
 def _belt_target_names(config: AppConfig) -> tuple[str, ...]:
-    selected = {
-        str(name).strip().upper()
-        for name in config.belt_target_names
-        if str(name).strip()
-    }
-    return tuple(name for name in BELT_DROID_NAMES if name in selected)
+    return belt_target_names(config.belt_target_tiers)
 
 
 def _utc_hour_text() -> str:

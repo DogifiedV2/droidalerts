@@ -27,22 +27,11 @@ def belt_dev_dir() -> Path:
 
 def runtime_snapshot() -> dict[str, object]:
     packages = {}
-    for name in ("rapidocr", "onnxruntime", "opencv-python", "numpy", "mss"):
+    for name in ("opencv-python", "numpy", "mss"):
         try:
             packages[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
             packages[name] = "not installed"
-
-    onnx: dict[str, object] = {}
-    try:
-        import onnxruntime
-
-        onnx = {
-            "device": onnxruntime.get_device(),
-            "available_providers": list(onnxruntime.get_available_providers()),
-        }
-    except Exception as exc:
-        onnx = {"error": str(exc)}
 
     return {
         "app_version": __version__,
@@ -56,7 +45,6 @@ def runtime_snapshot() -> dict[str, object]:
         "opencv_threads": cv2.getNumThreads(),
         "opencv_opencl": bool(cv2.ocl.haveOpenCL()),
         "packages": packages,
-        "onnxruntime": onnx,
     }
 
 

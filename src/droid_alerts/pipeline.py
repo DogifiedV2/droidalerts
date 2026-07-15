@@ -74,6 +74,12 @@ class Pipeline:
             extra_checks=extra_checks,
         )
 
+    def apply_thresholds(self, thresholds: Thresholds) -> None:
+        """Hot-reload every threshold used by the pipeline and classifier."""
+        self.thresholds = thresholds
+        self.detector.rarity_threshold = thresholds.rarity_threshold
+        self.detector.droid_threshold = thresholds.droid_threshold
+
     def detect(
         self,
         image_bgr: np.ndarray,
@@ -83,7 +89,13 @@ class Pipeline:
         known_scale: float | None = None,
         keep_normalized: bool = False,
     ) -> PipelineResult:
-        candidates = find_candidate_rows(image_bgr)
+        # Candidate discovery is the expensive part of an empty-frame scan.
+        # Live captures already have a screen-derived scale, so defer it until
+        # the cheap phrase gate proves there is something worth classifying.
+        candidates = []
+        candidates_needed_for_scale = known_scale is None and screen_height is None
+        if candidates_needed_for_scale:
+            candidates = find_candidate_rows(image_bgr)
         if known_scale is not None:
             scale, method = float(known_scale), "known"
         else:
@@ -123,6 +135,23 @@ class Pipeline:
                 meta={"skipped": "no-phrase-evidence"},
                 normalized_image=normalized.image if keep_normalized else None,
             )
+        if not candidates:
+            candidates = find_candidate_rows(image_bgr)
+            # Candidate rows only affect the diagnostic method when screen
+            # dimensions already supplied the scale; preserve that metadata.
+            if known_scale is None and screen_height is not None:
+                _same_scale, candidate_method = estimate_scale(
+                    screen_height=screen_height,
+                    screen_width=screen_width,
+                    candidates=candidates,
+                    scale_min=self.thresholds.scale_min,
+                    scale_max=self.thresholds.scale_max,
+                )
+                method = (
+                    f"{candidate_method}+row-pitch"
+                    if method.endswith("+row-pitch")
+                    else candidate_method
+                )
         extra_ys = phrase_row_seeds(normalized.image)
         detections = self.detector.detect(normalized.image, extra_row_ys=extra_ys)
         h, w = normalized.image.shape[:2]
