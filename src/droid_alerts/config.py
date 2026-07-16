@@ -73,6 +73,16 @@ REFERENCE_SCREEN_HEIGHT = 1440
 REFERENCE_SCREEN_WIDTH = 2560
 BELT_SCAN_FPS_MIN = 1
 BELT_SCAN_FPS_MAX = 20
+CAPTURE_METADATA_MAX_LENGTH = 512
+
+
+def normalize_capture_source(value: Any) -> str:
+    return "window" if str(value or "").strip().lower() == "window" else "monitor"
+
+
+def normalize_capture_metadata(value: Any) -> str:
+    text = str(value or "").replace("\x00", " ")
+    return " ".join(text.split())[:CAPTURE_METADATA_MAX_LENGTH]
 
 
 def normalize_belt_scan_fps(idle_fps: Any, active_fps: Any) -> tuple[int, int]:
@@ -103,6 +113,10 @@ class Thresholds:
 class AppConfig:
     config_version: int = 2
     monitor_index: int = 1
+    capture_source: str = "monitor"
+    capture_window_title: str = ""
+    capture_window_process: str = ""
+    capture_window_class: str = ""
     capture_interval_seconds: float = 0.25
     dedupe_seconds: float = 12.0
     alert_cooldown_seconds: float = 10.0
@@ -199,9 +213,23 @@ class AppConfig:
             data.get("belt_idle_scan_fps", 4),
             data.get("belt_active_scan_fps", 8),
         )
+        capture_source = normalize_capture_source(data.get("capture_source", "monitor"))
+        capture_window_title = normalize_capture_metadata(data.get("capture_window_title", ""))
+        capture_window_process = normalize_capture_metadata(
+            data.get("capture_window_process", "")
+        )
+        capture_window_class = normalize_capture_metadata(data.get("capture_window_class", ""))
+        if capture_source == "window" and not any(
+            (capture_window_title, capture_window_process, capture_window_class)
+        ):
+            capture_source = "monitor"
         config = cls(
             config_version=max(2, int(data.get("config_version", 1))),
             monitor_index=int(data.get("monitor_index", 1)),
+            capture_source=capture_source,
+            capture_window_title=capture_window_title,
+            capture_window_process=capture_window_process,
+            capture_window_class=capture_window_class,
             capture_interval_seconds=float(data.get("capture_interval_seconds", 0.25)),
             dedupe_seconds=float(data.get("dedupe_seconds", 12.0)),
             alert_cooldown_seconds=float(data.get("alert_cooldown_seconds", 10.0)),
@@ -317,6 +345,10 @@ class AppConfig:
         return {
             "config_version": max(2, self.config_version),
             "monitor_index": self.monitor_index,
+            "capture_source": normalize_capture_source(self.capture_source),
+            "capture_window_title": normalize_capture_metadata(self.capture_window_title),
+            "capture_window_process": normalize_capture_metadata(self.capture_window_process),
+            "capture_window_class": normalize_capture_metadata(self.capture_window_class),
             "capture_interval_seconds": self.capture_interval_seconds,
             "dedupe_seconds": self.dedupe_seconds,
             "alert_cooldown_seconds": self.alert_cooldown_seconds,

@@ -27,13 +27,17 @@ screenshots with the developer** in Advanced settings.
 2. Unzip it anywhere you like. Your Desktop is fine.
 3. Open the `Droid Alerts` folder and double-click `Droid Alerts.exe`.
 
-That's it. Choose the display with Fortnite, click **Start Watching**, go play,
-and it will ping you when something good spawns. Use the **Test Alert** button
-any time to hear and see what an alert looks like.
+That's it. Choose the display with Fortnite or click **Select Window** and pick
+Fortnite, click **Start Watching**, go play, and it will ping you when something
+good spawns. Window capture keeps reading Fortnite when another window covers
+it; keep Fortnite restored because Windows may pause capture while it is
+minimized. Use the **Test Alert** button any time to hear and see what an alert
+looks like.
 
-The Dashboard shows the selected monitor, priority-alert choices, alert-channel
-controls, current timers, and session counts. **Show Chat Region** and **Move
-Chat Box** are under Diagnostics; moving the box never resizes it. Alert
+The Dashboard shows the selected monitor or selected chat-watcher window,
+priority-alert choices, alert-channel controls, current timers, and session
+counts. **Show Chat Region** and **Move Chat Box** are under Diagnostics; moving
+the box never resizes it. Alert
 appearance plus less common detection, debug, notification-detail, and storage
 controls stay behind the **Advanced settings** toggle in Settings.
 

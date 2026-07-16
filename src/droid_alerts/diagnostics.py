@@ -31,6 +31,9 @@ def create_support_bundle(config: AppConfig) -> Path:
         "anonymous_belt_stats_url",
         "anonymous_belt_counts_url",
         "debug_detection_upload_url",
+        "capture_window_title",
+        "capture_window_process",
+        "capture_window_class",
     ):
         if config_data.get(key):
             config_data[key] = "<redacted>"

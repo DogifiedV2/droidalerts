@@ -35,6 +35,61 @@ from .region import RegionResolver
 from .telemetry import AnonymousTelemetryClient
 
 
+def _capture_target_signature(config: AppConfig) -> tuple[object, ...]:
+    return (
+        config.monitor_index,
+        config.capture_source,
+        config.capture_window_title,
+        config.capture_window_process,
+        config.capture_window_class,
+    )
+
+
+def _create_configured_capture(config: AppConfig):
+    return create_capture(
+        monitor_index=config.monitor_index,
+        capture_source=config.capture_source,
+        window_title=config.capture_window_title,
+        window_process=config.capture_window_process,
+        window_class=config.capture_window_class,
+    )
+
+
+def _open_configured_capture(config: AppConfig):
+    capture = _create_configured_capture(config)
+    try:
+        size = capture.screen_size()
+    except Exception:
+        try:
+            capture.close()
+        except Exception:
+            pass
+        raise
+    return capture, size
+
+
+def _capture_area(capture):
+    return getattr(capture, "capture_area", getattr(capture, "monitor", None))
+
+
+def _capture_label(config: AppConfig) -> str:
+    if config.capture_source == "window":
+        return (
+            config.capture_window_title
+            or config.capture_window_process
+            or "Selected window"
+        )
+    return f"Monitor {config.monitor_index}"
+
+
+def _capture_status(config: AppConfig) -> dict[str, object]:
+    return {
+        "monitor_index": config.monitor_index,
+        "capture_source": config.capture_source,
+        "capture_label": _capture_label(config),
+    }
+
+
 def _append_event_safely(
     event: dict[str, object],
     *,
@@ -69,14 +124,14 @@ def run_watch(
 
     set_dpi_awareness()
     config = config or load_config()
-    capture = create_capture(monitor_index=config.monitor_index)
-    screen_w, screen_h = capture.screen_size()
+    capture, (screen_w, screen_h) = _open_configured_capture(config)
+    active_capture_config = config
 
     resolver = RegionResolver(
         screen_w,
         screen_h,
         max_failures=config.validation_failures_before_calibration_prompt,
-        monitor_key=getattr(getattr(capture, "monitor", None), "key", None),
+        monitor_key=getattr(_capture_area(capture), "key", None),
     )
     box, region_source = resolver.resolve()
     pipeline = Pipeline(templates_dir(), config.thresholds, extra_checks=config.extra_checks)
@@ -84,7 +139,10 @@ def run_watch(
     webhook_url = None
     phone_credentials = None
 
-    print(f"Droid Alerts watching monitor {config.monitor_index} ({screen_w}x{screen_h})")
+    print(
+        f"Droid Alerts watching {_capture_label(active_capture_config)} "
+        f"({screen_w}x{screen_h})"
+    )
     print(f"Region [{region_source}]: left={box.left} top={box.top} w={box.width} h={box.height}")
     print(f"Targets: {sorted(config.targets)}")
     print(f"Extra checks (washed-out colors/HDR): {'ENABLED' if config.extra_checks else 'DISABLED'}")
@@ -159,10 +217,10 @@ def run_watch(
     telemetry.start()
     emit(
         "watcher_ready",
-        monitor_index=config.monitor_index,
         screen_width=screen_w,
         screen_height=screen_h,
         region_source=region_source,
+        **_capture_status(active_capture_config),
     )
     last_scan_status_at = 0.0
 
@@ -210,6 +268,46 @@ def run_watch(
         )
 
     settings_signature = _settings_signature()
+    pending_capture_config: AppConfig | None = None
+    next_capture_retry_at = 0.0
+
+    def switch_capture(target_config: AppConfig) -> None:
+        nonlocal capture
+        nonlocal active_capture_config
+        nonlocal screen_w
+        nonlocal screen_h
+        nonlocal resolver
+        nonlocal box
+        nonlocal region_source
+
+        replacement, replacement_size = _open_configured_capture(target_config)
+        replacement_width, replacement_height = replacement_size
+        try:
+            replacement_resolver = RegionResolver(
+                replacement_width,
+                replacement_height,
+                max_failures=config.validation_failures_before_calibration_prompt,
+                monitor_key=getattr(_capture_area(replacement), "key", None),
+            )
+            replacement_box, replacement_source = replacement_resolver.resolve()
+        except Exception:
+            try:
+                replacement.close()
+            except Exception:
+                pass
+            raise
+
+        previous = capture
+        capture = replacement
+        active_capture_config = target_config
+        screen_w, screen_h = replacement_width, replacement_height
+        resolver = replacement_resolver
+        box, region_source = replacement_box, replacement_source
+        try:
+            previous.close()
+        except Exception:
+            pass
+
     try:
         while not _stop_requested(stop_event):
             started = time.monotonic()
@@ -224,7 +322,10 @@ def run_watch(
                     print(f"[CONFIG] reload failed, will retry: {exc}")
                 else:
                     settings_signature = new_signature
-                    monitor_changed = new_config.monitor_index != config.monitor_index
+                    capture_changed = (
+                        _capture_target_signature(new_config)
+                        != _capture_target_signature(active_capture_config)
+                    )
                     config = new_config
                     policy.apply_config(config)
                     telemetry.apply_config(config)
@@ -243,18 +344,23 @@ def run_watch(
                             phone_credentials, _source = load_phone_alert_credentials(config)
                         except Exception:
                             phone_credentials = None
-                    if monitor_changed:
+                    if capture_changed:
                         try:
-                            capture.close()
-                        except Exception:
-                            pass
-                        capture = create_capture(monitor_index=config.monitor_index)
-                        screen_w, screen_h = capture.screen_size()
+                            switch_capture(config)
+                        except Exception as exc:
+                            print(f"[CAPTURE] Could not switch capture target: {exc}")
+                            emit("capture_error", message=str(exc))
+                            pending_capture_config = config
+                            next_capture_retry_at = time.monotonic() + 3.0
+                        else:
+                            pending_capture_config = None
+                    else:
+                        pending_capture_config = None
                     resolver = RegionResolver(
                         screen_w,
                         screen_h,
                         max_failures=config.validation_failures_before_calibration_prompt,
-                        monitor_key=getattr(getattr(capture, "monitor", None), "key", None),
+                        monitor_key=getattr(_capture_area(capture), "key", None),
                     )
                     box, region_source = resolver.resolve()
                     print(
@@ -263,19 +369,74 @@ def run_watch(
                     )
                     emit(
                         "config_reloaded",
-                        monitor_index=config.monitor_index,
                         screen_width=screen_w,
                         screen_height=screen_h,
                         region_source=region_source,
+                        **_capture_status(active_capture_config),
+                    )
+
+            if (
+                pending_capture_config is not None
+                and time.monotonic() >= next_capture_retry_at
+            ):
+                try:
+                    switch_capture(pending_capture_config)
+                except Exception as exc:
+                    print(f"[CAPTURE] Capture target is still unavailable: {exc}")
+                    emit("capture_error", message=str(exc))
+                    next_capture_retry_at = time.monotonic() + 3.0
+                else:
+                    pending_capture_config = None
+                    emit(
+                        "config_reloaded",
+                        screen_width=screen_w,
+                        screen_height=screen_h,
+                        region_source=region_source,
+                        **_capture_status(active_capture_config),
                     )
 
             try:
+                current_size = capture.screen_size()
+                if current_size != (screen_w, screen_h):
+                    screen_w, screen_h = current_size
+                    resolver = RegionResolver(
+                        screen_w,
+                        screen_h,
+                        max_failures=config.validation_failures_before_calibration_prompt,
+                        monitor_key=getattr(_capture_area(capture), "key", None),
+                    )
+                    box, region_source = resolver.resolve()
+                    emit(
+                        "config_reloaded",
+                        screen_width=screen_w,
+                        screen_height=screen_h,
+                        region_source=region_source,
+                        **_capture_status(active_capture_config),
+                    )
                 band = capture.grab(box)
             except Exception as exc:
                 print(f"capture error: {exc}")
                 emit("capture_error", message=str(exc))
-                if _wait_or_stop(stop_event, config.capture_interval_seconds):
+                recovery_delay = (
+                    1.0
+                    if active_capture_config.capture_source == "window"
+                    else config.capture_interval_seconds
+                )
+                if _wait_or_stop(stop_event, recovery_delay):
                     break
+                if active_capture_config.capture_source == "window":
+                    try:
+                        switch_capture(active_capture_config)
+                    except Exception as recovery_exc:
+                        print(f"[CAPTURE] Window reconnect failed: {recovery_exc}")
+                    else:
+                        emit(
+                            "config_reloaded",
+                            screen_width=screen_w,
+                            screen_height=screen_h,
+                            region_source=region_source,
+                            **_capture_status(active_capture_config),
+                        )
                 continue
 
             result = pipeline.detect(band, screen_height=screen_h, screen_width=screen_w, keep_normalized=True)
@@ -326,7 +487,8 @@ def run_watch(
                     "frame": frame_index,
                     "screen_width": screen_w,
                     "screen_height": screen_h,
-                    "monitor_index": config.monitor_index,
+                    "monitor_index": active_capture_config.monitor_index,
+                    "capture_source": active_capture_config.capture_source,
                     "capture_region": {
                         "source": region_source,
                         "left": box.left,

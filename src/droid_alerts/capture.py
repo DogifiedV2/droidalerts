@@ -206,6 +206,9 @@ def format_monitor_label(
 
 
 class CaptureBackend(Protocol):
+    monitor: MonitorInfo
+    capture_area: MonitorInfo
+
     def screen_size(self) -> tuple[int, int]: ...
 
     def grab(self, box: PixelBox) -> np.ndarray: ...
@@ -229,6 +232,7 @@ class MSSCapture:
             key=monitor_key_from_mapping(dict(mon), self.monitor_index),
             name=str(mon.get("name") or mon.get("output") or "").strip(),
         )
+        self.capture_area = self.monitor
 
     def screen_size(self) -> tuple[int, int]:
         return (self.monitor.width, self.monitor.height)
@@ -270,6 +274,7 @@ class DXCamCapture:
             key=descriptor.key if descriptor is not None else f"dxcam:{monitor_index}",
             name=descriptor.name if descriptor is not None else "",
         )
+        self.capture_area = self.monitor
 
     def screen_size(self) -> tuple[int, int]:
         return self._screen_size
@@ -284,7 +289,24 @@ class DXCamCapture:
         self._camera.release()
 
 
-def create_capture(monitor_index: int = 1, prefer_dxcam: bool = True) -> CaptureBackend:
+def create_capture(
+    monitor_index: int = 1,
+    prefer_dxcam: bool = True,
+    *,
+    capture_source: str = "monitor",
+    window_title: str = "",
+    window_process: str = "",
+    window_class: str = "",
+) -> CaptureBackend:
+    if str(capture_source).strip().lower() == "window":
+        from .window_capture import WindowsGraphicsCapture
+
+        return WindowsGraphicsCapture(
+            title=window_title,
+            process_name=window_process,
+            class_name=window_class,
+            monitor_index=monitor_index,
+        )
     if prefer_dxcam:
         try:
             return DXCamCapture(monitor_index=monitor_index)
