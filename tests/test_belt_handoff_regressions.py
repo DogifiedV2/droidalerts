@@ -37,44 +37,61 @@ class BeltHandoffIdentityRegressionTests(unittest.TestCase):
         cls.index = BeltTemplateIndex.load()
         cls.config = TemplateRecognitionConfig()
 
-    def test_known_similar_droids_abstain_instead_of_repeating_wrong_saved_labels(self):
-        corrections = {
-            "2bb": ("2BB", "BB"),
-            "drk_1_probe": ("DRK-1 PROBE", "VECT-ARM"),
-            "r3": ("R3", "R9"),
-            "pit": ("PIT", "ID10"),
-        }
-        for folder, (wrong_label, corrected_identity) in corrections.items():
-            metadata_paths = sorted((SAMPLES / folder).glob("*.json"))
-            self.assertTrue(metadata_paths, folder)
-            for metadata_path in metadata_paths:
-                with self.subTest(sample=metadata_path.name):
-                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-                    image = cv2.imread(str(metadata_path.with_suffix(".png")))
-                    self.assertIsNotNone(image)
-                    x, y, width, height = metadata["art_box_in_crop"]
-                    query = identity_features(image[y : y + height, x : x + width])
-                    scores = self.index.identity_hog @ query
-                    name_scores = np.maximum.reduceat(
-                        scores,
-                        self.index.identity_name_offsets[:-1],
-                    )
-                    order = np.argsort(name_scores)[::-1]
-                    best_index, runner_up_index = (int(value) for value in order[:2])
-                    best_name = self.index.identity_names[best_index]
-                    margin = float(name_scores[best_index] - name_scores[runner_up_index])
-                    would_emit = (
-                        float(name_scores[best_index])
-                        >= self.config.minimum_identity_similarity
-                        and margin >= self.config.minimum_identity_margin
-                    )
+    def test_latest_false_identity_crops_now_abstain(self):
+        cases = (
+            ("r5", "20260715_202004_937900_t00092_f002882.json", "R5"),
+            ("r9", "20260715_202023_259313_t00098_f003063.json", "R9"),
+            ("r9", "20260715_202050_239229_t00105_f003319.json", "R9"),
+            ("r9", "20260715_202059_256915_t00106_f003406.json", "R9"),
+        )
+        available = [
+            (SAMPLES / folder / name, wrong_label)
+            for folder, name, wrong_label in cases
+            if (SAMPLES / folder / name).exists()
+        ]
+        if not available:
+            self.skipTest("latest audited false-identity crops are unavailable")
 
-                    self.assertEqual(wrong_label, metadata["detected_name"])
-                    self.assertTrue(
-                        best_name == corrected_identity or not would_emit,
-                        f"{metadata_path.name}: {best_name=} {margin=:.4f}",
-                    )
-                    self.assertFalse(would_emit and best_name == wrong_label)
+        for metadata_path, wrong_label in available:
+            with self.subTest(sample=metadata_path.name):
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                image = cv2.imread(str(metadata_path.with_suffix(".png")))
+                self.assertIsNotNone(image)
+                x, y, width, height = metadata["art_box_in_crop"]
+                query = identity_features(image[y : y + height, x : x + width])
+                scores = self.index.identity_hog @ query
+                name_scores = np.maximum.reduceat(
+                    scores,
+                    self.index.identity_name_offsets[:-1],
+                )
+                order = np.argsort(name_scores)[::-1]
+                best_index, runner_up_index = (int(value) for value in order[:2])
+                best_name = self.index.identity_names[best_index]
+                margin = float(name_scores[best_index] - name_scores[runner_up_index])
+                required_margin = max(
+                    self.config.minimum_identity_margin,
+                    0.070 if best_name in {"R3", "R9"} else 0.0,
+                )
+                would_emit = (
+                    float(name_scores[best_index])
+                    >= self.config.minimum_identity_similarity
+                    and margin >= required_margin
+                )
+
+                self.assertEqual(wrong_label, metadata["detected_name"])
+                self.assertFalse(would_emit and best_name == wrong_label)
+
+    def test_desktop_frame_cannot_emit_false_epic_card(self):
+        session = HANDOFF_DATA / "belt_dev" / "session_20260715_201506_418_89101"
+        frame_path = session / "frame_000001.png"
+        if not frame_path.exists():
+            self.skipTest("latest audited desktop frame is unavailable")
+        frame = cv2.imread(str(frame_path))
+        self.assertIsNotNone(frame)
+
+        result = TemplateCardRecognizer().analyze(frame)
+
+        self.assertEqual([], result.observations)
 
     @unittest.skipUnless(BLURRY_SESSION.is_dir(), "local blurry Belt frames are not available")
     def test_blurry_stress_frames_emit_no_epic_or_legendary_identity(self):

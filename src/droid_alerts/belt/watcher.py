@@ -158,6 +158,7 @@ def run_belt_watcher(
     previous_scan_completed_at: float | None = None
     empty_candidate_scans = 0
     frame_number = 0
+    alerted_track_ids: set[int] = set()
     emit(
         "ready",
         region=region,
@@ -239,10 +240,31 @@ def run_belt_watcher(
                         update.tracks = display_update.tracks
                         update.events.extend(display_update.events)
                         if dev_logger.enabled:
+                            evidence_event = next(
+                                (
+                                    event.kind
+                                    for event in update.events
+                                    if event.kind in {"entered", "updated"}
+                                ),
+                                "",
+                            )
+                            ambiguous_frame = bool(
+                                result.diagnostics.get("ambiguous_count", 0)
+                            ) and not observations
+                            frame_reason = (
+                                evidence_event
+                                if evidence_event
+                                else "ambiguous"
+                                if ambiguous_frame
+                                else "periodic"
+                            )
                             frame_file = dev_logger.save_frame(
                                 frame,
                                 frame_number=frame_number,
                                 now=completed_at,
+                                reason=frame_reason,
+                                force=bool(evidence_event) or ambiguous_frame,
+                                lossless=bool(evidence_event),
                             )
                             dev_logger.log(
                                 "scan",
@@ -278,6 +300,9 @@ def run_belt_watcher(
                                 recognizer=result.diagnostics,
                                 tracker=tracker.diagnostic_state(),
                                 saved_frame=frame_file,
+                                saved_frame_reason=(
+                                    dev_logger.last_saved_reason if frame_file else ""
+                                ),
                             )
                         previous_scan_completed_at = completed_at
                         if completed_at - last_scan_status >= 1.0:
@@ -321,11 +346,18 @@ def run_belt_watcher(
                     )
 
             for event in update.events:
-                alerted = event.kind == "entered" and is_belt_alert_target(
-                    alert_targets,
-                    event.track.name,
-                    getattr(event.track, "family", ""),
+                track_id = int(event.track.id)
+                alerted = (
+                    event.kind in {"entered", "updated"}
+                    and track_id not in alerted_track_ids
+                    and is_belt_alert_target(
+                        alert_targets,
+                        event.track.name,
+                        getattr(event.track, "family", ""),
+                    )
                 )
+                if alerted:
+                    alerted_track_ids.add(track_id)
                 record = log_track_event(event, alerted=alerted)
                 attributes = " ".join(
                     value

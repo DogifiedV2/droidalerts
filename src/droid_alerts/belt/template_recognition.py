@@ -45,7 +45,10 @@ _FAMILY_WORD_HOG = cv2.HOGDescriptor(
 
 _FAMILY_ORDER = ("Default", "Gold", "Diamond", "Rainbow", "Beskar")
 _FAMILY_MINIMUM_MARGINS = {
-    "Default": 0.020,
+    # Default is the most dangerous fallback: Gold/Beskar captures from the
+    # audited bad-connection run repeatedly landed only 0.02-0.04 ahead of it.
+    # Abstain instead of publishing a confident but wrong Default family.
+    "Default": 0.050,
     "Gold": 0.005,
     "Diamond": 0.030,
     "Rainbow": 0.015,
@@ -53,6 +56,15 @@ _FAMILY_MINIMUM_MARGINS = {
     # keeps a held low-FPS Default frame from becoming a false Beskar alert;
     # later, clearer frames can still attach the family to the confirmed track.
     "Beskar": 0.020,
+}
+
+_DISTINCTIVE_BORDER_MIN_CONFIDENCE = 0.68
+_IDENTITY_MINIMUM_MARGINS = {
+    # Several real R3 appearances were emitted as R9 at 0.034-0.062 margin.
+    # Keep this pair stricter than the global floor; missing one is safer than
+    # changing both its identity and its fixed Common/Rare class.
+    "R3": 0.070,
+    "R9": 0.070,
 }
 
 # Belt regions can include price labels above the cards and conveyor scenery
@@ -234,6 +246,10 @@ class TemplateRecognitionConfig:
     # wait for a clearer frame than publish a plausible but wrong identity.
     minimum_identity_margin: float = 0.060
     minimum_nameplate_dark_fraction: float = 0.33
+    # A real card has a compact black nameplate surrounded by a lighter frame.
+    # Full-width desktop/app panels can have a high dark fraction too, but lack
+    # this side contrast (the audited false Epic measured only about 0.02).
+    minimum_nameplate_side_contrast: float = 0.12
     nameplate_dark_value: int = 45
     nameplate_top_ratio: float = 0.62
     nameplate_bottom_ratio: float = 0.78
@@ -588,9 +604,14 @@ class TemplateCardRecognizer:
                 },
             )
 
-        dark_fractions, fully_visible = self._card_evidence(frame_bgr, x_positions)
+        dark_fractions, side_contrasts, fully_visible = self._card_evidence(
+            frame_bgr,
+            x_positions,
+        )
         evidence_mask = fully_visible & (
             dark_fractions >= self.config.minimum_nameplate_dark_fraction
+        ) & (
+            side_contrasts >= self.config.minimum_nameplate_side_contrast
         )
         evidence_indices = np.flatnonzero(evidence_mask)
         evidence_at = time.perf_counter()
@@ -617,7 +638,13 @@ class TemplateCardRecognizer:
                 reason = "accepted_template"
                 if similarity < self.config.minimum_identity_similarity:
                     accepted, reason = False, "low_template_similarity"
-                elif margin < self.config.minimum_identity_margin:
+                elif margin < max(
+                    self.config.minimum_identity_margin,
+                    _IDENTITY_MINIMUM_MARGINS.get(
+                        self.index.identity_names[int(best_name_indices[row])],
+                        0.0,
+                    ),
+                ):
                     accepted, reason = False, "ambiguous_template_identity"
                 proposals.append(
                     _Proposal(
@@ -714,7 +741,7 @@ class TemplateCardRecognizer:
         self,
         frame_bgr: np.ndarray,
         x_positions: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         frame_height, frame_width = frame_bgr.shape[:2]
         card_width = max(24, round(frame_height * self.index.card_width_ratio))
         art_width = max(16, round(frame_height * self.index.art_width_ratio))
@@ -734,7 +761,22 @@ class TemplateCardRecognizer:
         rights = np.clip(x_positions + art_width, 0, frame_width)
         areas = np.maximum(1, (rights - lefts) * max(1, band_bottom - band_top))
         dark_fractions = (integral[rights] - integral[lefts]) / areas
-        return np.asarray(dark_fractions, dtype=np.float32), fully_visible
+
+        side_lefts = np.clip(card_lefts, 0, frame_width)
+        side_left_rights = np.clip(x_positions, 0, frame_width)
+        side_right_lefts = np.clip(x_positions + art_width, 0, frame_width)
+        side_rights = np.clip(card_lefts + card_width, 0, frame_width)
+        band_height = max(1, band_bottom - band_top)
+        left_areas = np.maximum(1, (side_left_rights - side_lefts) * band_height)
+        right_areas = np.maximum(1, (side_rights - side_right_lefts) * band_height)
+        left_dark = (integral[side_left_rights] - integral[side_lefts]) / left_areas
+        right_dark = (integral[side_rights] - integral[side_right_lefts]) / right_areas
+        side_contrasts = dark_fractions - (left_dark + right_dark) / 2.0
+        return (
+            np.asarray(dark_fractions, dtype=np.float32),
+            np.asarray(side_contrasts, dtype=np.float32),
+            fully_visible,
+        )
 
     def _keep_physical_peaks(
         self,
@@ -845,7 +887,10 @@ class TemplateCardRecognizer:
             name_box,
             card_box,
         )
-        if border_family == "Diamond":
+        if (
+            border_family in {"Gold", "Diamond", "Rainbow"}
+            and border_confidence >= _DISTINCTIVE_BORDER_MIN_CONFIDENCE
+        ):
             return border_family, max(0.90, border_confidence)
 
         x, y, width, height = card_box

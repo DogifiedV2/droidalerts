@@ -3794,7 +3794,7 @@ class DroidAlertsApp:
                 continue
             if selected_filter == "Priority alerts" and not (
                 event_type == "alert"
-                or (event_type == "belt_entered" and bool(row.get("alerted")))
+                or (event_type.startswith("belt_") and bool(row.get("alerted")))
                 or (not event_type and bool(row.get("alerted")))
             ):
                 continue

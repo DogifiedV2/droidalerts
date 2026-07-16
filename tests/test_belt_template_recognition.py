@@ -247,6 +247,59 @@ class TemplateCardRecognizerTests(unittest.TestCase):
         self.assertEqual("", family)
         self.assertEqual(0.0, confidence)
 
+    def test_distinctive_border_can_override_wrong_default_template(self):
+        recognizer = TemplateCardRecognizer(synthetic_index())
+        with (
+            patch(
+                "droid_alerts.belt.template_recognition.classify_card_family_border",
+                return_value=("Rainbow", 0.80),
+            ),
+            patch(
+                "droid_alerts.belt.template_recognition.family_features",
+                side_effect=AssertionError("distinctive border should be authoritative"),
+            ),
+        ):
+            family, confidence = recognizer._classify_family(
+                card(1),
+                (ART_X, 168, 120, 28),
+                (0, 0, CARD_WIDTH, HEIGHT),
+            )
+
+        self.assertEqual("Rainbow", family)
+        self.assertGreaterEqual(confidence, 0.90)
+
+    def test_marginal_default_family_stays_unknown(self):
+        index = synthetic_index()
+        histograms = np.zeros_like(index.family_histograms)
+        words = np.zeros_like(index.family_words)
+        words[0, 0] = 1.0
+        words[1, 0] = 0.96
+        recognizer = TemplateCardRecognizer(
+            replace(index, family_histograms=histograms, family_words=words)
+        )
+        query_histogram = np.zeros(histograms.shape[1], dtype=np.float32)
+        query_word = np.zeros(words.shape[1], dtype=np.float32)
+        query_word[0] = 1.0
+
+        with (
+            patch(
+                "droid_alerts.belt.template_recognition.classify_card_family_border",
+                return_value=("", 0.0),
+            ),
+            patch(
+                "droid_alerts.belt.template_recognition.family_features",
+                return_value=(query_histogram, query_word),
+            ),
+        ):
+            family, confidence = recognizer._classify_family(
+                card(1),
+                (ART_X, 168, 120, 28),
+                (0, 0, CARD_WIDTH, HEIGHT),
+            )
+
+        self.assertEqual("", family)
+        self.assertEqual(0.0, confidence)
+
 
 if __name__ == "__main__":
     unittest.main()

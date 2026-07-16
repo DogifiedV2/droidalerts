@@ -112,9 +112,10 @@ class BeltTracker:
     Template identities require four consecutive labels by default. On hardware
     producing less than 0.75 scan FPS, three consecutive, high-confidence exact
     reads are accepted instead so short-lived cards still have a physically
-    possible path to confirmation. Template events also wait for three stable
-    family and rarity reads. The track ID prevents duplicate alerts for later
-    reads of the same visible card.
+    possible path to confirmation. Family evidence is attached only after
+    repeated stable reads, but it does not block a confirmed identity from
+    entering. An unknown family is safer than either losing the whole card or
+    inventing Default. The track ID prevents duplicate alerts for later reads.
     """
 
     def __init__(
@@ -212,11 +213,18 @@ class BeltTracker:
         for track_index, observation_index in matches.items():
             track = self._tracks[track_index]
             observation = prepared[observation_index]
+            was_entered = track.entered_emitted
+            previous_family = track.family
             self._apply_observation(track, observation, now)
             observation_track_ids[observation.source_index] = track.id
             if self._should_emit_entered(track):
                 track.entered_emitted = True
                 events.append(TrackEvent("entered", self._snapshot(track)))
+            elif was_entered and not previous_family and track.family:
+                # Identity and family deliberately confirm independently. Let
+                # consumers re-evaluate a priority threshold when the family
+                # becomes trustworthy, without counting another sighting.
+                events.append(TrackEvent("updated", self._snapshot(track)))
 
         for observation_index, observation in enumerate(prepared):
             if observation_index in matched_observations:
@@ -775,8 +783,6 @@ class BeltTracker:
     def _should_emit_entered(track: Track) -> bool:
         if not track.confirmed or track.entered_emitted:
             return False
-        if BeltTracker._is_template_track(track):
-            return bool(track.family and track.rarity)
         return True
 
     @staticmethod

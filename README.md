@@ -87,8 +87,9 @@ enter `confirmed/` and do not alter the live template index automatically.
 
 If Belt Tracker is unusually slow or misses cards, enable **Dev mode** before
 starting it. Dev mode records detector-stage timings, candidate rejection
-reasons, and tracker state under `data/belt_dev`, with at most eight diagnostic
-frames per run. Stop after reproducing the issue and create a Support Bundle in
+reasons, tracker state, and one compressed belt-region frame per second under
+`data/belt_dev`. Entered and ambiguous results also receive event evidence, and
+each session stops adding images at 200 MB. Stop after reproducing the issue and create a Support Bundle in
 Diagnostics; the bundle includes the latest Belt dev log and up to four frames.
 If the bundled template index is unavailable or corrupt, Belt Tracker reports
 the problem instead of silently switching detectors.

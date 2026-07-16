@@ -143,6 +143,23 @@ class EnteringTracker:
         return SimpleNamespace(events=[], tracks=[])
 
 
+class DelayedFamilyTracker:
+    def update(self, _observations, _now, _frame_width):
+        unknown = SimpleNamespace(id=1, name="R2", family="", confidence=0.93)
+        gold = SimpleNamespace(id=1, name="R2", family="Gold", confidence=0.93)
+        return SimpleNamespace(
+            events=[
+                SimpleNamespace(kind="entered", track=unknown),
+                SimpleNamespace(kind="updated", track=gold),
+                SimpleNamespace(kind="updated", track=gold),
+            ],
+            tracks=[],
+        )
+
+    def predict(self, _now, _frame_width):
+        return SimpleNamespace(events=[], tracks=[])
+
+
 class LatencyRecordingTracker:
     def __init__(self):
         self.update_now = None
@@ -420,7 +437,7 @@ class WatcherTests(unittest.TestCase):
 
         cases = (
             ({}, "Default", False),
-            ({"R2": "Default"}, "", True),
+            ({"R2": "Default"}, "", False),
             ({"R2": "Gold"}, "Default", False),
             ({"R2": "Gold"}, "Gold", True),
             ({"R2": "Diamond"}, "Rainbow", True),
@@ -455,6 +472,44 @@ class WatcherTests(unittest.TestCase):
                 )
 
             self.assertEqual(expected_alerted, log_event.call_args.kwargs["alerted"])
+
+    def test_delayed_family_can_alert_once_without_duplicate_sighting(self):
+        frame, _ = card_frame()
+        stop_event = threading.Event()
+        capture = OneFrameCapture(frame, stop_event)
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = template_result()
+
+        with (
+            patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
+            patch(
+                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                return_value=recognizer,
+            ),
+            patch(
+                "droid_alerts.belt.watcher.BeltTracker",
+                return_value=DelayedFamilyTracker(),
+            ),
+            patch(
+                "droid_alerts.belt.watcher.log_track_event",
+                side_effect=lambda event, *, alerted: {
+                    "event": event.kind,
+                    "droid": "R2",
+                    "alerted": alerted,
+                },
+            ) as log_event,
+        ):
+            run_belt_watcher(
+                1,
+                PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                target_tiers={"R2": "Gold"},
+                stop_event=stop_event,
+            )
+
+        self.assertEqual(
+            [False, True, False],
+            [call.kwargs["alerted"] for call in log_event.call_args_list],
+        )
 
 
 if __name__ == "__main__":
