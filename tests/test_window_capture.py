@@ -142,7 +142,7 @@ class WindowSelectionTests(unittest.TestCase):
             monitor_index=2,
         )
 
-    def test_dashboard_can_switch_the_chat_watcher_back_to_the_monitor(self):
+    def test_dashboard_can_switch_both_watchers_back_to_the_monitor(self):
         app = DroidAlertsApp.__new__(DroidAlertsApp)
         app.config = AppConfig(
             capture_source="window",
@@ -160,7 +160,7 @@ class WindowSelectionTests(unittest.TestCase):
         self.assertEqual("", app.config.capture_window_title)
         self.assertEqual("", app.config.capture_window_process)
         self.assertEqual("", app.config.capture_window_class)
-        self.assertEqual(["Chat watcher: Monitor 2"], capture_source_text)
+        self.assertEqual(["Both watchers: Monitor 2"], capture_source_text)
 
     def test_failed_capture_open_closes_the_partially_started_backend(self):
         backend = SimpleNamespace(
@@ -174,6 +174,34 @@ class WindowSelectionTests(unittest.TestCase):
             watcher._open_configured_capture(AppConfig())
 
         backend.close.assert_called_once()
+
+    def test_chat_watcher_waits_for_a_selected_window_to_reopen(self):
+        stop_event = threading.Event()
+        config = AppConfig(
+            capture_source="window",
+            capture_window_title="Fortnite",
+            capture_window_process="Fortnite.exe",
+            capture_window_class="UnrealWindow",
+        )
+        attempts = 0
+        events = []
+
+        def unavailable(_config):
+            nonlocal attempts
+            attempts += 1
+            stop_event.set()
+            raise RuntimeError("Fortnite is closed")
+
+        with patch.object(watcher, "_open_configured_capture", side_effect=unavailable):
+            watcher.run_watch(
+                config=config,
+                stop_event=stop_event,
+                status_callback=events.append,
+            )
+
+        self.assertEqual(1, attempts)
+        self.assertEqual("capture_error", events[0]["type"])
+        self.assertEqual("watcher_stopped", events[-1]["type"])
 
 
 class WindowFrameTests(unittest.TestCase):

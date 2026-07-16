@@ -34,7 +34,7 @@ it; keep Fortnite restored because Windows may pause capture while it is
 minimized. Use the **Test Alert** button any time to hear and see what an alert
 looks like.
 
-The Dashboard shows the selected monitor or selected chat-watcher window,
+The Dashboard shows the selected monitor or window used by both watchers,
 priority-alert choices, alert-channel controls, current timers, and session
 counts. **Show Chat Region** and **Move Chat Box** are under Diagnostics; moving
 the box never resizes it. Alert
@@ -47,7 +47,8 @@ The **Belt Tracker** tab watches the moving blueprint belt and can alert from a
 different minimum rarity tier for each droid. It can run at the same time as
 chat alerts.
 
-1. Choose the Fortnite display once on the Dashboard.
+1. Choose the Fortnite display or window once on the Dashboard. Both watchers
+   use that capture source.
 2. Open Belt Tracker and click **Select Belt Region**.
 3. Use the recommended and only officially supported setup shown in the guide:
    stand at the start of the belt and match the cyan example box with two

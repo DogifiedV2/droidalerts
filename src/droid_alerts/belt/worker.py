@@ -17,6 +17,10 @@ def run_belt_worker_process(
     collect_template_samples: bool = False,
     idle_scan_fps: int = 4,
     active_scan_fps: int = 8,
+    capture_source: str = "monitor",
+    window_title: str = "",
+    window_process: str = "",
+    window_class: str = "",
 ) -> None:
     """Run Belt Tracker outside the GUI process.
 
@@ -31,6 +35,10 @@ def run_belt_worker_process(
             target_tiers=target_tiers,
             stop_event=stop_event,
             status_callback=status_queue.put,
+            capture_source=capture_source,
+            window_title=window_title,
+            window_process=window_process,
+            window_class=window_class,
             dev_mode=dev_mode,
             collect_template_samples=collect_template_samples,
             idle_scan_fps=idle_scan_fps,

@@ -52,6 +52,17 @@ class CountingCapture:
         self.closed = True
 
 
+class ClosedCapture:
+    def __init__(self):
+        self.closed = False
+
+    def grab(self, _box):
+        raise RuntimeError("The selected window was closed.")
+
+    def close(self):
+        self.closed = True
+
+
 class LoopLimitedStopEvent:
     def __init__(self, loops):
         self.loops = loops
@@ -109,6 +120,31 @@ class WorkerProcessEntryTests(unittest.TestCase):
         self.assertTrue(received["dev_mode"])
         self.assertTrue(received["collect_template_samples"])
         self.assertEqual({"R2": "Gold"}, received["target_tiers"])
+
+    def test_process_entry_forwards_dashboard_window_selection(self):
+        status_queue = RecordingQueue()
+        received = {}
+
+        def fake_watcher(*_args, **kwargs):
+            received.update(kwargs)
+
+        with patch("droid_alerts.belt.worker.run_belt_watcher", side_effect=fake_watcher):
+            run_belt_worker_process(
+                1,
+                PixelBox(0, 0, 900, 520),
+                {},
+                threading.Event(),
+                status_queue,
+                capture_source="window",
+                window_title="Fortnite",
+                window_process="Fortnite.exe",
+                window_class="UnrealWindow",
+            )
+
+        self.assertEqual("window", received["capture_source"])
+        self.assertEqual("Fortnite", received["window_title"])
+        self.assertEqual("Fortnite.exe", received["window_process"])
+        self.assertEqual("UnrealWindow", received["window_class"])
 
     def test_process_entry_reports_uncaught_failure(self):
         status_queue = RecordingQueue()
@@ -301,6 +337,52 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(1, scan["accepted_count"])
         self.assertTrue(capture.closed)
         self.assertEqual("stopped", events[-1]["type"])
+
+    def test_window_capture_reconnects_after_fortnite_restarts(self):
+        frame, _ = card_frame()
+        stop_event = threading.Event()
+        closed_capture = ClosedCapture()
+        replacement = OneFrameCapture(frame, stop_event)
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = template_result()
+        events = []
+
+        with (
+            patch(
+                "droid_alerts.belt.watcher.create_capture",
+                side_effect=(closed_capture, replacement),
+            ) as factory,
+            patch(
+                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                return_value=recognizer,
+            ),
+        ):
+            run_belt_watcher(
+                1,
+                PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                stop_event=stop_event,
+                status_callback=events.append,
+                capture_source="window",
+                window_title="Fortnite",
+                window_process="Fortnite.exe",
+                window_class="UnrealWindow",
+            )
+
+        expected_call = {
+            "monitor_index": 1,
+            "prefer_dxcam": False,
+            "capture_source": "window",
+            "window_title": "Fortnite",
+            "window_process": "Fortnite.exe",
+            "window_class": "UnrealWindow",
+        }
+        self.assertEqual(2, factory.call_count)
+        self.assertEqual(expected_call, factory.call_args_list[0].kwargs)
+        self.assertEqual(expected_call, factory.call_args_list[1].kwargs)
+        self.assertTrue(closed_capture.closed)
+        self.assertTrue(replacement.closed)
+        self.assertIn("capture_error", [event["type"] for event in events])
+        self.assertIn("capture_reconnected", [event["type"] for event in events])
 
     def test_normal_watcher_uses_templates_without_starting_ocr(self):
         frame, _ = card_frame()

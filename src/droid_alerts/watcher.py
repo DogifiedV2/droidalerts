@@ -124,7 +124,18 @@ def run_watch(
 
     set_dpi_awareness()
     config = config or load_config()
-    capture, (screen_w, screen_h) = _open_configured_capture(config)
+    while True:
+        try:
+            capture, (screen_w, screen_h) = _open_configured_capture(config)
+            break
+        except Exception as exc:
+            if config.capture_source != "window":
+                raise
+            print(f"[CAPTURE] Waiting for selected window: {exc}")
+            emit("capture_error", message=str(exc))
+            if _wait_or_stop(stop_event, 1.0):
+                emit("watcher_stopped")
+                return
     active_capture_config = config
 
     resolver = RegionResolver(

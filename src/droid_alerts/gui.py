@@ -287,7 +287,7 @@ class DroidAlertsApp:
         self.alert_vars: dict[tuple[str, str], BooleanVar] = {}
         self.advanced_widgets: list[object] = []
         self.monitor_display_var = StringVar(value="Monitor 1")
-        self.capture_source_var = StringVar(value="Chat watcher: Monitor 1")
+        self.capture_source_var = StringVar(value="Both watchers: Monitor 1")
         self.monitor_indexes_by_label: dict[str, int] = {}
         self.options_outer = None
         self.options_canvas: tk.Canvas | None = None
@@ -1614,7 +1614,7 @@ class DroidAlertsApp:
     def _refresh_capture_source_text(self) -> None:
         if not hasattr(self, "capture_source_var"):
             return
-        self.capture_source_var.set(f"Chat watcher: {self._capture_target_label()}")
+        self.capture_source_var.set(f"Both watchers: {self._capture_target_label()}")
 
     def _set_monitor_capture_source(self) -> None:
         self.config.capture_source = "monitor"
@@ -1759,7 +1759,7 @@ class DroidAlertsApp:
             body,
             text=(
                 "Keep Fortnite restored; Windows can pause capture while it is minimized. "
-                "This changes the chat watcher only. Belt Tracker and timers still use Game display."
+                "This changes both the chat watcher and Belt Tracker. Timers still use Game display."
             ),
             wraplength=700,
             justify="left",
@@ -1880,6 +1880,9 @@ class DroidAlertsApp:
                     overlay_was_open = False
             if overlay_was_open:
                 self.close_region_overlay()
+            if self.is_belt_tracking():
+                self._belt_restart_after_stop = True
+                self.stop_belt_tracking(reason="monitor-change")
             self._set_monitor_capture_source()
             saved = self.save_settings(interactive=False, update_detail=False)
             if saved is None:
@@ -1933,6 +1936,9 @@ class DroidAlertsApp:
             if overlay_was_open:
                 self.close_region_overlay()
 
+            if self.is_belt_tracking():
+                self._belt_restart_after_stop = True
+                self.stop_belt_tracking(reason="monitor-change")
             self.config.capture_source = "window"
             self.config.capture_window_title = window.title
             self.config.capture_window_process = window.process_name
@@ -2690,6 +2696,10 @@ class DroidAlertsApp:
                 config.belt_template_collection_enabled,
                 config.belt_idle_scan_fps,
                 config.belt_active_scan_fps,
+                config.capture_source,
+                config.capture_window_title,
+                config.capture_window_process,
+                config.capture_window_class,
             ),
             name="DroidAlertsBeltTracker",
             daemon=True,
@@ -2823,6 +2833,16 @@ class DroidAlertsApp:
             self._set_belt_header_state("Warning")
             self.belt_status_var.set("Belt Tracker warning")
             self.belt_detail_var.set(message)
+        elif event_type == "capture_error":
+            message = str(event.get("message") or "Fortnite capture is unavailable.")
+            self._set_belt_header_state("Warning")
+            self.belt_status_var.set("Waiting for Fortnite")
+            self.belt_detail_var.set(message)
+        elif event_type == "capture_reconnected":
+            self._belt_error_message = ""
+            self._set_belt_header_state("Running")
+            self.belt_status_var.set("Tracking blueprint belt")
+            self.belt_detail_var.set("Fortnite reconnected automatically.")
         elif event_type == "dev_log":
             path = str(event.get("path") or "belt_dev")
             self.detail_var.set(f"Belt dev log: data/{path}")
