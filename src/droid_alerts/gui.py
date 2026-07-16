@@ -243,6 +243,8 @@ class DroidAlertsApp:
         self._autosave_ready = False
         self.share_debug_detections_check = None
         self.timer_reminders_check = None
+        self.belt_tab_button = None
+        self.history_tab_button = None
         self.belt_dev_mode_check = None
         self.belt_template_collection_check = None
         self.session_detection_count = 0
@@ -440,6 +442,10 @@ class DroidAlertsApp:
             )
             button.pack(side="left", padx=(0, 8))
             self.tab_buttons.append((button, tab))
+            if tab is self.belt_tab:
+                self.belt_tab_button = button
+            elif tab is self.logs_tab:
+                self.history_tab_button = button
         ttk.Separator(tab_bar, orient="vertical").pack(side="left", fill="y", padx=(8, 16), pady=3)
         self.header_status_label = ttk.Label(
             tab_bar,
@@ -1342,7 +1348,28 @@ class DroidAlertsApp:
         if not debug_enabled:
             self._set_var("share_debug_detections", False)
         self._apply_debug_share_visibility(debug_enabled)
+        self._apply_belt_tab_visibility(debug_enabled)
         self._schedule_auto_save()
+
+    def _apply_belt_tab_visibility(self, debug_enabled: bool) -> None:
+        if self.belt_tab_button is None:
+            return
+        if debug_enabled:
+            self.notebook.add(self.belt_tab)
+            pack_options = {"side": "left", "padx": (0, 8)}
+            if self.history_tab_button is not None:
+                pack_options["before"] = self.history_tab_button
+            self.belt_tab_button.pack(**pack_options)
+        else:
+            try:
+                selected = self.root.nametowidget(self.notebook.select())
+            except Exception:
+                selected = None
+            if selected is self.belt_tab:
+                self.notebook.select(self.dashboard_tab)
+            self.notebook.hide(self.belt_tab)
+            self.belt_tab_button.pack_forget()
+        self._highlight_active_tab()
 
     def _apply_debug_share_visibility(self, debug_enabled: bool) -> None:
         if self.share_debug_detections_check is None:
@@ -1583,6 +1610,7 @@ class DroidAlertsApp:
                 self._set_var("share_debug_detections", False)
             self._set_var("advanced_mode", self.config.advanced_mode)
             self._apply_debug_share_visibility(self.config.save_debug_screenshots)
+            self._apply_belt_tab_visibility(self.config.save_debug_screenshots)
             self._apply_advanced_visibility(self.config.advanced_mode)
             self.refresh_sound_choices()
             self.refresh_channel_statuses()

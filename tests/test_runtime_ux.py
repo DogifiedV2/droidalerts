@@ -19,13 +19,16 @@ from droid_alerts import maintenance
 from droid_alerts.capture import format_tk_geometry, monitor_key_from_mapping
 from droid_alerts.config import AppConfig
 from droid_alerts.region import Calibration
-from droid_alerts.timers import seconds_until_next
+from droid_alerts.timers import DISPLAY_TIMER_ORDER, TIMER_ORDER, seconds_until_next
 from droid_alerts.updater import _safe_extract
 from droid_alerts.watcher import _delivery_retryable
 
 
 def main() -> int:
     failures: list[str] = []
+
+    if DISPLAY_TIMER_ORDER != ("beskar", "mythic") or "rainbow" not in TIMER_ORDER:
+        failures.append("timer overlay visibility does not preserve the hidden Rainbow timer")
 
     configured = AppConfig(
         popup_position="bottom_right",
@@ -120,10 +123,14 @@ def main() -> int:
 
     noon = time.struct_time((2026, 7, 10, 12, 0, 0, 3, 191, -1))
     with patch("droid_alerts.timers.time.localtime", return_value=noon):
-        if seconds_until_next("beskar") != 1200 or seconds_until_next("rainbow") != 600:
+        if seconds_until_next("beskar") != 900 or seconds_until_next("rainbow") != 600:
             failures.append("timer boundaries are incorrect at the hour")
         if seconds_until_next("mythic") != 3300:
             failures.append("mythic countdown is incorrect at the hour")
+    between_beskar_spawns = time.struct_time((2026, 7, 10, 12, 7, 30, 3, 191, -1))
+    with patch("droid_alerts.timers.time.localtime", return_value=between_beskar_spawns):
+        if seconds_until_next("beskar") != 450:
+            failures.append("Beskar timer does not use 15-minute spawn intervals")
 
     if not _delivery_retryable("HTTP 503") or _delivery_retryable("HTTP 401"):
         failures.append("delivery retry classification is incorrect")

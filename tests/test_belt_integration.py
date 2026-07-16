@@ -111,6 +111,43 @@ class ImmediateThread:
 
 
 class BeltConfigAndRegionTests(unittest.TestCase):
+    def test_belt_tab_is_hidden_and_leaves_belt_page_when_debug_is_off(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.belt_tab = object()
+        app.dashboard_tab = object()
+        app.belt_tab_button = Mock()
+        app.history_tab_button = Mock()
+        app.notebook = Mock()
+        app.notebook.select.return_value = "belt-tab"
+        app.root = Mock()
+        app.root.nametowidget.return_value = app.belt_tab
+        app._highlight_active_tab = Mock()
+
+        DroidAlertsApp._apply_belt_tab_visibility(app, False)
+
+        app.notebook.select.assert_any_call(app.dashboard_tab)
+        app.notebook.hide.assert_called_once_with(app.belt_tab)
+        app.belt_tab_button.pack_forget.assert_called_once_with()
+        app._highlight_active_tab.assert_called_once_with()
+
+    def test_belt_tab_is_restored_before_history_when_debug_is_on(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.belt_tab = object()
+        app.belt_tab_button = Mock()
+        app.history_tab_button = Mock()
+        app.notebook = Mock()
+        app._highlight_active_tab = Mock()
+
+        DroidAlertsApp._apply_belt_tab_visibility(app, True)
+
+        app.notebook.add.assert_called_once_with(app.belt_tab)
+        app.belt_tab_button.pack.assert_called_once_with(
+            side="left",
+            padx=(0, 8),
+            before=app.history_tab_button,
+        )
+        app._highlight_active_tab.assert_called_once_with()
+
     def test_config_round_trip_normalizes_targets_and_preserves_overlay(self):
         config = AppConfig.from_dict(
             {

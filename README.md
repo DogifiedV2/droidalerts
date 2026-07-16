@@ -49,7 +49,7 @@ chat alerts.
 
 1. Choose the Fortnite display or window once on the Dashboard. Both watchers
    use that capture source.
-2. Open Belt Tracker and click **Select Belt Region**.
+2. Enable **Debug mode**, then open Belt Tracker and click **Select Belt Region**.
 3. Use the recommended and only officially supported setup shown in the guide:
    stand at the start of the belt and match the cyan example box with two
    complete blueprint cards visible. Price labels may be inside the box; Belt
