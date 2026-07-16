@@ -22,6 +22,8 @@ a = Analysis(
         "droid_alerts.timers",
         "PIL._tkinter_finder",
         "ttkbootstrap",
+        "windows_capture",
+        "windows_capture.windows_capture",
     ],
     hookspath=[],
     hooksconfig={},

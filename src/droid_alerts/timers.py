@@ -19,13 +19,15 @@ except Exception:  # pragma: no cover - tkinter availability is platform depende
 
 # "Droid Timers" overlay: a small always-on-top, click-through strip showing
 # when the next droids are due (wall-clock schedule). Beskar spawns every
-# 20 minutes (xx:00/20/40), Mythic at xx:55 every hour, Rainbow every
-# 10 minutes (xx:00/10/...). Layout: Beskar left, Mythic middle, Rainbow right.
+# 15 minutes (xx:00/15/30/45), Mythic at xx:55 every hour, Rainbow every
+# 10 minutes (xx:00/10/...). Rainbow timing stays available in code, but the
+# overlay currently displays only Beskar and Mythic side by side.
 TIMER_ORDER = ("beskar", "mythic", "rainbow")
+DISPLAY_TIMER_ORDER = TIMER_ORDER[:2]
 TIMER_LABELS = {"beskar": "BESKAR", "mythic": "MYTHIC", "rainbow": "RAINBOW"}
 TIMER_COLORS = {"beskar": "#c9cdd9", "mythic": RARITY_COLORS["Mythic"]}
 
-BASE_WIDTH = 560
+BASE_WIDTH = 376
 BASE_HEIGHT = 72
 EDIT_BAR_HEIGHT = 40
 MIN_SCALE = 0.6
@@ -39,7 +41,7 @@ def seconds_until_next(kind: str, offset_seconds: int = 0) -> int:
     lt = time.localtime()
     sec_into_hour = (lt.tm_min * 60 + lt.tm_sec + int(offset_seconds)) % 3600
     if kind == "beskar":
-        return 1200 - (sec_into_hour % 1200)
+        return 900 - (sec_into_hour % 900)
     if kind == "rainbow":
         return 600 - (sec_into_hour % 600)
     # Mythic: xx:55 every hour.
@@ -208,8 +210,8 @@ class DroidTimersOverlay:
 
         label_font = tkfont.Font(root=self.window, family="Segoe UI", size=max(7, int(12 * s)), weight="bold")
         time_font = tkfont.Font(root=self.window, family="Segoe UI Black", size=max(9, int(19 * s)))
-        column_w = width // 3
-        for index, kind in enumerate(TIMER_ORDER):
+        column_w = width // len(DISPLAY_TIMER_ORDER)
+        for index, kind in enumerate(DISPLAY_TIMER_ORDER):
             center_x = column_w * index + column_w // 2
             if index > 0:
                 canvas.create_line(

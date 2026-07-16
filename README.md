@@ -27,13 +27,17 @@ screenshots with the developer** in Advanced settings.
 2. Unzip it anywhere you like. Your Desktop is fine.
 3. Open the `Droid Alerts` folder and double-click `Droid Alerts.exe`.
 
-That's it. Choose the display with Fortnite, click **Start Watching**, go play,
-and it will ping you when something good spawns. Use the **Test Alert** button
-any time to hear and see what an alert looks like.
+That's it. Choose the display with Fortnite or click **Select Window** and pick
+Fortnite, click **Start Watching**, go play, and it will ping you when something
+good spawns. Window capture keeps reading Fortnite when another window covers
+it; keep Fortnite restored because Windows may pause capture while it is
+minimized. Use the **Test Alert** button any time to hear and see what an alert
+looks like.
 
-The Dashboard shows the selected monitor, priority-alert choices, alert-channel
-controls, current timers, and session counts. **Show Chat Region** and **Move
-Chat Box** are under Diagnostics; moving the box never resizes it. Alert
+The Dashboard shows the selected monitor or window used by both watchers,
+priority-alert choices, alert-channel controls, current timers, and session
+counts. **Show Chat Region** and **Move Chat Box** are under Diagnostics; moving
+the box never resizes it. Alert
 appearance plus less common detection, debug, notification-detail, and storage
 controls stay behind the **Advanced settings** toggle in Settings.
 
@@ -43,8 +47,9 @@ The **Belt Tracker** tab watches the moving blueprint belt and can alert from a
 different minimum rarity tier for each droid. It can run at the same time as
 chat alerts.
 
-1. Choose the Fortnite display once on the Dashboard.
-2. Open Belt Tracker and click **Select Belt Region**.
+1. Choose the Fortnite display or window once on the Dashboard. Both watchers
+   use that capture source.
+2. Enable **Debug mode**, then open Belt Tracker and click **Select Belt Region**.
 3. Use the recommended and only officially supported setup shown in the guide:
    stand at the start of the belt and match the cyan example box with two
    complete blueprint cards visible. Price labels may be inside the box; Belt
@@ -87,8 +92,9 @@ enter `confirmed/` and do not alter the live template index automatically.
 
 If Belt Tracker is unusually slow or misses cards, enable **Dev mode** before
 starting it. Dev mode records detector-stage timings, candidate rejection
-reasons, and tracker state under `data/belt_dev`, with at most eight diagnostic
-frames per run. Stop after reproducing the issue and create a Support Bundle in
+reasons, tracker state, and one compressed belt-region frame per second under
+`data/belt_dev`. Entered and ambiguous results also receive event evidence, and
+each session stops adding images at 200 MB. Stop after reproducing the issue and create a Support Bundle in
 Diagnostics; the bundle includes the latest Belt dev log and up to four frames.
 If the bundled template index is unavailable or corrupt, Belt Tracker reports
 the problem instead of silently switching detectors.

@@ -104,6 +104,12 @@ from .telemetry import (
 )
 from .timers import format_countdown, seconds_until_next
 from .watcher import run_watch
+from .window_capture import (
+    WINDOW_CAPTURE_EXPLANATION,
+    WindowDescriptor,
+    list_capture_windows,
+    window_capture_key,
+)
 
 
 ALERT_COMBOS: tuple[tuple[str, str], ...] = (
@@ -213,6 +219,10 @@ class DroidAlertsApp:
         self.belt_selector = None
         self._belt_selector_root_state: str | None = None
         self.belt_overlay = BeltOverlay(self.root)
+        # Loading settings at application startup resolves the default region,
+        # but the overlay is opt-in until the user opens Belt setup or starts
+        # tracking. This keeps normal chat-only launches unobstructed.
+        self._belt_overlay_requested = False
         self._belt_visible_tracks: list[dict[str, object]] = []
         self.region_overlay: tk.Toplevel | None = None
         self.region_overlay_windows: list[tk.Toplevel] = []
@@ -233,6 +243,8 @@ class DroidAlertsApp:
         self._autosave_ready = False
         self.share_debug_detections_check = None
         self.timer_reminders_check = None
+        self.belt_tab_button = None
+        self.history_tab_button = None
         self.belt_dev_mode_check = None
         self.belt_template_collection_check = None
         self.session_detection_count = 0
@@ -277,6 +289,7 @@ class DroidAlertsApp:
         self.alert_vars: dict[tuple[str, str], BooleanVar] = {}
         self.advanced_widgets: list[object] = []
         self.monitor_display_var = StringVar(value="Monitor 1")
+        self.capture_source_var = StringVar(value="Both watchers: Monitor 1")
         self.monitor_indexes_by_label: dict[str, int] = {}
         self.options_outer = None
         self.options_canvas: tk.Canvas | None = None
@@ -429,6 +442,10 @@ class DroidAlertsApp:
             )
             button.pack(side="left", padx=(0, 8))
             self.tab_buttons.append((button, tab))
+            if tab is self.belt_tab:
+                self.belt_tab_button = button
+            elif tab is self.logs_tab:
+                self.history_tab_button = button
         ttk.Separator(tab_bar, orient="vertical").pack(side="left", fill="y", padx=(8, 16), pady=3)
         self.header_status_label = ttk.Label(
             tab_bar,
@@ -530,6 +547,17 @@ class DroidAlertsApp:
             command=self.identify_displays,
             **bootstyle("info-outline"),
         ).grid(row=0, column=4, padx=(10, 0))
+        ttk.Button(
+            controls_row,
+            text="Select Window",
+            command=self.select_capture_window,
+            **bootstyle("info-outline"),
+        ).grid(row=0, column=5, padx=(10, 0))
+        ttk.Label(
+            controls_row,
+            textvariable=self.capture_source_var,
+            **muted_style(),
+        ).grid(row=1, column=2, columnspan=4, sticky="e", pady=(7, 0))
         self.refresh_monitor_choices()
 
         alerts_panel = ttk.Frame(page)
@@ -1240,6 +1268,8 @@ class DroidAlertsApp:
             return
         if selected is self.belt_tab:
             self._show_belt_cpu_warning_if_needed()
+            self._belt_overlay_requested = True
+            self._configure_belt_overlay()
 
     def _show_belt_cpu_warning_if_needed(self) -> None:
         config = getattr(self, "config", None) or load_config()
@@ -1318,7 +1348,28 @@ class DroidAlertsApp:
         if not debug_enabled:
             self._set_var("share_debug_detections", False)
         self._apply_debug_share_visibility(debug_enabled)
+        self._apply_belt_tab_visibility(debug_enabled)
         self._schedule_auto_save()
+
+    def _apply_belt_tab_visibility(self, debug_enabled: bool) -> None:
+        if self.belt_tab_button is None:
+            return
+        if debug_enabled:
+            self.notebook.add(self.belt_tab)
+            pack_options = {"side": "left", "padx": (0, 8)}
+            if self.history_tab_button is not None:
+                pack_options["before"] = self.history_tab_button
+            self.belt_tab_button.pack(**pack_options)
+        else:
+            try:
+                selected = self.root.nametowidget(self.notebook.select())
+            except Exception:
+                selected = None
+            if selected is self.belt_tab:
+                self.notebook.select(self.dashboard_tab)
+            self.notebook.hide(self.belt_tab)
+            self.belt_tab_button.pack_forget()
+        self._highlight_active_tab()
 
     def _apply_debug_share_visibility(self, debug_enabled: bool) -> None:
         if self.share_debug_detections_check is None:
@@ -1559,14 +1610,70 @@ class DroidAlertsApp:
                 self._set_var("share_debug_detections", False)
             self._set_var("advanced_mode", self.config.advanced_mode)
             self._apply_debug_share_visibility(self.config.save_debug_screenshots)
+            self._apply_belt_tab_visibility(self.config.save_debug_screenshots)
             self._apply_advanced_visibility(self.config.advanced_mode)
             self.refresh_sound_choices()
             self.refresh_channel_statuses()
             self._refresh_belt_target_text()
             self._load_belt_region()
+            self._refresh_capture_source_text()
+            if not self.is_watching():
+                self.watcher_detail_var.set(self._watcher_ready_text())
             self.detail_var.set("Settings loaded")
         finally:
             self._loading_settings = False
+
+    def _capture_target_label(self, config: AppConfig | None = None) -> str:
+        config = config or self.config
+        if config.capture_source == "window":
+            selected = (
+                config.capture_window_title
+                or config.capture_window_process
+                or "Selected window"
+            )
+            return f"Window: {selected}"
+        return self.monitor_display_var.get() or f"Monitor {config.monitor_index}"
+
+    def _watcher_ready_text(self) -> str:
+        if self.config.capture_source == "window":
+            return f"{self._capture_target_label()} is selected. Start watching when Fortnite is open."
+        return "Choose the display with Fortnite, or select its window, then start watching."
+
+    def _refresh_capture_source_text(self) -> None:
+        if not hasattr(self, "capture_source_var"):
+            return
+        self.capture_source_var.set(f"Both watchers: {self._capture_target_label()}")
+
+    def _set_monitor_capture_source(self) -> None:
+        self.config.capture_source = "monitor"
+        self.config.capture_window_title = ""
+        self.config.capture_window_process = ""
+        self.config.capture_window_class = ""
+        self._refresh_capture_source_text()
+
+    def _create_chat_capture(self, config: AppConfig | None = None):
+        config = config or self.config
+        return create_capture(
+            monitor_index=config.monitor_index,
+            capture_source=config.capture_source,
+            window_title=config.capture_window_title,
+            window_process=config.capture_window_process,
+            window_class=config.capture_window_class,
+        )
+
+    @staticmethod
+    def _capture_area(capture):
+        return getattr(capture, "capture_area", getattr(capture, "monitor", None))
+
+    def _current_capture_key(self) -> str | None:
+        config = self.config
+        if config.capture_source == "window":
+            return window_capture_key(
+                title=config.capture_window_title,
+                process_name=config.capture_window_process,
+                class_name=config.capture_window_class,
+            )
+        return getattr(self._current_monitor_info(), "key", None)
 
     def refresh_monitor_choices(self, *, sync_belt: bool = True) -> None:
         selected_index = max(1, int(self._value("monitor_index")))
@@ -1581,6 +1688,7 @@ class DroidAlertsApp:
             self.monitor_indexes_by_label = {fallback_label: selected_index}
             self.monitor_combobox.configure(values=(fallback_label,))
             self.monitor_display_var.set(fallback_label)
+            self._refresh_capture_source_text()
             return
 
         primary = next((monitor for monitor in monitors if monitor.is_primary), monitors[0])
@@ -1597,6 +1705,7 @@ class DroidAlertsApp:
         if selected_monitor.index != selected_index:
             self._set_var("monitor_index", selected_monitor.index)
         self.monitor_display_var.set(format_monitor_label(selected_monitor, primary))
+        self._refresh_capture_source_text()
         if sync_belt and selected_monitor.index != selected_index:
             self._on_belt_monitor_changed()
 
@@ -1631,6 +1740,7 @@ class DroidAlertsApp:
             if overlay_was_open:
                 self.close_region_overlay()
         self._apply_monitor_index(monitor_index)
+        self._set_monitor_capture_source()
         saved = self.save_settings(interactive=False, update_detail=False)
         if overlay_was_open and saved is not None:
             try:
@@ -1644,6 +1754,298 @@ class DroidAlertsApp:
             self.detail_var.set(f"{label} selected; chat region could not be shown: {overlay_error}")
         else:
             self.detail_var.set(f"{label} selected and applied")
+
+    def select_capture_window(self) -> None:
+        if sys.platform != "win32":
+            messagebox.showinfo(
+                "Select Window",
+                "Window capture is available in the Windows app.",
+            )
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Select Window")
+        dialog.transient(self.root)
+        dialog.minsize(680, 430)
+        dialog.geometry("760x520")
+
+        body = ttk.Frame(dialog, padding=20)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(4, weight=1)
+
+        ttk.Label(body, text="Select Window", font=self._font(14, "bold")).grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(
+            body,
+            text=WINDOW_CAPTURE_EXPLANATION,
+            wraplength=700,
+            justify="left",
+        ).grid(row=1, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(
+            body,
+            text=(
+                "Keep Fortnite restored; Windows can pause capture while it is minimized. "
+                "This changes both the chat watcher and Belt Tracker. Timers still use Game display."
+            ),
+            wraplength=700,
+            justify="left",
+            **muted_style(),
+        ).grid(row=2, column=0, sticky="w", pady=(5, 14))
+
+        feedback_var = StringVar(value="Open Fortnite before refreshing this list.")
+        ttk.Label(
+            body,
+            textvariable=feedback_var,
+            wraplength=700,
+            justify="left",
+            **muted_style(),
+        ).grid(row=3, column=0, sticky="w", pady=(0, 8))
+
+        list_frame = ttk.Frame(body)
+        list_frame.grid(row=4, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+        picker = ttk.Treeview(
+            list_frame,
+            columns=("window", "application"),
+            show="headings",
+            selectmode="browse",
+            height=12,
+        )
+        picker.heading("window", text="Window")
+        picker.heading("application", text="Application")
+        picker.column("window", anchor="w", stretch=True, minwidth=360)
+        picker.column("application", anchor="w", stretch=False, width=210)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=picker.yview)
+        picker.configure(yscrollcommand=scrollbar.set)
+        picker.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=5, column=0, sticky="ew", pady=(16, 0))
+        buttons.columnconfigure(2, weight=1)
+
+        windows_by_item: dict[str, WindowDescriptor] = {}
+        select_button = None
+
+        def selected_window() -> WindowDescriptor | None:
+            selection = picker.selection()
+            if not selection:
+                return None
+            return windows_by_item.get(selection[0])
+
+        def refresh_windows() -> None:
+            nonlocal windows_by_item
+            for item in picker.get_children():
+                picker.delete(item)
+            windows_by_item = {}
+            try:
+                windows = list_capture_windows()
+            except Exception as exc:
+                feedback_var.set(f"Windows could not be listed: {exc}")
+                if select_button is not None:
+                    select_button.configure(state="disabled")
+                return
+
+            current = self.config
+            current_item = ""
+            fortnite_item = ""
+            for index, window in enumerate(windows):
+                item = f"window-{index}"
+                windows_by_item[item] = window
+                picker.insert(
+                    "",
+                    "end",
+                    iid=item,
+                    values=(window.title, window.process_name or "Unknown application"),
+                )
+                if not current_item and current.capture_source == "window":
+                    process_matches = (
+                        current.capture_window_process
+                        and window.process_name.casefold()
+                        == current.capture_window_process.casefold()
+                    )
+                    title_matches = (
+                        current.capture_window_title
+                        and window.title.casefold() == current.capture_window_title.casefold()
+                    )
+                    if process_matches or title_matches:
+                        current_item = item
+                if not fortnite_item and window.is_fortnite:
+                    fortnite_item = item
+
+            if not windows_by_item:
+                feedback_var.set("No selectable windows were found. Open Fortnite, then refresh.")
+                if select_button is not None:
+                    select_button.configure(state="disabled")
+                return
+
+            preferred_item = current_item or fortnite_item or next(iter(windows_by_item))
+            picker.selection_set(preferred_item)
+            picker.focus(preferred_item)
+            picker.see(preferred_item)
+            feedback_var.set(
+                f"{len(windows_by_item)} window{'s' if len(windows_by_item) != 1 else ''} found."
+            )
+            if select_button is not None:
+                select_button.configure(state="normal")
+
+        def close_dialog() -> None:
+            try:
+                dialog.grab_release()
+            except tk.TclError:
+                pass
+            dialog.destroy()
+
+        def use_game_display() -> None:
+            overlay_was_open = False
+            if self.region_overlay is not None:
+                try:
+                    overlay_was_open = bool(self.region_overlay.winfo_exists())
+                except Exception:
+                    overlay_was_open = False
+            if overlay_was_open:
+                self.close_region_overlay()
+            if self.is_belt_tracking():
+                self._belt_restart_after_stop = True
+                self.stop_belt_tracking(reason="monitor-change")
+            self._set_monitor_capture_source()
+            saved = self.save_settings(interactive=False, update_detail=False)
+            if saved is None:
+                feedback_var.set("Fix the invalid setting shown in the main window, then try again.")
+                if overlay_was_open:
+                    try:
+                        self.toggle_region_overlay()
+                    except Exception:
+                        pass
+                return
+            self.watcher_detail_var.set(self._watcher_ready_text())
+            self.detail_var.set("Chat watcher changed back to Game display")
+            close_dialog()
+            if overlay_was_open:
+                self.root.after(0, self.toggle_region_overlay)
+
+        def apply_window() -> None:
+            window = selected_window()
+            if window is None:
+                feedback_var.set("Select the Fortnite window first.")
+                return
+
+            feedback_var.set(f'Checking capture for "{window.title}"…')
+            dialog.update_idletasks()
+            test_capture = None
+            try:
+                test_capture = create_capture(
+                    monitor_index=max(1, int(self._value("monitor_index"))),
+                    capture_source="window",
+                    window_title=window.title,
+                    window_process=window.process_name,
+                    window_class=window.class_name,
+                )
+                test_capture.screen_size()
+            except Exception as exc:
+                feedback_var.set(f"That window could not be captured: {exc}")
+                return
+            finally:
+                if test_capture is not None:
+                    try:
+                        test_capture.close()
+                    except Exception:
+                        pass
+
+            overlay_was_open = False
+            if self.region_overlay is not None:
+                try:
+                    overlay_was_open = bool(self.region_overlay.winfo_exists())
+                except Exception:
+                    overlay_was_open = False
+            if overlay_was_open:
+                self.close_region_overlay()
+
+            if self.is_belt_tracking():
+                self._belt_restart_after_stop = True
+                self.stop_belt_tracking(reason="monitor-change")
+            self.config.capture_source = "window"
+            self.config.capture_window_title = window.title
+            self.config.capture_window_process = window.process_name
+            self.config.capture_window_class = window.class_name
+            saved = self.save_settings(interactive=False, update_detail=False)
+            if saved is None:
+                feedback_var.set("Fix the invalid setting shown in the main window, then try again.")
+                if overlay_was_open:
+                    try:
+                        self.toggle_region_overlay()
+                    except Exception:
+                        pass
+                return
+
+            self._refresh_capture_source_text()
+            self.watcher_detail_var.set(self._watcher_ready_text())
+            self.detail_var.set(f'Chat watcher set to "{window.title}"')
+            close_dialog()
+            if overlay_was_open:
+                def reopen_overlay() -> None:
+                    try:
+                        self.toggle_region_overlay()
+                    except Exception as exc:
+                        self.detail_var.set(
+                            f'Window selected; chat region could not be shown: {exc}'
+                        )
+
+                self.root.after(0, reopen_overlay)
+
+        ttk.Button(
+            buttons,
+            text="Refresh",
+            command=refresh_windows,
+            **bootstyle("secondary-outline"),
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Button(
+            buttons,
+            text="Use Game Display",
+            command=use_game_display,
+            **bootstyle("secondary-outline"),
+        ).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Button(
+            buttons,
+            text="Cancel",
+            command=close_dialog,
+            **bootstyle("secondary"),
+        ).grid(row=0, column=3, padx=(0, 8))
+        select_button = ttk.Button(
+            buttons,
+            text="Select Window",
+            command=apply_window,
+            **bootstyle("success"),
+        )
+        select_button.grid(row=0, column=4)
+
+        picker.bind("<Double-1>", lambda _event: apply_window())
+        dialog.bind("<Return>", lambda _event: apply_window())
+        dialog.bind("<Escape>", lambda _event: close_dialog())
+        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+        refresh_windows()
+
+        dialog.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - dialog.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - dialog.winfo_height()) // 3
+        try:
+            monitors = list_monitors()
+        except Exception:
+            monitors = []
+        x, y = clamp_dialog_position(
+            x,
+            y,
+            dialog.winfo_width(),
+            dialog.winfo_height(),
+            monitors,
+        )
+        dialog.geometry(format_tk_geometry(x=x, y=y))
+        dialog.grab_set()
+        picker.focus_set()
+        dialog.wait_window()
 
     def _current_monitor_info(self) -> MonitorInfo | None:
         index = max(1, int(self._value("monitor_index")))
@@ -1709,6 +2111,7 @@ class DroidAlertsApp:
             return
         if not self._confirm_belt_region_guide_if_needed():
             return
+        self._belt_overlay_requested = True
         self.belt_overlay.close()
         try:
             self._belt_selector_root_state = str(self.root.state())
@@ -2011,6 +2414,7 @@ class DroidAlertsApp:
 
     def _belt_overlay_changed(self) -> None:
         if bool(self._value("belt_overlay_enabled")):
+            self._belt_overlay_requested = True
             self._configure_belt_overlay()
         else:
             self.belt_overlay.close()
@@ -2027,7 +2431,8 @@ class DroidAlertsApp:
     def _configure_belt_overlay(self) -> None:
         self.belt_overlay.close()
         if (
-            not bool(self._value("belt_overlay_enabled"))
+            not getattr(self, "_belt_overlay_requested", False)
+            or not bool(self._value("belt_overlay_enabled"))
             or self.belt_region is None
         ):
             return
@@ -2229,8 +2634,8 @@ class DroidAlertsApp:
             steps=(
                 "Use the recommended and only officially supported setup shown during the first "
                 "belt selection: stand at the start of the belt and keep the same camera angle.",
-                "Click Select Belt Region, then match the cyan example box with two complete "
-                "blueprint cards visible. Price labels may be inside the box; they are ignored.",
+                "Click Select Belt Region, then click and drag to match the cyan example box with "
+                "two complete blueprint cards visible. Price labels may be inside the box; they are ignored.",
                 "Press Enter to save the selected region.",
                 "Enable Show belt overlay and confirm the box matches the official example. Other "
                 "angles, distances, and framing are not officially supported.",
@@ -2278,6 +2683,8 @@ class DroidAlertsApp:
             self.belt_status_var.set("Display unavailable")
             self.belt_detail_var.set("Choose an available game display from Dashboard.")
             return
+        if not self._confirm_belt_region_guide_if_needed():
+            return
         relative = load_belt_region(monitor)
         self.belt_region = relative.to_pixels(monitor) if relative is not None else None
         self._refresh_belt_region_text()
@@ -2317,6 +2724,10 @@ class DroidAlertsApp:
                 config.belt_template_collection_enabled,
                 config.belt_idle_scan_fps,
                 config.belt_active_scan_fps,
+                config.capture_source,
+                config.capture_window_title,
+                config.capture_window_process,
+                config.capture_window_class,
             ),
             name="DroidAlertsBeltTracker",
             daemon=True,
@@ -2331,6 +2742,7 @@ class DroidAlertsApp:
         self._set_belt_header_state("Running")
         self._set_belt_loading_state()
         self._set_belt_controls(running=True)
+        self._belt_overlay_requested = True
         self._configure_belt_overlay()
         self.detail_var.set("Belt Tracker started")
 
@@ -2449,6 +2861,16 @@ class DroidAlertsApp:
             self._set_belt_header_state("Warning")
             self.belt_status_var.set("Belt Tracker warning")
             self.belt_detail_var.set(message)
+        elif event_type == "capture_error":
+            message = str(event.get("message") or "Fortnite capture is unavailable.")
+            self._set_belt_header_state("Warning")
+            self.belt_status_var.set("Waiting for Fortnite")
+            self.belt_detail_var.set(message)
+        elif event_type == "capture_reconnected":
+            self._belt_error_message = ""
+            self._set_belt_header_state("Running")
+            self.belt_status_var.set("Tracking blueprint belt")
+            self.belt_detail_var.set("Fortnite reconnected automatically.")
         elif event_type == "dev_log":
             path = str(event.get("path") or "belt_dev")
             self.detail_var.set(f"Belt dev log: data/{path}")
@@ -2745,8 +3167,17 @@ class DroidAlertsApp:
             width = event.get("screen_width", "?")
             height = event.get("screen_height", "?")
             source = event.get("region_source", "automatic")
+            capture_source = str(event.get("capture_source") or "monitor")
+            capture_label = str(event.get("capture_label") or "").strip()
+            target_label = (
+                f"Window: {capture_label or 'Selected window'}"
+                if capture_source == "window"
+                else self.monitor_display_var.get()
+            )
             self.watcher_status_var.set("Watching for priority spawns")
-            self.watcher_detail_var.set(f"{self.monitor_display_var.get()} · {width} × {height} · Region: {source}")
+            self.watcher_detail_var.set(
+                f"{target_label} · {width} × {height} · Region: {source}"
+            )
             self._set_watcher_state("Running")
         elif event_type == "scan":
             stamp = str(event.get("scanned_at") or "")
@@ -3010,6 +3441,10 @@ class DroidAlertsApp:
             return None
 
         config = load_config()
+        config.capture_source = previous_config.capture_source
+        config.capture_window_title = previous_config.capture_window_title
+        config.capture_window_process = previous_config.capture_window_process
+        config.capture_window_class = previous_config.capture_window_class
         try:
             config.monitor_index = max(1, int(self._value("monitor_index")))
             config.capture_interval_seconds = max(0.05, float(self._value("capture_interval_seconds")))
@@ -3672,7 +4107,7 @@ class DroidAlertsApp:
         self.watch_thread.start()
         self._set_watcher_state("Running")
         self.watcher_status_var.set("Starting screen capture…")
-        self.watcher_detail_var.set(f"Preparing {self.monitor_display_var.get()}")
+        self.watcher_detail_var.set(f"Preparing {self._capture_target_label(config)}")
         mode = "debug on" if config.save_debug_screenshots else "debug off"
         self.detail_var.set(f"Watcher started ({mode})")
 
@@ -3702,7 +4137,7 @@ class DroidAlertsApp:
         if exc is None:
             self._set_watcher_state("Stopped")
             self.watcher_status_var.set("Ready to watch")
-            self.watcher_detail_var.set("Choose the display with Fortnite, then start watching.")
+            self.watcher_detail_var.set(self._watcher_ready_text())
             self.detail_var.set("Watcher stopped")
         else:
             self._set_watcher_state("Error")
@@ -3782,7 +4217,7 @@ class DroidAlertsApp:
                 continue
             if selected_filter == "Priority alerts" and not (
                 event_type == "alert"
-                or (event_type == "belt_entered" and bool(row.get("alerted")))
+                or (event_type.startswith("belt_") and bool(row.get("alerted")))
                 or (not event_type and bool(row.get("alerted")))
             ):
                 continue
@@ -4115,23 +4550,23 @@ class DroidAlertsApp:
             self.close_region_overlay()
             return
         set_dpi_awareness()
-        capture = create_capture(monitor_index=self.config.monitor_index)
+        capture = self._create_chat_capture()
         try:
             screen_w, screen_h = capture.screen_size()
+            capture_area = self._capture_area(capture)
             box, source = RegionResolver(
                 screen_w,
                 screen_h,
                 max_failures=self.config.validation_failures_before_calibration_prompt,
-                monitor_key=getattr(getattr(capture, "monitor", None), "key", None),
+                monitor_key=getattr(capture_area, "key", None),
             ).resolve()
-            monitor = getattr(capture, "monitor", None)
-            left_offset = int(getattr(monitor, "left", 0))
-            top_offset = int(getattr(monitor, "top", 0))
+            left_offset = int(getattr(capture_area, "left", 0))
+            top_offset = int(getattr(capture_area, "top", 0))
             self.region_box = box
             self.region_source = source
             self.region_screen_size = (screen_w, screen_h)
             self.region_monitor_offset = (left_offset, top_offset)
-            self.region_monitor_key = getattr(monitor, "key", None)
+            self.region_monitor_key = getattr(capture_area, "key", None)
             self.show_region_overlay(
                 left_offset + box.left,
                 top_offset + box.top,
@@ -4225,7 +4660,7 @@ class DroidAlertsApp:
         )
 
     def auto_detect_region(self) -> None:
-        Calibration().save(getattr(self._current_monitor_info(), "key", None))
+        Calibration().save(self._current_capture_key())
         note = "Automatic region saved and applied"
         overlay_was_open = self.region_overlay is not None and self.region_overlay.winfo_exists()
         if overlay_was_open:

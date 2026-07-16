@@ -59,24 +59,52 @@ class RegionSelector:
         self.canvas.create_rectangle(14, 14, 610, 58, fill="#07111f", outline="#00e5ff", width=2)
         self.canvas.create_text(
             28, 36, anchor="w", fill="white", font=("Segoe UI", 14, "bold"),
-            text="Drag around the blueprint belt · Enter to save · Esc to cancel",
+            text="Drag around the blueprint belt · Enter or click Save",
         )
+        self.canvas.create_rectangle(
+            500, 20, 566, 52, fill="#087f8c", outline="#65f3ff", width=2,
+            tags=("save_control",),
+        )
+        self.canvas.create_text(
+            533, 36, text="Save", fill="white", font=("Segoe UI", 11, "bold"),
+            tags=("save_control",),
+        )
+        self.canvas.tag_bind("save_control", "<Button-1>", self._save)
         self.start: tuple[int, int] | None = None
         self.current: tuple[int, int, int, int] | None = None
         self.rect_id: int | None = None
         self.canvas.bind("<ButtonPress-1>", self._press)
         self.canvas.bind("<B1-Motion>", self._drag)
         self.canvas.bind("<ButtonRelease-1>", self._release)
-        self.window.bind("<Return>", self._save)
-        self.window.bind("<Escape>", self._cancel)
+        self._bind_shortcuts()
         self.window.protocol("WM_DELETE_WINDOW", self._cancel)
-        self.window.focus_force()
+        self.window.after_idle(self._focus_selector)
+
+    def _bind_shortcuts(self) -> None:
+        for target in (self.window, self.canvas):
+            target.bind("<Return>", self._save, add="+")
+            target.bind("<KP_Enter>", self._save, add="+")
+            target.bind("<KeyPress-s>", self._save, add="+")
+            target.bind("<Escape>", self._cancel, add="+")
+
+    def _focus_selector(self) -> None:
+        if self._finished:
+            return
+        try:
+            self.window.lift()
+            self.window.focus_force()
+            self.canvas.focus_set()
+        except tk.TclError:
+            pass
 
     def _press(self, event) -> None:
+        self._focus_selector()
         self.start = (event.x, event.y)
         if self.rect_id is not None:
             self.canvas.delete(self.rect_id)
-        self.rect_id = self.canvas.create_rectangle(event.x, event.y, event.x, event.y, outline="#00e5ff", width=4)
+        self.rect_id = self.canvas.create_rectangle(
+            event.x, event.y, event.x, event.y, outline="#00e5ff", width=4
+        )
 
     def _drag(self, event) -> None:
         if self.start is None or self.rect_id is None:
@@ -89,19 +117,22 @@ class RegionSelector:
         x1, y1 = self.start
         x2, y2 = event.x, event.y
         self.current = min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1)
+        self._focus_selector()
 
-    def _save(self, _event=None) -> None:
+    def _save(self, _event=None) -> str:
         if self.current is None or self.current[2] < 100 or self.current[3] < 50:
-            return
+            return "break"
         box = PixelBox(*self.current)
         self._finished = True
         self.window.destroy()
         self.on_selected(box)
+        return "break"
 
-    def _cancel(self, _event=None) -> None:
+    def _cancel(self, _event=None) -> str:
         if self._finished:
-            return
+            return "break"
         self._finished = True
         self.window.destroy()
         if self.on_cancelled is not None:
             self.on_cancelled()
+        return "break"

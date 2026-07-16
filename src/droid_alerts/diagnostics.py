@@ -31,6 +31,9 @@ def create_support_bundle(config: AppConfig) -> Path:
         "anonymous_belt_stats_url",
         "anonymous_belt_counts_url",
         "debug_detection_upload_url",
+        "capture_window_title",
+        "capture_window_process",
+        "capture_window_class",
     ):
         if config_data.get(key):
             config_data[key] = "<redacted>"
@@ -67,7 +70,7 @@ def create_support_bundle(config: AppConfig) -> Path:
                 _redacted_dev_log(belt_log),
             )
             for index, screenshot in enumerate(
-                _latest_files(belt_log.parent, "frame_*.png", 4),
+                _latest_belt_frames(belt_log.parent, 4),
                 start=1,
             ):
                 try:
@@ -136,6 +139,16 @@ def _latest_files(root: Path, pattern: str, count: int) -> list[Path]:
     files = [file for file in root.rglob(pattern) if file.is_file()]
     files.sort(key=_safe_mtime, reverse=True)
     return files[:count]
+
+
+def _latest_belt_frames(root: Path, count: int) -> list[Path]:
+    frames = [
+        path
+        for path in root.glob("frame_*.*")
+        if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+    ]
+    frames.sort(key=_safe_mtime, reverse=True)
+    return frames[:count]
 
 
 def _safe_mtime(path: Path) -> float:

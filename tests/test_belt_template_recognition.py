@@ -95,11 +95,13 @@ class BeltTemplateIndexTests(unittest.TestCase):
 
 class TemplateCardRecognizerTests(unittest.TestCase):
     def test_finds_multiple_cards_without_ocr(self):
-        frame = np.full((HEIGHT, 820, 3), (110, 95, 80), dtype=np.uint8)
+        frame_height = 405
+        crop_top = 71
+        frame = np.full((frame_height, 820, 3), (110, 95, 80), dtype=np.uint8)
         r2_index = DROID_NAMES.index("R2")
         gonk_index = DROID_NAMES.index("GONK")
-        frame[:, 90 : 90 + CARD_WIDTH] = card(r2_index + 1)
-        frame[:, 480 : 480 + CARD_WIDTH] = card(gonk_index + 1)
+        frame[crop_top : crop_top + HEIGHT, 90 : 90 + CARD_WIDTH] = card(r2_index + 1)
+        frame[crop_top : crop_top + HEIGHT, 480 : 480 + CARD_WIDTH] = card(gonk_index + 1)
 
         result = TemplateCardRecognizer(
             synthetic_index(),
@@ -112,16 +114,35 @@ class TemplateCardRecognizerTests(unittest.TestCase):
         self.assertEqual("templates", result.diagnostics["detector"])
         self.assertEqual(2, result.diagnostics["accepted_count"])
         self.assertEqual((), result.text_observations)
+        self.assertTrue(all(item.raw_best_similarity > 0.8 for item in result.candidates))
+        self.assertTrue(all(item.runner_up_identity for item in result.candidates))
+        self.assertTrue(all(item.identity_margin > 0.01 for item in result.candidates))
 
     def test_partial_edge_card_waits_until_fully_visible(self):
-        frame = np.full((HEIGHT, 500, 3), (110, 95, 80), dtype=np.uint8)
+        frame = np.full((405, 500, 3), (110, 95, 80), dtype=np.uint8)
         r2_index = DROID_NAMES.index("R2")
         partial = card(r2_index + 1)
-        frame[:, : CARD_WIDTH - 35] = partial[:, 35:]
+        frame[71 : 71 + HEIGHT, : CARD_WIDTH - 35] = partial[:, 35:]
 
         result = TemplateCardRecognizer(synthetic_index()).analyze(frame)
 
         self.assertEqual([], result.observations)
+
+    def test_card_touching_vertical_region_edge_is_rejected_as_clipped(self):
+        frame = np.full((HEIGHT, 500, 3), (110, 95, 80), dtype=np.uint8)
+        r2_index = DROID_NAMES.index("R2")
+        frame[:, 120 : 120 + CARD_WIDTH] = card(r2_index + 1)
+
+        result = TemplateCardRecognizer(
+            synthetic_index(),
+            config=TemplateRecognitionConfig(minimum_identity_margin=0.01),
+        ).analyze(frame)
+
+        self.assertEqual([], result.observations)
+        self.assertTrue(
+            not result.candidates
+            or all(candidate.reason == "card_touches_region_edge" for candidate in result.candidates)
+        )
 
     def test_plain_background_does_not_create_candidates(self):
         frame = np.full((HEIGHT, 900, 3), (110, 95, 80), dtype=np.uint8)
@@ -131,12 +152,128 @@ class TemplateCardRecognizerTests(unittest.TestCase):
         self.assertEqual([], result.observations)
         self.assertEqual(0, result.diagnostics["card_window_count"])
 
+    def test_hud_text_and_dark_panels_do_not_create_blueprint_candidates(self):
+        frame = np.full((405, 900, 3), (95, 105, 115), dtype=np.uint8)
+        cv2.rectangle(frame, (80, 120), (820, 300), (8, 8, 12), -1)
+        for index, text in enumerate(("R3", "2BB", "LEGENDARY", "1.10K")):
+            cv2.putText(
+                frame,
+                text,
+                (110 + index * 180, 225),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.2,
+                (245, 245, 245),
+                3,
+                cv2.LINE_AA,
+            )
+
+        result = TemplateCardRecognizer(synthetic_index()).analyze(frame)
+
+        self.assertEqual([], result.observations)
+
+    def test_blurry_card_is_missed_instead_of_loosening_identity_thresholds(self):
+        frame = np.full((405, 500, 3), (110, 95, 80), dtype=np.uint8)
+        r2_index = DROID_NAMES.index("R2")
+        blurry = cv2.GaussianBlur(card(r2_index + 1), (31, 31), 12)
+        frame[71 : 71 + HEIGHT, 120 : 120 + CARD_WIDTH] = blurry
+
+        result = TemplateCardRecognizer(synthetic_index()).analyze(frame)
+
+        self.assertEqual([], result.observations)
+
+    def test_near_identical_droid_templates_are_rejected_by_identity_margin(self):
+        index = synthetic_index()
+        identity_hog = index.identity_hog.copy()
+        r2_index = DROID_NAMES.index("R2")
+        gonk_index = DROID_NAMES.index("GONK")
+        identity_hog[gonk_index] = identity_hog[r2_index]
+        frame = np.full((405, 500, 3), (110, 95, 80), dtype=np.uint8)
+        frame[71 : 71 + HEIGHT, 120 : 120 + CARD_WIDTH] = card(r2_index + 1)
+
+        result = TemplateCardRecognizer(
+            replace(index, identity_hog=identity_hog)
+        ).analyze(frame)
+
+        self.assertEqual([], result.observations)
+
+    def test_geometry_search_handles_space_above_and_below_cards(self):
+        frame_height = 405
+        crop_top = 71
+        frame = np.full((frame_height, 820, 3), (110, 95, 80), dtype=np.uint8)
+        r2_index = DROID_NAMES.index("R2")
+        gonk_index = DROID_NAMES.index("GONK")
+        frame[crop_top : crop_top + HEIGHT, 90 : 90 + CARD_WIDTH] = card(r2_index + 1)
+        frame[crop_top : crop_top + HEIGHT, 480 : 480 + CARD_WIDTH] = card(gonk_index + 1)
+
+        result = TemplateCardRecognizer(
+            synthetic_index(),
+            config=TemplateRecognitionConfig(minimum_identity_margin=0.01),
+        ).analyze(frame)
+
+        self.assertEqual(["R2", "GONK"], [item.match.name for item in result.observations])
+        self.assertEqual(crop_top, result.diagnostics["geometry_crop_top"])
+        self.assertEqual(HEIGHT, result.diagnostics["geometry_crop_height"])
+        self.assertAlmostEqual(crop_top / frame_height, result.diagnostics["geometry_top_ratio"], places=4)
+
     def test_marginal_beskar_match_stays_unknown(self):
         index = synthetic_index()
         histograms = np.zeros_like(index.family_histograms)
         words = np.zeros_like(index.family_words)
         words[0, 0] = 0.985
         words[4, 0] = 1.0
+        recognizer = TemplateCardRecognizer(
+            replace(index, family_histograms=histograms, family_words=words)
+        )
+        query_histogram = np.zeros(histograms.shape[1], dtype=np.float32)
+        query_word = np.zeros(words.shape[1], dtype=np.float32)
+        query_word[0] = 1.0
+
+        with (
+            patch(
+                "droid_alerts.belt.template_recognition.classify_card_family_border",
+                return_value=("", 0.0),
+            ),
+            patch(
+                "droid_alerts.belt.template_recognition.family_features",
+                return_value=(query_histogram, query_word),
+            ),
+        ):
+            family, confidence = recognizer._classify_family(
+                card(1),
+                (ART_X, 168, 120, 28),
+                (0, 0, CARD_WIDTH, HEIGHT),
+            )
+
+        self.assertEqual("", family)
+        self.assertEqual(0.0, confidence)
+
+    def test_distinctive_border_can_override_wrong_default_template(self):
+        recognizer = TemplateCardRecognizer(synthetic_index())
+        with (
+            patch(
+                "droid_alerts.belt.template_recognition.classify_card_family_border",
+                return_value=("Rainbow", 0.80),
+            ),
+            patch(
+                "droid_alerts.belt.template_recognition.family_features",
+                side_effect=AssertionError("distinctive border should be authoritative"),
+            ),
+        ):
+            family, confidence = recognizer._classify_family(
+                card(1),
+                (ART_X, 168, 120, 28),
+                (0, 0, CARD_WIDTH, HEIGHT),
+            )
+
+        self.assertEqual("Rainbow", family)
+        self.assertGreaterEqual(confidence, 0.90)
+
+    def test_marginal_default_family_stays_unknown(self):
+        index = synthetic_index()
+        histograms = np.zeros_like(index.family_histograms)
+        words = np.zeros_like(index.family_words)
+        words[0, 0] = 1.0
+        words[1, 0] = 0.96
         recognizer = TemplateCardRecognizer(
             replace(index, family_histograms=histograms, family_words=words)
         )

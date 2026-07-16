@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -80,6 +81,9 @@ def card_candidate(
         family_confidence=0.96,
         rarity=droid_class(name),
         rarity_confidence=1.0,
+        raw_best_similarity=0.94,
+        runner_up_identity="R4" if name != "R4" else "R5",
+        identity_margin=0.08,
     )
 
 
@@ -127,8 +131,8 @@ class BeltTemplateSampleCollectorTests(unittest.TestCase):
             updates = collector.process_events((track_event("exited", 7),))
 
             self.assertEqual(["saved"], [update.action for update in updates])
-            images = list((Path(directory) / "confirmed" / "mouse").glob("*.png"))
-            metadata_files = list((Path(directory) / "confirmed" / "mouse").glob("*.json"))
+            images = list((Path(directory) / "detections" / "mouse").glob("*.png"))
+            metadata_files = list((Path(directory) / "detections" / "mouse").glob("*.json"))
             self.assertEqual(1, len(images))
             self.assertEqual(1, len(metadata_files))
             metadata = json.loads(metadata_files[0].read_text(encoding="utf-8"))
@@ -137,6 +141,9 @@ class BeltTemplateSampleCollectorTests(unittest.TestCase):
             self.assertEqual({"MOUSE": 3}, metadata["observed_names"])
             self.assertEqual("Gold", metadata["family"])
             self.assertEqual("Common", metadata["rarity"])
+            self.assertEqual(0.94, metadata["raw_best_similarity"])
+            self.assertEqual("R4", metadata["runner_up_identity"])
+            self.assertEqual(0.08, metadata["identity_margin"])
             self.assertEqual(1, collector.total_samples)
 
     def test_cap_and_duplicate_index_persist_across_restarts(self):
@@ -150,7 +157,7 @@ class BeltTemplateSampleCollectorTests(unittest.TestCase):
             collect_appearance(collector, track_id=2, pattern=1)
             collect_appearance(collector, track_id=3, pattern=3)
 
-            folder = Path(directory) / "confirmed" / "mouse"
+            folder = Path(directory) / "detections" / "mouse"
             self.assertEqual(2, len(list(folder.glob("*.png"))))
             self.assertEqual(2, collector.total_samples)
 
@@ -182,7 +189,7 @@ class BeltTemplateSampleCollectorTests(unittest.TestCase):
             collector.process_events((track_event("entered", 9, "MOUSE"),))
             updates = collector.process_events((track_event("exited", 9, "MOUSE"),))
 
-            self.assertEqual([], list((Path(directory) / "confirmed").glob("*/*.png")))
+            self.assertEqual([], list((Path(directory) / "detections").glob("*/*.png")))
             self.assertEqual(["reviewed"], [update.action for update in updates])
             review_metadata = next((Path(directory) / "review").glob("*.json"))
             metadata = json.loads(review_metadata.read_text(encoding="utf-8"))
@@ -192,24 +199,52 @@ class BeltTemplateSampleCollectorTests(unittest.TestCase):
             self.assertEqual("MOUSE", metadata["name"])
             self.assertEqual("MOUSE", metadata["detected_name"])
 
-    def test_edge_clipped_cards_are_not_saved_as_templates(self):
-        with tempfile.TemporaryDirectory() as directory:
-            collector = BeltTemplateSampleCollector(directory)
-            for read in range(3):
-                frame = np.full((280, 900, 3), 25, dtype=np.uint8)
-                candidate = card_candidate(frame, x=10, pattern=2)
-                collector.observe(
-                    frame,
-                    (candidate,),
-                    {0: 3},
-                    now=float(read),
-                    frame_number=read,
-                )
-            collector.process_events((track_event("entered", 3),))
-            updates = collector.process_events((track_event("exited", 3),))
+    def test_cards_touching_any_frame_edge_are_not_saved(self):
+        edge_positions = {
+            "left": (10, 190),
+            "right": (890, 190),
+            "top": (390, 100),
+            "bottom": (390, 250),
+        }
+        for edge, (x, y) in edge_positions.items():
+            with self.subTest(edge=edge), tempfile.TemporaryDirectory() as directory:
+                collector = BeltTemplateSampleCollector(directory)
+                for read in range(3):
+                    frame = np.full((280, 900, 3), 25, dtype=np.uint8)
+                    candidate = card_candidate(frame, x=x, pattern=2)
+                    if y != 190:
+                        name_x, _name_y, name_width, name_height = candidate.name_box
+                        context = candidate.context
+                        top = round(y - 5.0 * name_height)
+                        bottom = round(y + 1.6 * name_height)
+                        candidate = replace(
+                            candidate,
+                            name_box=(name_x, y, name_width, name_height),
+                            context=replace(
+                                context,
+                                card_box=(
+                                    context.card_box[0],
+                                    max(0, top),
+                                    context.card_box[2],
+                                    bottom - max(0, top),
+                                ),
+                            ),
+                        )
+                    collector.observe(
+                        frame,
+                        (candidate,),
+                        {0: 3},
+                        now=float(read),
+                        frame_number=read,
+                    )
+                collector.process_events((track_event("entered", 3),))
+                updates = collector.process_events((track_event("exited", 3),))
 
-            self.assertEqual([], updates)
-            self.assertEqual([], list((Path(directory) / "confirmed").glob("*/*.png")))
+                self.assertEqual([], updates)
+                self.assertEqual(
+                    [],
+                    list((Path(directory) / "detections").glob("*/*.png")),
+                )
 
 
 if __name__ == "__main__":

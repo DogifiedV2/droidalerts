@@ -17,8 +17,10 @@ from ..config import data_dir
 from ..logging_io import timestamp
 
 
-DEV_FRAME_INTERVAL_SECONDS = 15.0
-MAX_DEV_FRAMES = 8
+DEV_FRAME_INTERVAL_SECONDS = 1.0
+DEV_EVIDENCE_INTERVAL_SECONDS = 3.0
+DEV_JPEG_QUALITY = 88
+MAX_DEV_SESSION_BYTES = 200 * 1024 * 1024
 
 
 def belt_dev_dir() -> Path:
@@ -56,7 +58,9 @@ class BeltDevLogger:
         self.session_dir: Path | None = None
         self.log_path: Path | None = None
         self._last_frame_at = float("-inf")
-        self._saved_frames = 0
+        self._last_reason_at: dict[str, float] = {}
+        self._written_bytes = 0
+        self.last_saved_reason = ""
         if not self.enabled:
             return
         self.session_dir = belt_dev_dir() / f"session_{timestamp()}_{os.getpid()}"
@@ -77,23 +81,51 @@ class BeltDevLogger:
         except OSError:
             return
 
-    def save_frame(self, frame_bgr: np.ndarray, *, frame_number: int, now: float) -> str:
-        if (
-            self.session_dir is None
-            or self._saved_frames >= MAX_DEV_FRAMES
-            or now - self._last_frame_at < DEV_FRAME_INTERVAL_SECONDS
-        ):
+    def save_frame(
+        self,
+        frame_bgr: np.ndarray,
+        *,
+        frame_number: int,
+        now: float,
+        reason: str = "periodic",
+        force: bool = False,
+        lossless: bool = False,
+    ) -> str:
+        """Save bounded all-session evidence and return its local file name.
+
+        Periodic JPEGs make genuine misses visible. High-value events may
+        bypass the periodic interval, with a short per-reason cooldown to stop
+        a long ambiguous passage from filling the session by itself.
+        """
+
+        self.last_saved_reason = ""
+        if self.session_dir is None or self._written_bytes >= MAX_DEV_SESSION_BYTES:
             return ""
+        reason = _safe_reason(reason)
+        reason_last_at = self._last_reason_at.get(reason, float("-inf"))
+        force_allowed = force and now - reason_last_at >= DEV_EVIDENCE_INTERVAL_SECONDS
+        periodic_due = now - self._last_frame_at >= DEV_FRAME_INTERVAL_SECONDS
+        if not force_allowed and not periodic_due:
+            return ""
+        actual_reason = reason if force_allowed else "periodic"
+        actual_lossless = bool(lossless and force_allowed)
         try:
-            success, encoded = cv2.imencode(".png", frame_bgr)
+            suffix = ".png" if actual_lossless else ".jpg"
+            parameters = () if actual_lossless else (cv2.IMWRITE_JPEG_QUALITY, DEV_JPEG_QUALITY)
+            success, encoded = cv2.imencode(suffix, frame_bgr, parameters)
             if not success:
                 return ""
-            path = self.session_dir / f"frame_{frame_number:06d}.png"
-            path.write_bytes(encoded.tobytes())
+            payload = encoded.tobytes()
+            if self._written_bytes + len(payload) > MAX_DEV_SESSION_BYTES:
+                return ""
+            path = self.session_dir / f"frame_{frame_number:06d}_{actual_reason}{suffix}"
+            path.write_bytes(payload)
         except (OSError, cv2.error):
             return ""
         self._last_frame_at = now
-        self._saved_frames += 1
+        self._last_reason_at[actual_reason] = now
+        self._written_bytes += len(payload)
+        self.last_saved_reason = actual_reason
         return path.name
 
     def relative_path(self) -> str:
@@ -113,3 +145,11 @@ def _json_default(value: Any):
     if isinstance(value, tuple):
         return list(value)
     return str(value)
+
+
+def _safe_reason(value: object) -> str:
+    cleaned = "".join(
+        character if character.isalnum() or character in {"-", "_"} else "_"
+        for character in str(value or "periodic").strip().lower()
+    ).strip("_")
+    return cleaned[:32] or "periodic"

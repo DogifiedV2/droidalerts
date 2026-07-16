@@ -264,7 +264,15 @@ class TrackingTests(unittest.TestCase):
         tracker = BeltTracker()
         for index in range(4):
             tracker.update(
-                [observation("GONK", 100, raw_text="template:GONK")],
+                [
+                    observation(
+                        "GONK",
+                        100,
+                        family="Default",
+                        rarity="Common",
+                        raw_text="template:GONK",
+                    )
+                ],
                 index / 8,
                 400,
             )
@@ -272,7 +280,15 @@ class TrackingTests(unittest.TestCase):
         entered = []
         for index in range(8):
             update = tracker.update(
-                [observation("R6", 100, raw_text="template:R6")],
+                [
+                    observation(
+                        "R6",
+                        100,
+                        family="Default",
+                        rarity="Epic",
+                        raw_text="template:R6",
+                    )
+                ],
                 0.5 + index / 8,
                 400,
             )
@@ -283,6 +299,101 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual(["R6"], entered)
         self.assertIn("GONK", [track.name for track in tracker._tracks])
         self.assertIn("R6", [track.name for track in tracker._tracks])
+
+    def test_template_identity_requires_consecutive_consistent_reads(self):
+        tracker = BeltTracker()
+        names = ("R3", "R3", "R9", "R3", "R3", "R3")
+        for index, name in enumerate(names):
+            result = tracker.update(
+                [
+                    observation(
+                        name,
+                        100 + index * 10,
+                        family="Default",
+                        rarity="Common" if name == "R3" else "Rare",
+                        raw_text=f"template:{name}",
+                    )
+                ],
+                index * 0.1,
+                500,
+            )
+
+        self.assertEqual([], result.events)
+        entered = tracker.update(
+            [
+                observation(
+                    "R3",
+                    160,
+                    family="Default",
+                    rarity="Common",
+                    raw_text="template:R3",
+                )
+            ],
+            0.6,
+            500,
+        )
+        self.assertEqual(["R3"], [event.track.name for event in entered.events])
+
+    def test_template_entry_does_not_wait_for_uncertain_attributes(self):
+        tracker = BeltTracker()
+        for index in range(4):
+            confirmed = tracker.update(
+                [observation("R2", 100, raw_text="template:R2")],
+                index * 0.1,
+                500,
+            )
+
+        self.assertTrue(tracker._tracks[0].confirmed)
+        self.assertEqual(["entered"], [event.kind for event in confirmed.events])
+        self.assertEqual("", confirmed.events[0].track.family)
+        self.assertEqual("", confirmed.events[0].track.rarity)
+        for index in range(2):
+            waiting = tracker.update(
+                [
+                    observation(
+                        "R2",
+                        100,
+                        family="Diamond",
+                        rarity="Epic",
+                        raw_text="template:R2",
+                    )
+                ],
+                0.4 + index * 0.1,
+                500,
+            )
+            self.assertEqual([], waiting.events)
+
+        updated = tracker.update(
+            [
+                observation(
+                    "R2",
+                    100,
+                    family="Diamond",
+                    rarity="Epic",
+                    raw_text="template:R2",
+                )
+            ],
+            0.6,
+            500,
+        )
+        self.assertEqual(["updated"], [event.kind for event in updated.events])
+        self.assertEqual("Diamond", updated.events[0].track.family)
+        self.assertEqual("Epic", updated.events[0].track.rarity)
+
+        stable = tracker.update(
+            [
+                observation(
+                    "R2",
+                    100,
+                    family="Diamond",
+                    rarity="Epic",
+                    raw_text="template:R2",
+                )
+            ],
+            0.7,
+            500,
+        )
+        self.assertEqual([], stable.events)
 
     def test_conflicting_names_cannot_keep_an_entered_identity_alive(self):
         tracker = BeltTracker(

@@ -14,12 +14,10 @@ import numpy as np
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from droid_alerts.belt.ocr import TextObservation
+from droid_alerts.belt.matching import NameMatch
+from droid_alerts.belt.ocr import DroidObservation
 from droid_alerts.belt.watcher import (
-    OCR_INTERVAL_SECONDS,
-    adaptive_ocr_interval,
     adaptive_template_interval,
-    adaptive_track_timeout,
     run_belt_watcher,
 )
 from droid_alerts.belt.worker import run_belt_worker_process
@@ -54,6 +52,17 @@ class CountingCapture:
         self.closed = True
 
 
+class ClosedCapture:
+    def __init__(self):
+        self.closed = False
+
+    def grab(self, _box):
+        raise RuntimeError("The selected window was closed.")
+
+    def close(self):
+        self.closed = True
+
+
 class LoopLimitedStopEvent:
     def __init__(self, loops):
         self.loops = loops
@@ -67,14 +76,16 @@ class LoopLimitedStopEvent:
         return self.is_set()
 
 
-class StaticOcr:
-    def __init__(self, observations):
-        self.observations = observations
-        self.frame_shapes = []
-
-    def read(self, frame):
-        self.frame_shapes.append(frame.shape)
-        return list(self.observations)
+def template_result(*, observations=(), candidates=(), card_window_count=0):
+    return SimpleNamespace(
+        observations=list(observations),
+        candidates=tuple(candidates),
+        text_observations=(),
+        diagnostics={
+            "detector": "templates",
+            "card_window_count": card_window_count,
+        },
+    )
 
 
 class RecordingQueue:
@@ -110,6 +121,31 @@ class WorkerProcessEntryTests(unittest.TestCase):
         self.assertTrue(received["collect_template_samples"])
         self.assertEqual({"R2": "Gold"}, received["target_tiers"])
 
+    def test_process_entry_forwards_dashboard_window_selection(self):
+        status_queue = RecordingQueue()
+        received = {}
+
+        def fake_watcher(*_args, **kwargs):
+            received.update(kwargs)
+
+        with patch("droid_alerts.belt.worker.run_belt_watcher", side_effect=fake_watcher):
+            run_belt_worker_process(
+                1,
+                PixelBox(0, 0, 900, 520),
+                {},
+                threading.Event(),
+                status_queue,
+                capture_source="window",
+                window_title="Fortnite",
+                window_process="Fortnite.exe",
+                window_class="UnrealWindow",
+            )
+
+        self.assertEqual("window", received["capture_source"])
+        self.assertEqual("Fortnite", received["window_title"])
+        self.assertEqual("Fortnite.exe", received["window_process"])
+        self.assertEqual("UnrealWindow", received["window_class"])
+
     def test_process_entry_reports_uncaught_failure(self):
         status_queue = RecordingQueue()
         with patch(
@@ -136,6 +172,23 @@ class EnteringTracker:
         track = SimpleNamespace(id=1, name="R2", family=self.family, confidence=0.93)
         return SimpleNamespace(
             events=[SimpleNamespace(kind="entered", track=track)],
+            tracks=[],
+        )
+
+    def predict(self, _now, _frame_width):
+        return SimpleNamespace(events=[], tracks=[])
+
+
+class DelayedFamilyTracker:
+    def update(self, _observations, _now, _frame_width):
+        unknown = SimpleNamespace(id=1, name="R2", family="", confidence=0.93)
+        gold = SimpleNamespace(id=1, name="R2", family="Gold", confidence=0.93)
+        return SimpleNamespace(
+            events=[
+                SimpleNamespace(kind="entered", track=unknown),
+                SimpleNamespace(kind="updated", track=gold),
+                SimpleNamespace(kind="updated", track=gold),
+            ],
             tracks=[],
         )
 
@@ -180,50 +233,51 @@ def card_frame():
 
 
 class WatcherTests(unittest.TestCase):
-    def test_empty_candidate_scans_back_off_without_becoming_unresponsive(self):
-        self.assertEqual(OCR_INTERVAL_SECONDS, adaptive_ocr_interval(0))
-        self.assertEqual(OCR_INTERVAL_SECONDS, adaptive_ocr_interval(2))
-        self.assertEqual(0.5, adaptive_ocr_interval(3))
-        self.assertEqual(1.0, adaptive_ocr_interval(4))
-        self.assertEqual(1.0, adaptive_ocr_interval(100))
-
     def test_empty_template_scans_back_off_to_four_fps(self):
         self.assertAlmostEqual(1.0 / 8.0, adaptive_template_interval(0))
         self.assertAlmostEqual(1.0 / 8.0, adaptive_template_interval(11))
         self.assertEqual(0.25, adaptive_template_interval(12))
         self.assertEqual(0.25, adaptive_template_interval(100))
 
-    def test_track_timeout_expands_for_slow_ocr_and_is_capped(self):
-        self.assertEqual(3.5, adaptive_track_timeout(0.5))
-        self.assertEqual(13.0, adaptive_track_timeout(5.0))
-        self.assertEqual(60.0, adaptive_track_timeout(999.0))
-
     def test_overlay_prediction_loops_do_not_capture_unused_frames(self):
         frame, _ = card_frame()
         stop_event = LoopLimitedStopEvent(5)
         capture = CountingCapture(frame)
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = template_result()
 
-        with patch("droid_alerts.belt.watcher.create_capture", return_value=capture):
+        with (
+            patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
+            patch(
+                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                return_value=recognizer,
+            ),
+        ):
             run_belt_watcher(
                 1,
                 PixelBox(0, 0, frame.shape[1], frame.shape[0]),
                 stop_event=stop_event,
-                ocr_engine=StaticOcr([]),
             )
 
         self.assertEqual(1, capture.grabs)
         self.assertTrue(capture.closed)
 
-    def test_ocr_result_is_predicted_forward_to_completion_time(self):
+    def test_template_result_is_predicted_forward_to_completion_time(self):
         frame, _ = card_frame()
         stop_event = threading.Event()
         capture = OneFrameCapture(frame, stop_event)
         tracker = LatencyRecordingTracker()
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = template_result()
         events = []
 
         with (
             patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
             patch("droid_alerts.belt.watcher.BeltTracker", return_value=tracker),
+            patch(
+                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                return_value=recognizer,
+            ),
             patch(
                 "droid_alerts.belt.watcher.time.monotonic",
                 side_effect=(10.0, 10.1, 10.9, 11.0),
@@ -234,45 +288,101 @@ class WatcherTests(unittest.TestCase):
                 PixelBox(0, 0, frame.shape[1], frame.shape[0]),
                 stop_event=stop_event,
                 status_callback=events.append,
-                ocr_engine=StaticOcr([]),
             )
 
         self.assertEqual(10.1, tracker.update_now)
         self.assertEqual(10.9, tracker.predict_now)
         scan = next(event for event in events if event["type"] == "scan")
-        self.assertAlmostEqual(0.8, scan["ocr_seconds"])
-        self.assertAlmostEqual(1.25, scan["ocr_fps"])
+        self.assertAlmostEqual(0.8, scan["scan_seconds"])
+        self.assertAlmostEqual(1.25, scan["scan_throughput_fps"])
         self.assertEqual(3.5, scan["track_timeout_seconds"])
 
     def test_watcher_uses_independent_mss_and_reports_safe_counts(self):
         frame, name_box = card_frame()
         stop_event = threading.Event()
         capture = OneFrameCapture(frame, stop_event)
-        ocr = StaticOcr(
-            [
-                TextObservation("1.10K", 0.99, (430, 55, 95, 26)),
-                TextObservation("R2", 0.98, name_box),
-            ]
+        observation = DroidObservation(
+            NameMatch("R2", 1.0, "template:R2"),
+            0.98,
+            name_box,
+        )
+        candidate = SimpleNamespace(accepted=True, canonical_name="R2")
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = template_result(
+            observations=(observation,),
+            candidates=(candidate,),
+            card_window_count=1,
         )
         events = []
 
-        with patch("droid_alerts.belt.watcher.create_capture", return_value=capture) as factory:
+        with (
+            patch("droid_alerts.belt.watcher.create_capture", return_value=capture) as factory,
+            patch(
+                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                return_value=recognizer,
+            ),
+        ):
             run_belt_watcher(
                 2,
                 PixelBox(0, 0, frame.shape[1], frame.shape[0]),
                 stop_event=stop_event,
                 status_callback=events.append,
-                ocr_engine=ocr,
             )
 
         factory.assert_called_once_with(monitor_index=2, prefer_dxcam=False)
         scan = next(event for event in events if event["type"] == "scan")
-        self.assertEqual(frame.shape, ocr.frame_shapes[0])
-        self.assertEqual(2, scan["raw_count"])
+        recognizer.analyze.assert_called_once()
+        self.assertEqual(0, scan["raw_count"])
         self.assertEqual(1, scan["candidate_count"])
         self.assertEqual(1, scan["accepted_count"])
         self.assertTrue(capture.closed)
         self.assertEqual("stopped", events[-1]["type"])
+
+    def test_window_capture_reconnects_after_fortnite_restarts(self):
+        frame, _ = card_frame()
+        stop_event = threading.Event()
+        closed_capture = ClosedCapture()
+        replacement = OneFrameCapture(frame, stop_event)
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = template_result()
+        events = []
+
+        with (
+            patch(
+                "droid_alerts.belt.watcher.create_capture",
+                side_effect=(closed_capture, replacement),
+            ) as factory,
+            patch(
+                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                return_value=recognizer,
+            ),
+        ):
+            run_belt_watcher(
+                1,
+                PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                stop_event=stop_event,
+                status_callback=events.append,
+                capture_source="window",
+                window_title="Fortnite",
+                window_process="Fortnite.exe",
+                window_class="UnrealWindow",
+            )
+
+        expected_call = {
+            "monitor_index": 1,
+            "prefer_dxcam": False,
+            "capture_source": "window",
+            "window_title": "Fortnite",
+            "window_process": "Fortnite.exe",
+            "window_class": "UnrealWindow",
+        }
+        self.assertEqual(2, factory.call_count)
+        self.assertEqual(expected_call, factory.call_args_list[0].kwargs)
+        self.assertEqual(expected_call, factory.call_args_list[1].kwargs)
+        self.assertTrue(closed_capture.closed)
+        self.assertTrue(replacement.closed)
+        self.assertIn("capture_error", [event["type"] for event in events])
+        self.assertIn("capture_reconnected", [event["type"] for event in events])
 
     def test_normal_watcher_uses_templates_without_starting_ocr(self):
         frame, _ = card_frame()
@@ -324,9 +434,25 @@ class WatcherTests(unittest.TestCase):
         collector.process_events.return_value = []
         collector.expire.return_value = []
         collector.close.return_value = []
+        observation = DroidObservation(
+            NameMatch("R2", 1.0, "template:R2"),
+            0.99,
+            name_box,
+        )
+        candidate = SimpleNamespace(accepted=True, canonical_name="R2")
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = template_result(
+            observations=(observation,),
+            candidates=(candidate,),
+            card_window_count=1,
+        )
 
         with (
             patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
+            patch(
+                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                return_value=recognizer,
+            ),
             patch(
                 "droid_alerts.belt.watcher.BeltTemplateSampleCollector",
                 return_value=collector,
@@ -336,7 +462,6 @@ class WatcherTests(unittest.TestCase):
                 1,
                 PixelBox(0, 0, frame.shape[1], frame.shape[0]),
                 stop_event=stop_event,
-                ocr_engine=StaticOcr([TextObservation("R2", 0.99, name_box)]),
                 collect_template_samples=True,
             )
 
@@ -394,7 +519,7 @@ class WatcherTests(unittest.TestCase):
 
         cases = (
             ({}, "Default", False),
-            ({"R2": "Default"}, "", True),
+            ({"R2": "Default"}, "", False),
             ({"R2": "Gold"}, "Default", False),
             ({"R2": "Gold"}, "Gold", True),
             ({"R2": "Diamond"}, "Rainbow", True),
@@ -404,9 +529,14 @@ class WatcherTests(unittest.TestCase):
         for targets, detected_family, expected_alerted in cases:
             stop_event = threading.Event()
             capture = OneFrameCapture(frame, stop_event)
-            ocr = StaticOcr([])
+            recognizer = MagicMock()
+            recognizer.analyze.return_value = template_result()
             with (
                 patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
+                patch(
+                    "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                    return_value=recognizer,
+                ),
                 patch(
                     "droid_alerts.belt.watcher.BeltTracker",
                     return_value=EnteringTracker(detected_family),
@@ -421,10 +551,47 @@ class WatcherTests(unittest.TestCase):
                     PixelBox(0, 0, frame.shape[1], frame.shape[0]),
                     target_tiers=targets,
                     stop_event=stop_event,
-                    ocr_engine=ocr,
                 )
 
             self.assertEqual(expected_alerted, log_event.call_args.kwargs["alerted"])
+
+    def test_delayed_family_can_alert_once_without_duplicate_sighting(self):
+        frame, _ = card_frame()
+        stop_event = threading.Event()
+        capture = OneFrameCapture(frame, stop_event)
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = template_result()
+
+        with (
+            patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
+            patch(
+                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                return_value=recognizer,
+            ),
+            patch(
+                "droid_alerts.belt.watcher.BeltTracker",
+                return_value=DelayedFamilyTracker(),
+            ),
+            patch(
+                "droid_alerts.belt.watcher.log_track_event",
+                side_effect=lambda event, *, alerted: {
+                    "event": event.kind,
+                    "droid": "R2",
+                    "alerted": alerted,
+                },
+            ) as log_event,
+        ):
+            run_belt_watcher(
+                1,
+                PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                target_tiers={"R2": "Gold"},
+                stop_event=stop_event,
+            )
+
+        self.assertEqual(
+            [False, True, False],
+            [call.kwargs["alerted"] for call in log_event.call_args_list],
+        )
 
 
 if __name__ == "__main__":

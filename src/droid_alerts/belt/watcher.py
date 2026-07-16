@@ -54,6 +54,10 @@ def run_belt_watcher(
     target_tiers: Mapping[str, str] | None = None,
     stop_event: threading.Event,
     status_callback: StatusCallback | None = None,
+    capture_source: str = "monitor",
+    window_title: str = "",
+    window_process: str = "",
+    window_class: str = "",
     dev_mode: bool = False,
     collect_template_samples: bool = False,
     idle_scan_fps: int = DEFAULT_IDLE_SCAN_FPS,
@@ -75,14 +79,42 @@ def run_belt_watcher(
         active_scan_fps,
     )
 
-    # DXcam caches one camera per display. The chat watcher may already own it,
-    # so Belt Tracker deliberately uses an independent MSS capture.
+    capture_source = (
+        "window" if str(capture_source).strip().lower() == "window" else "monitor"
+    )
+
+    def open_capture():
+        if capture_source == "monitor":
+            return create_capture(monitor_index=monitor_index, prefer_dxcam=False)
+        return create_capture(
+            monitor_index=monitor_index,
+            prefer_dxcam=False,
+            capture_source=capture_source,
+            window_title=window_title,
+            window_process=window_process,
+            window_class=window_class,
+        )
+
+    # DXcam caches one camera per display. Monitor capture deliberately uses
+    # an independent MSS backend, while a Dashboard window selection routes
+    # both watchers through Windows Graphics Capture.
     capture_started = time.perf_counter()
-    try:
-        capture = create_capture(monitor_index=monitor_index, prefer_dxcam=False)
-    except Exception as exc:
-        dev_logger.log("capture_start_failed", error=str(exc))
-        emit("error", message=f"Screen capture could not start: {exc}")
+    capture = None
+    while capture is None and not stop_event.is_set():
+        try:
+            capture = open_capture()
+        except Exception as exc:
+            dev_logger.log("capture_start_failed", error=str(exc))
+            if capture_source != "window":
+                emit("error", message=f"Screen capture could not start: {exc}")
+                emit("stopped")
+                return
+            emit(
+                "capture_error",
+                message=f"Fortnite is unavailable; retrying automatically: {exc}",
+            )
+            stop_event.wait(1.0)
+    if capture is None:
         emit("stopped")
         return
     capture_init_seconds = time.perf_counter() - capture_started
@@ -158,6 +190,7 @@ def run_belt_watcher(
     previous_scan_completed_at: float | None = None
     empty_candidate_scans = 0
     frame_number = 0
+    alerted_track_ids: set[int] = set()
     emit(
         "ready",
         region=region,
@@ -176,7 +209,30 @@ def run_belt_watcher(
                     frame = capture.grab(region)
                 except Exception as exc:
                     dev_logger.log("capture_error", frame=frame_number, error=str(exc))
-                    emit("error", message=f"Belt screen capture failed: {exc}")
+                    if capture_source == "window":
+                        emit(
+                            "capture_error",
+                            message=f"Fortnite capture was lost; retrying automatically: {exc}",
+                        )
+                        try:
+                            capture.close()
+                        except Exception:
+                            pass
+                        capture = None
+                        while capture is None and not stop_event.is_set():
+                            try:
+                                capture = open_capture()
+                            except Exception as recovery_exc:
+                                dev_logger.log(
+                                    "capture_reconnect_failed",
+                                    frame=frame_number,
+                                    error=str(recovery_exc),
+                                )
+                                stop_event.wait(1.0)
+                        if capture is not None:
+                            emit("capture_reconnected")
+                    else:
+                        emit("error", message=f"Belt screen capture failed: {exc}")
                     update = tracker.predict(loop_started, region.width)
                     next_scan = loop_started + 0.5
                 else:
@@ -239,10 +295,31 @@ def run_belt_watcher(
                         update.tracks = display_update.tracks
                         update.events.extend(display_update.events)
                         if dev_logger.enabled:
+                            evidence_event = next(
+                                (
+                                    event.kind
+                                    for event in update.events
+                                    if event.kind in {"entered", "updated"}
+                                ),
+                                "",
+                            )
+                            ambiguous_frame = bool(
+                                result.diagnostics.get("ambiguous_count", 0)
+                            ) and not observations
+                            frame_reason = (
+                                evidence_event
+                                if evidence_event
+                                else "ambiguous"
+                                if ambiguous_frame
+                                else "periodic"
+                            )
                             frame_file = dev_logger.save_frame(
                                 frame,
                                 frame_number=frame_number,
                                 now=completed_at,
+                                reason=frame_reason,
+                                force=bool(evidence_event) or ambiguous_frame,
+                                lossless=bool(evidence_event),
                             )
                             dev_logger.log(
                                 "scan",
@@ -278,6 +355,9 @@ def run_belt_watcher(
                                 recognizer=result.diagnostics,
                                 tracker=tracker.diagnostic_state(),
                                 saved_frame=frame_file,
+                                saved_frame_reason=(
+                                    dev_logger.last_saved_reason if frame_file else ""
+                                ),
                             )
                         previous_scan_completed_at = completed_at
                         if completed_at - last_scan_status >= 1.0:
@@ -321,11 +401,18 @@ def run_belt_watcher(
                     )
 
             for event in update.events:
-                alerted = event.kind == "entered" and is_belt_alert_target(
-                    alert_targets,
-                    event.track.name,
-                    getattr(event.track, "family", ""),
+                track_id = int(event.track.id)
+                alerted = (
+                    event.kind in {"entered", "updated"}
+                    and track_id not in alerted_track_ids
+                    and is_belt_alert_target(
+                        alert_targets,
+                        event.track.name,
+                        getattr(event.track, "family", ""),
+                    )
                 )
+                if alerted:
+                    alerted_track_ids.add(track_id)
                 record = log_track_event(event, alerted=alerted)
                 attributes = " ".join(
                     value
@@ -372,7 +459,8 @@ def run_belt_watcher(
                     **sample_collector.status(collection_update),
                 )
             emit("sample_collection", **sample_collector.status())
-        capture.close()
+        if capture is not None:
+            capture.close()
         dev_logger.log("session_stop", frame=frame_number)
         emit("stopped")
 
@@ -383,6 +471,9 @@ def _candidate_diagnostics(candidate) -> dict[str, object]:
         "name": candidate.canonical_name,
         "raw_text": candidate.raw_text,
         "identity_confidence": candidate.ocr_confidence,
+        "raw_best_similarity": candidate.raw_best_similarity,
+        "runner_up_identity": candidate.runner_up_identity,
+        "identity_margin": candidate.identity_margin,
         "name_box": list(candidate.name_box),
         "accepted": candidate.accepted,
         "reason": candidate.reason,

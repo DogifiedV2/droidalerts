@@ -31,15 +31,68 @@ class BeltDevLoggerTests(unittest.TestCase):
                 logger.log("scan", ocr_seconds=5.0)
                 frame = np.zeros((20, 30, 3), dtype=np.uint8)
                 first = logger.save_frame(frame, frame_number=1, now=10.0)
-                second = logger.save_frame(frame, frame_number=2, now=11.0)
+                second = logger.save_frame(frame, frame_number=2, now=10.5)
 
-                self.assertEqual("frame_000001.png", first)
+                self.assertEqual("frame_000001_periodic.jpg", first)
                 self.assertEqual("", second)
                 self.assertTrue((logger.session_dir / first).exists())
                 record = json.loads(logger.log_path.read_text(encoding="utf-8"))
                 self.assertEqual("scan", record["event"])
                 self.assertEqual(5.0, record["ocr_seconds"])
                 self.assertTrue(logger.relative_path().startswith("belt_dev/session_"))
+
+    def test_event_evidence_bypasses_periodic_interval_and_uses_png(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with (
+                patch("droid_alerts.belt.dev_logging.belt_dev_dir", return_value=root / "belt_dev"),
+                patch("droid_alerts.belt.dev_logging.data_dir", return_value=root),
+            ):
+                logger = BeltDevLogger(True)
+                frame = np.zeros((20, 30, 3), dtype=np.uint8)
+                periodic = logger.save_frame(frame, frame_number=1, now=10.0)
+                entered = logger.save_frame(
+                    frame,
+                    frame_number=2,
+                    now=10.1,
+                    reason="entered",
+                    force=True,
+                    lossless=True,
+                )
+
+                self.assertEqual("frame_000001_periodic.jpg", periodic)
+                self.assertEqual("frame_000002_entered.png", entered)
+                self.assertEqual("entered", logger.last_saved_reason)
+
+    def test_periodic_capture_continues_beyond_old_eight_frame_limit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with (
+                patch("droid_alerts.belt.dev_logging.belt_dev_dir", return_value=root / "belt_dev"),
+                patch("droid_alerts.belt.dev_logging.data_dir", return_value=root),
+            ):
+                logger = BeltDevLogger(True)
+                frame = np.zeros((20, 30, 3), dtype=np.uint8)
+                saved = [
+                    logger.save_frame(frame, frame_number=index, now=float(index))
+                    for index in range(1, 13)
+                ]
+
+                self.assertEqual(12, len([name for name in saved if name]))
+
+    def test_session_byte_cap_stops_additional_frames(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with (
+                patch("droid_alerts.belt.dev_logging.belt_dev_dir", return_value=root / "belt_dev"),
+                patch("droid_alerts.belt.dev_logging.data_dir", return_value=root),
+                patch("droid_alerts.belt.dev_logging.MAX_DEV_SESSION_BYTES", 1),
+            ):
+                logger = BeltDevLogger(True)
+                frame = np.zeros((20, 30, 3), dtype=np.uint8)
+
+                self.assertEqual("", logger.save_frame(frame, frame_number=1, now=1.0))
+                self.assertEqual([], list(logger.session_dir.glob("frame_*")))
 
     def test_disabled_logger_creates_nothing(self):
         with tempfile.TemporaryDirectory() as folder:

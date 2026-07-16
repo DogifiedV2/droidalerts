@@ -6,7 +6,7 @@ import sys
 import tkinter as tk
 
 from ..capture import MonitorDescriptor, MonitorInfo, PixelBox, format_tk_geometry
-from .macos_overlay import configure_macos_overlay, refresh_macos_overlay
+from .macos_overlay import MacOSOverlayController
 
 
 MAX_VISIBLE_LABELS = 16
@@ -42,6 +42,7 @@ def _configure_windows_overlay(window: tk.Misc) -> None:
 class BeltOverlay:
     def __init__(self, root: tk.Misc) -> None:
         self.root = root
+        self._macos = MacOSOverlayController() if sys.platform == "darwin" else None
         self._border: list[tk.Toplevel] = []
         self._labels: list[tuple[tk.Toplevel, tk.Label]] = []
         self._region: PixelBox | None = None
@@ -52,6 +53,14 @@ class BeltOverlay:
     def configure(self, monitor: MonitorDescriptor | MonitorInfo, region: PixelBox) -> None:
         self.close()
         self._monitor, self._region = monitor, region
+        if self._macos is not None:
+            try:
+                self._macos.configure(monitor, region)
+            except Exception:
+                self._monitor = None
+                self._region = None
+                raise
+            return
         color, thickness = "#00e5ff", 3
         left, top = monitor.left + region.left, monitor.top + region.top
         for x, y, width, height in (
@@ -85,6 +94,9 @@ class BeltOverlay:
 
     def update_tracks(self, tracks: list[dict[str, object]]) -> None:
         if self._monitor is None or self._region is None:
+            return
+        if self._macos is not None:
+            self._macos.update_tracks(tracks)
             return
         ordered = sorted(tracks, key=lambda track: int(tuple(track["box"])[0]))
         hidden_x = self._monitor.left + self._region.left
@@ -132,7 +144,6 @@ class BeltOverlay:
         for window in windows:
             try:
                 window.attributes("-topmost", True)
-                refresh_macos_overlay(getattr(window, "_belt_native_window", None))
             except tk.TclError:
                 pass
         if windows:
@@ -145,10 +156,11 @@ class BeltOverlay:
         window.attributes("-topmost", True)
         window.configure(bg=background)
         _configure_windows_overlay(window)
-        window._belt_native_window = configure_macos_overlay(window)
         return window
 
     def close(self) -> None:
+        if self._macos is not None:
+            self._macos.close()
         if self._topmost_after_id is not None:
             try:
                 self.root.after_cancel(self._topmost_after_id)

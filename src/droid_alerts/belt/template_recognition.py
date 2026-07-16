@@ -45,7 +45,10 @@ _FAMILY_WORD_HOG = cv2.HOGDescriptor(
 
 _FAMILY_ORDER = ("Default", "Gold", "Diamond", "Rainbow", "Beskar")
 _FAMILY_MINIMUM_MARGINS = {
-    "Default": 0.020,
+    # Default is the most dangerous fallback: Gold/Beskar captures from the
+    # audited bad-connection run repeatedly landed only 0.02-0.04 ahead of it.
+    # Abstain instead of publishing a confident but wrong Default family.
+    "Default": 0.050,
     "Gold": 0.005,
     "Diamond": 0.030,
     "Rainbow": 0.015,
@@ -55,12 +58,20 @@ _FAMILY_MINIMUM_MARGINS = {
     "Beskar": 0.020,
 }
 
-# Belt regions are often selected with the card row filling the full height,
-# but some users include the price labels above it. Probe a small set of
-# bottom-anchored heights once, then keep the winning geometry for normal
-# single-pass scans. The lower bound still retains the whole printed
-# nameplate in the price-inclusive layout used by the game.
-_GEOMETRY_HEIGHT_RATIOS = (1.0, 0.92, 0.84, 0.76, 0.72)
+_DISTINCTIVE_BORDER_MIN_CONFIDENCE = 0.68
+_IDENTITY_MINIMUM_MARGINS = {
+    # Several real R3 appearances were emitted as R9 at 0.034-0.062 margin.
+    # Keep this pair stricter than the global floor; missing one is safer than
+    # changing both its identity and its fixed Common/Rare class.
+    "R3": 0.070,
+    "R9": 0.070,
+}
+
+# Belt regions can include price labels above the cards and conveyor scenery
+# below them. Probe a small set of heights at top, center, and bottom anchors,
+# then keep the winning geometry for normal single-pass scans.
+_GEOMETRY_HEIGHT_RATIOS = (1.0, 0.84, 0.76, 0.72, 0.65, 0.58)
+_GEOMETRY_VERTICAL_ANCHORS = (0.0, 0.25, 0.45, 0.5, 0.75, 1.0)
 _GEOMETRY_RETRY_MISSES = 8
 
 
@@ -230,8 +241,15 @@ class BeltTemplateIndex:
 @dataclass(frozen=True)
 class TemplateRecognitionConfig:
     minimum_identity_similarity: float = 0.80
-    minimum_identity_margin: float = 0.025
+    # The retained stress captures contain repeatable 2BB/BB, DRK-1/VECT-ARM,
+    # R3/R9, and PIT/ID10 confusions below this separation. It is safer to
+    # wait for a clearer frame than publish a plausible but wrong identity.
+    minimum_identity_margin: float = 0.060
     minimum_nameplate_dark_fraction: float = 0.33
+    # A real card has a compact black nameplate surrounded by a lighter frame.
+    # Full-width desktop/app panels can have a high dark fraction too, but lack
+    # this side contrast (the audited false Epic measured only about 0.02).
+    minimum_nameplate_side_contrast: float = 0.12
     nameplate_dark_value: int = 45
     nameplate_top_ratio: float = 0.62
     nameplate_bottom_ratio: float = 0.78
@@ -244,6 +262,7 @@ class TemplateRecognitionConfig:
 class _Proposal:
     x: int
     name: str
+    runner_up_name: str
     similarity: float
     margin: float
     dark_fraction: float
@@ -274,7 +293,7 @@ class TemplateCardRecognizer:
         started = time.perf_counter()
         self.index = index or BeltTemplateIndex.load(index_path)
         self.config = config or TemplateRecognitionConfig()
-        self._geometry_height_ratio: float | None = None
+        self._geometry: tuple[float, float] | None = None
         self._geometry_misses = 0
         self.init_seconds = time.perf_counter() - started
 
@@ -292,15 +311,21 @@ class TemplateCardRecognizer:
         if frame_height < 80 or frame_width < 80:
             return self._analyze_aligned(frame_bgr)
 
-        if self._geometry_height_ratio is None:
+        if self._geometry is None:
             return self._search_geometry(frame_bgr, started=started)
 
-        crop, crop_top, actual_ratio = self._geometry_crop(
+        requested_ratio, vertical_anchor = self._geometry
+        crop, crop_top, actual_ratio, actual_top_ratio = self._geometry_crop(
             frame_bgr,
-            self._geometry_height_ratio,
+            requested_ratio,
+            vertical_anchor,
         )
         result = self._analyze_aligned(crop)
-        accepted_count = int(result.diagnostics.get("accepted_count", 0))
+        accepted_count = self._safe_geometry_accepted_count(
+            result,
+            crop_top=crop_top,
+            full_height=frame_height,
+        )
         if accepted_count:
             self._geometry_misses = 0
         else:
@@ -309,13 +334,13 @@ class TemplateCardRecognizer:
                 return self._search_geometry(
                     frame_bgr,
                     started=started,
-                    existing=(actual_ratio, crop_top, result),
                 )
         return self._geometry_result(
             result,
             frame_bgr,
             crop_top=crop_top,
             ratio=actual_ratio,
+            top_ratio=actual_top_ratio,
             searched=False,
             started=started,
         )
@@ -325,68 +350,101 @@ class TemplateCardRecognizer:
         frame_bgr: np.ndarray,
         *,
         started: float,
-        existing: tuple[float, int, CardFrameResult] | None = None,
     ) -> CardFrameResult:
-        attempts: dict[int, tuple[float, int, CardFrameResult]] = {}
-        if existing is not None:
-            ratio, crop_top, result = existing
-            attempts[result.diagnostics.get("frame_shape", [0])[0]] = (
-                ratio,
-                crop_top,
-                result,
-            )
-
+        attempts: dict[
+            tuple[int, int],
+            tuple[float, float, int, float, CardFrameResult],
+        ] = {}
         for requested_ratio in _GEOMETRY_HEIGHT_RATIOS:
-            crop, crop_top, actual_ratio = self._geometry_crop(frame_bgr, requested_ratio)
-            crop_height = crop.shape[0]
-            if crop_height in attempts:
-                continue
-            attempts[crop_height] = (
-                actual_ratio,
-                crop_top,
-                self._analyze_aligned(crop),
-            )
+            for vertical_anchor in _GEOMETRY_VERTICAL_ANCHORS:
+                crop, crop_top, actual_ratio, actual_top_ratio = self._geometry_crop(
+                    frame_bgr,
+                    requested_ratio,
+                    vertical_anchor,
+                )
+                key = crop.shape[0], crop_top
+                if key in attempts:
+                    continue
+                attempts[key] = (
+                    requested_ratio,
+                    vertical_anchor,
+                    crop_top,
+                    actual_top_ratio,
+                    self._analyze_aligned(crop),
+                )
 
         attempt_values = list(attempts.values())
         accepted_attempts = [
             attempt
             for attempt in attempt_values
-            if int(attempt[2].diagnostics.get("accepted_count", 0)) > 0
+            if self._safe_geometry_accepted_count(
+                attempt[4],
+                crop_top=attempt[2],
+                full_height=frame_bgr.shape[0],
+            )
+            > 0
         ]
-        if accepted_attempts:
+        edge_spanning_attempts = [
+            attempt
+            for attempt in attempt_values
+            if attempt[2] == 0
+            and int(attempt[4].diagnostics.get("frame_shape", [0])[0])
+            >= frame_bgr.shape[0]
+            and int(attempt[4].diagnostics.get("accepted_count", 0)) > 0
+        ]
+        if edge_spanning_attempts:
+            # If the unscaled full region already looks like a card, a smaller
+            # internal retry would merely crop a card that touches the capture
+            # boundary and pretend it is complete. Keep the edge-spanning
+            # result so _geometry_result can quarantine it explicitly.
+            selected = max(edge_spanning_attempts, key=self._geometry_score)
+        elif accepted_attempts:
             selected = max(accepted_attempts, key=self._geometry_score)
         else:
             # An empty belt contains no evidence with which to calibrate. Keep
             # the full-height/default geometry until cards enter the region.
-            selected = max(attempt_values, key=lambda attempt: attempt[0])
-
-        ratio, crop_top, result = selected
-        self._geometry_height_ratio = ratio
-        self._geometry_misses = 0
-        summaries = [
-            {
-                "height_ratio": round(attempt_ratio, 4),
-                "accepted_count": int(attempt_result.diagnostics.get("accepted_count", 0)),
-                "candidate_count": len(attempt_result.candidates),
-                "accepted_confidence": round(
-                    sum(
-                        candidate.ocr_confidence
-                        for candidate in attempt_result.candidates
-                        if candidate.accepted
-                    ),
-                    4,
-                ),
-            }
-            for attempt_ratio, _attempt_top, attempt_result in sorted(
+            selected = max(
                 attempt_values,
-                key=lambda attempt: -attempt[0],
+                key=lambda attempt: attempt[4].diagnostics["frame_shape"][0],
             )
-        ]
+
+        requested_ratio, vertical_anchor, crop_top, top_ratio, result = selected
+        actual_ratio = result.diagnostics["frame_shape"][0] / frame_bgr.shape[0]
+        self._geometry = requested_ratio, vertical_anchor
+        self._geometry_misses = 0
+        summaries = []
+        for _requested_ratio, attempt_anchor, attempt_top, attempt_top_ratio, attempt_result in sorted(
+            attempt_values,
+            key=lambda attempt: (-attempt[4].diagnostics["frame_shape"][0], attempt[2]),
+        ):
+            summaries.append(
+                {
+                    "height_ratio": round(
+                        attempt_result.diagnostics["frame_shape"][0] / frame_bgr.shape[0],
+                        4,
+                    ),
+                    "top_ratio": round(attempt_top_ratio, 4),
+                    "vertical_anchor": attempt_anchor,
+                    "accepted_count": int(
+                        attempt_result.diagnostics.get("accepted_count", 0)
+                    ),
+                    "candidate_count": len(attempt_result.candidates),
+                    "accepted_confidence": round(
+                        sum(
+                            candidate.ocr_confidence
+                            for candidate in attempt_result.candidates
+                            if candidate.accepted
+                        ),
+                        4,
+                    ),
+                }
+            )
         return self._geometry_result(
             result,
             frame_bgr,
             crop_top=crop_top,
-            ratio=ratio,
+            ratio=actual_ratio,
+            top_ratio=top_ratio,
             searched=True,
             started=started,
             attempts=summaries,
@@ -396,17 +454,38 @@ class TemplateCardRecognizer:
     def _geometry_crop(
         frame_bgr: np.ndarray,
         ratio: float,
-    ) -> tuple[np.ndarray, int, float]:
+        vertical_anchor: float,
+    ) -> tuple[np.ndarray, int, float, float]:
         frame_height = frame_bgr.shape[0]
         crop_height = min(frame_height, max(80, round(frame_height * ratio)))
-        crop_top = frame_height - crop_height
-        return frame_bgr[crop_top:], crop_top, crop_height / frame_height
+        available = frame_height - crop_height
+        crop_top = round(available * min(1.0, max(0.0, vertical_anchor)))
+        crop_bottom = crop_top + crop_height
+        return (
+            frame_bgr[crop_top:crop_bottom],
+            crop_top,
+            crop_height / frame_height,
+            crop_top / frame_height,
+        )
+
+    @staticmethod
+    def _safe_geometry_accepted_count(
+        result: CardFrameResult,
+        *,
+        crop_top: int,
+        full_height: int,
+    ) -> int:
+        crop_height = int(result.diagnostics.get("frame_shape", [0])[0])
+        if crop_top <= 0 or crop_top + crop_height >= full_height:
+            return 0
+        return sum(candidate.accepted for candidate in result.candidates)
 
     @staticmethod
     def _geometry_score(
-        attempt: tuple[float, int, CardFrameResult],
+        attempt: tuple[float, float, int, float, CardFrameResult],
     ) -> tuple[int, float, int, float]:
-        ratio, _crop_top, result = attempt
+        _requested_ratio, _vertical_anchor, _crop_top, _top_ratio, result = attempt
+        ratio = result.diagnostics["frame_shape"][0]
         accepted = [candidate for candidate in result.candidates if candidate.accepted]
         rejected_count = len(result.candidates) - len(accepted)
         return (
@@ -423,35 +502,58 @@ class TemplateCardRecognizer:
         *,
         crop_top: int,
         ratio: float,
+        top_ratio: float,
         searched: bool,
         started: float,
         attempts: list[dict[str, object]] | None = None,
     ) -> CardFrameResult:
+        crop_height = int(result.diagnostics.get("frame_shape", [full_frame.shape[0]])[0])
         candidates = result.candidates
-        if crop_top:
-            translated: list[CardCandidate] = []
-            for candidate in candidates:
-                context = replace(
-                    candidate.context,
-                    art_box=_offset_box_y(candidate.context.art_box, crop_top),
-                    card_box=_offset_box_y(candidate.context.card_box, crop_top),
+        translated: list[CardCandidate] = []
+        for candidate in candidates:
+            context = replace(
+                candidate.context,
+                art_box=_offset_box_y(candidate.context.art_box, crop_top),
+                card_box=_offset_box_y(candidate.context.card_box, crop_top),
+            )
+            card_x, card_y, card_width, card_height = context.card_box
+            touches_edge = (
+                card_x <= 0
+                or card_y <= 0
+                or card_x + card_width >= full_frame.shape[1]
+                or card_y + card_height >= full_frame.shape[0]
+            )
+            accepted = candidate.accepted and not touches_edge
+            reason = (
+                "card_touches_region_edge"
+                if candidate.accepted and touches_edge
+                else candidate.reason
+            )
+            if touches_edge and context.accepted:
+                context = replace(context, accepted=False, reason="card_touches_region_edge")
+            translated.append(
+                replace(
+                    candidate,
+                    name_box=_offset_box_y(candidate.name_box, crop_top),
+                    context=context,
+                    accepted=accepted,
+                    reason=reason,
                 )
-                translated.append(
-                    replace(
-                        candidate,
-                        name_box=_offset_box_y(candidate.name_box, crop_top),
-                        context=context,
-                    )
-                )
-            candidates = tuple(translated)
+            )
+        candidates = tuple(translated)
 
         diagnostics = dict(result.diagnostics)
+        diagnostics["accepted_count"] = sum(candidate.accepted for candidate in candidates)
+        diagnostics["edge_rejected_count"] = sum(
+            candidate.reason == "card_touches_region_edge" for candidate in candidates
+        )
         diagnostics.update(
             {
                 "frame_shape": list(full_frame.shape),
                 "geometry_crop_top": crop_top,
-                "geometry_crop_height": full_frame.shape[0] - crop_top,
+                "geometry_crop_height": crop_height,
                 "geometry_height_ratio": round(ratio, 4),
+                "geometry_top_ratio": round(top_ratio, 4),
                 "geometry_searched": searched,
                 "total_seconds": time.perf_counter() - started,
             }
@@ -502,9 +604,14 @@ class TemplateCardRecognizer:
                 },
             )
 
-        dark_fractions, fully_visible = self._card_evidence(frame_bgr, x_positions)
+        dark_fractions, side_contrasts, fully_visible = self._card_evidence(
+            frame_bgr,
+            x_positions,
+        )
         evidence_mask = fully_visible & (
             dark_fractions >= self.config.minimum_nameplate_dark_fraction
+        ) & (
+            side_contrasts >= self.config.minimum_nameplate_side_contrast
         )
         evidence_indices = np.flatnonzero(evidence_mask)
         evidence_at = time.perf_counter()
@@ -521,7 +628,8 @@ class TemplateCardRecognizer:
             best_scores = name_scores[np.arange(len(name_scores)), best_name_indices]
             runner_up = name_scores.copy()
             runner_up[np.arange(len(runner_up)), best_name_indices] = -1.0
-            margins = best_scores - np.max(runner_up, axis=1)
+            runner_up_indices = np.argmax(runner_up, axis=1)
+            margins = best_scores - runner_up[np.arange(len(runner_up)), runner_up_indices]
 
             for row, source_index in enumerate(evidence_indices):
                 similarity = float(best_scores[row])
@@ -530,12 +638,19 @@ class TemplateCardRecognizer:
                 reason = "accepted_template"
                 if similarity < self.config.minimum_identity_similarity:
                     accepted, reason = False, "low_template_similarity"
-                elif margin < self.config.minimum_identity_margin:
+                elif margin < max(
+                    self.config.minimum_identity_margin,
+                    _IDENTITY_MINIMUM_MARGINS.get(
+                        self.index.identity_names[int(best_name_indices[row])],
+                        0.0,
+                    ),
+                ):
                     accepted, reason = False, "ambiguous_template_identity"
                 proposals.append(
                     _Proposal(
                         x=int(x_positions[source_index]),
                         name=self.index.identity_names[int(best_name_indices[row])],
+                        runner_up_name=self.index.identity_names[int(runner_up_indices[row])],
                         similarity=similarity,
                         margin=margin,
                         dark_fraction=float(dark_fractions[source_index]),
@@ -626,13 +741,13 @@ class TemplateCardRecognizer:
         self,
         frame_bgr: np.ndarray,
         x_positions: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         frame_height, frame_width = frame_bgr.shape[:2]
         card_width = max(24, round(frame_height * self.index.card_width_ratio))
         art_width = max(16, round(frame_height * self.index.art_width_ratio))
         art_left = round(frame_height * self.index.art_left_ratio)
         card_lefts = x_positions - art_left
-        fully_visible = (card_lefts >= 0) & (card_lefts + card_width <= frame_width)
+        fully_visible = (card_lefts > 0) & (card_lefts + card_width < frame_width)
 
         band_top = max(0, round(frame_height * self.config.nameplate_top_ratio))
         band_bottom = min(
@@ -646,7 +761,22 @@ class TemplateCardRecognizer:
         rights = np.clip(x_positions + art_width, 0, frame_width)
         areas = np.maximum(1, (rights - lefts) * max(1, band_bottom - band_top))
         dark_fractions = (integral[rights] - integral[lefts]) / areas
-        return np.asarray(dark_fractions, dtype=np.float32), fully_visible
+
+        side_lefts = np.clip(card_lefts, 0, frame_width)
+        side_left_rights = np.clip(x_positions, 0, frame_width)
+        side_right_lefts = np.clip(x_positions + art_width, 0, frame_width)
+        side_rights = np.clip(card_lefts + card_width, 0, frame_width)
+        band_height = max(1, band_bottom - band_top)
+        left_areas = np.maximum(1, (side_left_rights - side_lefts) * band_height)
+        right_areas = np.maximum(1, (side_rights - side_right_lefts) * band_height)
+        left_dark = (integral[side_left_rights] - integral[side_lefts]) / left_areas
+        right_dark = (integral[side_rights] - integral[side_right_lefts]) / right_areas
+        side_contrasts = dark_fractions - (left_dark + right_dark) / 2.0
+        return (
+            np.asarray(dark_fractions, dtype=np.float32),
+            np.asarray(side_contrasts, dtype=np.float32),
+            fully_visible,
+        )
 
     def _keep_physical_peaks(
         self,
@@ -739,6 +869,9 @@ class TemplateCardRecognizer:
             family_confidence=family_confidence,
             rarity=rarity,
             rarity_confidence=rarity_confidence,
+            raw_best_similarity=proposal.similarity,
+            runner_up_identity=proposal.runner_up_name,
+            identity_margin=proposal.margin,
         )
 
     def _classify_family(
@@ -754,7 +887,10 @@ class TemplateCardRecognizer:
             name_box,
             card_box,
         )
-        if border_family == "Diamond":
+        if (
+            border_family in {"Gold", "Diamond", "Rainbow"}
+            and border_confidence >= _DISTINCTIVE_BORDER_MIN_CONFIDENCE
+        ):
             return border_family, max(0.90, border_confidence)
 
         x, y, width, height = card_box

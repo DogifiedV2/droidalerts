@@ -144,6 +144,9 @@ class CardCandidate:
     family_confidence: float = 0.0
     rarity: str = ""
     rarity_confidence: float = 0.0
+    raw_best_similarity: float = 0.0
+    runner_up_identity: str = ""
+    identity_margin: float = 0.0
 
     @property
     def identity(self) -> str:
