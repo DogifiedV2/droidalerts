@@ -191,6 +191,56 @@ class CardRecognitionTests(unittest.TestCase):
                     self.assertEqual("", family)
                     self.assertEqual(0.0, confidence)
 
+    def test_gold_border_with_small_multihue_highlights_stays_gold(self):
+        name_box = (100, 100, 100, 20)
+        card_box = (80, 40, 200, 100)
+        frame = blank_frame(width=400, height=240)
+        y1 = round(name_box[1] + 1.20 * name_box[3])
+        y2 = round(name_box[1] + 1.70 * name_box[3])
+        segments = (
+            (0.00, 0.70, (18, 220, 220)),
+            (0.70, 0.85, (2, 220, 220)),
+            (0.85, 1.00, (170, 220, 220)),
+        )
+        for left_ratio, right_ratio, hsv_color in segments:
+            bgr = tuple(
+                int(value)
+                for value in cv2.cvtColor(np.uint8([[hsv_color]]), cv2.COLOR_HSV2BGR)[0, 0]
+            )
+            x1 = card_box[0] + round(card_box[2] * left_ratio)
+            x2 = card_box[0] + round(card_box[2] * right_ratio)
+            frame[y1:y2, x1:x2] = bgr
+
+        family, confidence = classify_card_family_border(frame, name_box, card_box)
+
+        self.assertEqual("Gold", family)
+        self.assertGreater(confidence, 0.8)
+
+    def test_rainbow_border_can_have_one_dominant_hue_section(self):
+        name_box = (100, 100, 100, 20)
+        card_box = (80, 40, 200, 100)
+        frame = blank_frame(width=400, height=240)
+        y1 = round(name_box[1] + 1.20 * name_box[3])
+        y2 = round(name_box[1] + 1.70 * name_box[3])
+        segments = (
+            (0.00, 0.60, (18, 220, 220)),
+            (0.60, 0.80, (90, 220, 220)),
+            (0.80, 1.00, (135, 220, 220)),
+        )
+        for left_ratio, right_ratio, hsv_color in segments:
+            bgr = tuple(
+                int(value)
+                for value in cv2.cvtColor(np.uint8([[hsv_color]]), cv2.COLOR_HSV2BGR)[0, 0]
+            )
+            x1 = card_box[0] + round(card_box[2] * left_ratio)
+            x2 = card_box[0] + round(card_box[2] * right_ratio)
+            frame[y1:y2, x1:x2] = bgr
+
+        family, confidence = classify_card_family_border(frame, name_box, card_box)
+
+        self.assertEqual("Rainbow", family)
+        self.assertGreater(confidence, 0.8)
+
     def test_full_frame_keeps_all_ocr_text_but_only_accepts_exact_card(self):
         frame = blank_frame()
         name_box = draw_card(frame, (130, 270, 55, 30), "R2")

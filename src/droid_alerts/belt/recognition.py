@@ -90,14 +90,27 @@ def classify_card_family_border(
     ) / valid_count
 
     diverse_bins = 0
+    hue_spread = 0
     if vivid_count:
         histogram = np.histogram(hue[vivid], bins=np.arange(0, 181, 15))[0]
         significant = max(5, round(vivid_count * 0.03))
-        diverse_bins = int((histogram > significant).sum())
+        occupied = np.flatnonzero(histogram > significant)
+        diverse_bins = len(occupied)
+        bin_count = len(histogram)
+        hue_spread = max(
+            (
+                min(abs(int(first) - int(second)), bin_count - abs(int(first) - int(second)))
+                for first in occupied
+                for second in occupied
+            ),
+            default=0,
+        )
 
-    # Rainbow must run first: its animated border can contain a dominant cyan
-    # or orange section, but spans at least three meaningful hue families.
-    if vivid_fraction >= 0.35 and diverse_bins >= 3:
+    # Gold frames pick up small red/magenta highlights as they move. Those
+    # colors remain close on the circular hue wheel, unlike a real Rainbow
+    # frame, which spans both warm and cool hues even when one section happens
+    # to dominate the sampled band.
+    if vivid_fraction >= 0.35 and diverse_bins >= 3 and hue_spread >= 4:
         return "Rainbow", min(1.0, vivid_fraction / 0.60)
     if orange_fraction >= 0.45:
         return "Gold", min(1.0, orange_fraction / 0.75)
@@ -147,6 +160,9 @@ class CardCandidate:
     raw_best_similarity: float = 0.0
     runner_up_identity: str = ""
     identity_margin: float = 0.0
+    family_best_similarity: float = 0.0
+    runner_up_family: str = ""
+    family_margin: float = 0.0
 
     @property
     def identity(self) -> str:

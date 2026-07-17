@@ -65,6 +65,7 @@ class Track:
     vote_intervals: deque[float] = field(default_factory=deque, repr=False)
     family_votes: deque[tuple[str, str, float]] = field(default_factory=deque, repr=False)
     rarity_votes: deque[tuple[str, str, float]] = field(default_factory=deque, repr=False)
+    initial_center_x: float = 0.0
     last_center_x: float = 0.0
     last_center_y: float = 0.0
     entered_emitted: bool = False
@@ -115,7 +116,9 @@ class BeltTracker:
     possible path to confirmation. Family evidence is attached only after
     repeated stable reads, but it does not block a confirmed identity from
     entering. An unknown family is safer than either losing the whole card or
-    inventing Default. The track ID prevents duplicate alerts for later reads.
+    inventing Default. Production template tracking can additionally require
+    horizontal travel so static companion/quest cards do not become belt
+    events. The track ID prevents duplicate alerts for later reads.
     """
 
     def __init__(
@@ -131,6 +134,7 @@ class BeltTracker:
         slow_minimum_confidence: float = 0.78,
         template_conflict_grace_seconds: float = 0.50,
         template_attribute_confirmation_hits: int = 3,
+        minimum_template_displacement_ratio: float = 0.0,
     ) -> None:
         self.confirmation_hits = max(1, int(confirmation_hits))
         self.slow_confirmation_hits = max(2, int(slow_confirmation_hits))
@@ -160,6 +164,10 @@ class BeltTracker:
             0.1,
             float(template_conflict_grace_seconds),
         )
+        self.minimum_template_displacement_ratio = min(
+            1.0,
+            max(0.0, float(minimum_template_displacement_ratio)),
+        )
         self._tracks: list[Track] = []
         self._next_id = 1
 
@@ -179,6 +187,7 @@ class BeltTracker:
                 "last_seen_at": track.last_seen_at,
                 "velocity_x": track.velocity_x,
                 "velocity_y": track.velocity_y,
+                "displacement_x": track.last_center_x - track.initial_center_x,
                 "box": list(track.box),
             }
             for track in self._tracks
@@ -621,6 +630,7 @@ class BeltTracker:
                 else (),
                 maxlen=self.confirmation_window,
             ),
+            initial_center_x=center_x,
             last_center_x=center_x,
             last_center_y=center_y,
         )
@@ -779,9 +789,19 @@ class BeltTracker:
             return names[-1], "slow-cadence"
         return None
 
-    @staticmethod
-    def _should_emit_entered(track: Track) -> bool:
+    def _should_emit_entered(self, track: Track) -> bool:
         if not track.confirmed or track.entered_emitted:
+            return False
+        if (
+            self.minimum_template_displacement_ratio > 0.0
+            and self._is_template_track(track)
+            and abs(track.last_center_x - track.initial_center_x)
+            < track.box[2] * self.minimum_template_displacement_ratio
+        ):
+            # Companion and quest panels reuse genuine droid-card art inside
+            # the normal capture region. They can pass image matching, but do
+            # not travel across the conveyor like a belt blueprint. Keep the
+            # confirmed identity private until the card exhibits belt motion.
             return False
         return True
 

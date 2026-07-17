@@ -215,6 +215,39 @@ class TemplateCardRecognizerTests(unittest.TestCase):
         self.assertEqual(HEIGHT, result.diagnostics["geometry_crop_height"])
         self.assertAlmostEqual(crop_top / frame_height, result.diagnostics["geometry_top_ratio"], places=4)
 
+    def test_geometry_search_handles_tight_and_bottom_heavy_regions(self):
+        r2_index = DROID_NAMES.index("R2")
+        gonk_index = DROID_NAMES.index("GONK")
+        cases = (
+            (280, 8),
+            (470, 35),
+        )
+        for frame_height, crop_top in cases:
+            with self.subTest(frame_height=frame_height, crop_top=crop_top):
+                frame = np.full((frame_height, 820, 3), (110, 95, 80), dtype=np.uint8)
+                frame[crop_top : crop_top + HEIGHT, 90 : 90 + CARD_WIDTH] = card(r2_index + 1)
+                frame[crop_top : crop_top + HEIGHT, 480 : 480 + CARD_WIDTH] = card(
+                    gonk_index + 1
+                )
+
+                result = TemplateCardRecognizer(
+                    synthetic_index(),
+                    config=TemplateRecognitionConfig(minimum_identity_margin=0.01),
+                ).analyze(frame)
+
+                self.assertEqual(
+                    ["R2", "GONK"],
+                    [item.match.name for item in result.observations],
+                )
+                self.assertLessEqual(
+                    abs(crop_top - result.diagnostics["geometry_crop_top"]),
+                    6,
+                )
+                self.assertLessEqual(
+                    abs(HEIGHT - result.diagnostics["geometry_crop_height"]),
+                    6,
+                )
+
     def test_marginal_beskar_match_stays_unknown(self):
         index = synthetic_index()
         histograms = np.zeros_like(index.family_histograms)
@@ -247,8 +280,18 @@ class TemplateCardRecognizerTests(unittest.TestCase):
         self.assertEqual("", family)
         self.assertEqual(0.0, confidence)
 
-    def test_distinctive_border_can_override_wrong_default_template(self):
-        recognizer = TemplateCardRecognizer(synthetic_index())
+    def test_conflicting_distinctive_border_and_template_abstain(self):
+        index = synthetic_index()
+        histograms = np.zeros_like(index.family_histograms)
+        words = np.zeros_like(index.family_words)
+        words[0, 0] = 1.0
+        words[3, 0] = 0.5
+        recognizer = TemplateCardRecognizer(
+            replace(index, family_histograms=histograms, family_words=words)
+        )
+        query_histogram = np.zeros(histograms.shape[1], dtype=np.float32)
+        query_word = np.zeros(words.shape[1], dtype=np.float32)
+        query_word[0] = 1.0
         with (
             patch(
                 "droid_alerts.belt.template_recognition.classify_card_family_border",
@@ -256,7 +299,7 @@ class TemplateCardRecognizerTests(unittest.TestCase):
             ),
             patch(
                 "droid_alerts.belt.template_recognition.family_features",
-                side_effect=AssertionError("distinctive border should be authoritative"),
+                return_value=(query_histogram, query_word),
             ),
         ):
             family, confidence = recognizer._classify_family(
@@ -265,8 +308,8 @@ class TemplateCardRecognizerTests(unittest.TestCase):
                 (0, 0, CARD_WIDTH, HEIGHT),
             )
 
-        self.assertEqual("Rainbow", family)
-        self.assertGreaterEqual(confidence, 0.90)
+        self.assertEqual("", family)
+        self.assertEqual(0.0, confidence)
 
     def test_marginal_default_family_stays_unknown(self):
         index = synthetic_index()

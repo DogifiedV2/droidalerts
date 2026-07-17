@@ -70,8 +70,19 @@ _IDENTITY_MINIMUM_MARGINS = {
 # Belt regions can include price labels above the cards and conveyor scenery
 # below them. Probe a small set of heights at top, center, and bottom anchors,
 # then keep the winning geometry for normal single-pass scans.
-_GEOMETRY_HEIGHT_RATIOS = (1.0, 0.84, 0.76, 0.72, 0.65, 0.58)
-_GEOMETRY_VERTICAL_ANCHORS = (0.0, 0.25, 0.45, 0.5, 0.75, 1.0)
+_GEOMETRY_HEIGHT_RATIOS = (
+    1.0,
+    0.94,
+    0.84,
+    0.76,
+    0.72,
+    0.65,
+    0.58,
+    0.56,
+    0.55,
+    0.54,
+)
+_GEOMETRY_VERTICAL_ANCHORS = (0.0, 0.17, 0.25, 0.35, 0.45, 0.5, 0.75, 1.0)
 _GEOMETRY_RETRY_MISSES = 8
 
 
@@ -270,6 +281,15 @@ class _Proposal:
     reason: str
 
 
+@dataclass(frozen=True)
+class _FamilyResult:
+    family: str = ""
+    confidence: float = 0.0
+    best_similarity: float = 0.0
+    runner_up_family: str = ""
+    margin: float = 0.0
+
+
 def _offset_box_y(
     box: tuple[int, int, int, int],
     offset: int,
@@ -392,14 +412,26 @@ class TemplateCardRecognizer:
             >= frame_bgr.shape[0]
             and int(attempt[4].diagnostics.get("accepted_count", 0)) > 0
         ]
-        if edge_spanning_attempts:
-            # If the unscaled full region already looks like a card, a smaller
-            # internal retry would merely crop a card that touches the capture
-            # boundary and pretend it is complete. Keep the edge-spanning
-            # result so _geometry_result can quarantine it explicitly.
-            selected = max(edge_spanning_attempts, key=self._geometry_score)
-        elif accepted_attempts:
-            selected = max(accepted_attempts, key=self._geometry_score)
+        best_edge = (
+            max(edge_spanning_attempts, key=self._geometry_score)
+            if edge_spanning_attempts
+            else None
+        )
+        best_safe = (
+            max(accepted_attempts, key=self._geometry_score)
+            if accepted_attempts
+            else None
+        )
+        if best_edge is not None and best_safe is not None:
+            # A truly clipped card matches best when the full region is used;
+            # keep that result so it is quarantined below. A tightly padded
+            # but complete card has a stronger family-label alignment in the
+            # safe internal crop, so do not mistake useful padding for a clip.
+            selected = max((best_edge, best_safe), key=self._geometry_score)
+        elif best_edge is not None:
+            selected = best_edge
+        elif best_safe is not None:
+            selected = best_safe
         else:
             # An empty belt contains no evidence with which to calibrate. Keep
             # the full-height/default geometry until cards enter the region.
@@ -483,13 +515,14 @@ class TemplateCardRecognizer:
     @staticmethod
     def _geometry_score(
         attempt: tuple[float, float, int, float, CardFrameResult],
-    ) -> tuple[int, float, int, float]:
+    ) -> tuple[int, float, float, int, float]:
         _requested_ratio, _vertical_anchor, _crop_top, _top_ratio, result = attempt
         ratio = result.diagnostics["frame_shape"][0]
         accepted = [candidate for candidate in result.candidates if candidate.accepted]
         rejected_count = len(result.candidates) - len(accepted)
         return (
             len(accepted),
+            sum(candidate.family_best_similarity for candidate in accepted),
             sum(candidate.ocr_confidence for candidate in accepted),
             -rejected_count,
             ratio,
@@ -823,12 +856,11 @@ class TemplateCardRecognizer:
             name_height,
         )
 
-        family = ""
-        family_confidence = 0.0
+        family_result = _FamilyResult()
         rarity = ""
         rarity_confidence = 0.0
         if proposal.accepted:
-            family, family_confidence = self._classify_family(
+            family_result = self._classify_family_details(
                 frame_bgr,
                 name_box,
                 card_box,
@@ -865,13 +897,16 @@ class TemplateCardRecognizer:
             context=context,
             accepted=proposal.accepted,
             reason=proposal.reason,
-            family=family,
-            family_confidence=family_confidence,
+            family=family_result.family,
+            family_confidence=family_result.confidence,
             rarity=rarity,
             rarity_confidence=rarity_confidence,
             raw_best_similarity=proposal.similarity,
             runner_up_identity=proposal.runner_up_name,
             identity_margin=proposal.margin,
+            family_best_similarity=family_result.best_similarity,
+            runner_up_family=family_result.runner_up_family,
+            family_margin=family_result.margin,
         )
 
     def _classify_family(
@@ -880,23 +915,33 @@ class TemplateCardRecognizer:
         name_box: tuple[int, int, int, int],
         card_box: tuple[int, int, int, int],
     ) -> tuple[str, float]:
+        result = self._classify_family_details(frame_bgr, name_box, card_box)
+        return result.family, result.confidence
+
+    def _classify_family_details(
+        self,
+        frame_bgr: np.ndarray,
+        name_box: tuple[int, int, int, int],
+        card_box: tuple[int, int, int, int],
+    ) -> _FamilyResult:
         # The cyan Diamond frame has a uniquely precise color signature in the
-        # collected library. Use it as an inexpensive high-confidence shortcut.
+        # collected library. Color is useful corroboration, but it must not
+        # override a conflicting printed-family template: crop misalignment can
+        # otherwise turn ordinary Gold or Default cards into Rainbow alerts.
         border_family, border_confidence = classify_card_family_border(
             frame_bgr,
             name_box,
             card_box,
         )
-        if (
+        distinctive_border = (
             border_family in {"Gold", "Diamond", "Rainbow"}
             and border_confidence >= _DISTINCTIVE_BORDER_MIN_CONFIDENCE
-        ):
-            return border_family, max(0.90, border_confidence)
+        )
 
         x, y, width, height = card_box
         card = frame_bgr[y : y + height, x : x + width]
         if card.size == 0:
-            return "", 0.0
+            return _FamilyResult()
         histogram, word = family_features(card)
         scores = (
             FAMILY_HISTOGRAM_WEIGHT * (self.index.family_histograms @ histogram)
@@ -905,10 +950,34 @@ class TemplateCardRecognizer:
         family_scores = np.maximum.reduceat(scores, self.index.family_offsets[:-1])
         best_index = int(np.argmax(family_scores))
         best_score = float(family_scores[best_index])
-        runner_up = np.delete(family_scores, best_index)
-        margin = best_score - float(np.max(runner_up))
-        family = self.index.family_labels[best_index]
-        if family not in CARD_FAMILIES or margin < _FAMILY_MINIMUM_MARGINS[family]:
-            return "", 0.0
-        confidence = min(0.99, 0.82 + margin * 5.0)
-        return family, confidence
+        runner_up_scores = family_scores.copy()
+        runner_up_scores[best_index] = -1.0
+        runner_up_index = int(np.argmax(runner_up_scores))
+        margin = best_score - float(runner_up_scores[runner_up_index])
+        template_family = self.index.family_labels[best_index]
+        runner_up_family = self.index.family_labels[runner_up_index]
+        template_accepted = (
+            template_family in CARD_FAMILIES
+            and margin >= _FAMILY_MINIMUM_MARGINS[template_family]
+        )
+
+        if distinctive_border and border_family != template_family:
+            # Conflicting independent signals are unsafe for a tier-based alert.
+            # Abstain and wait for another frame instead of guessing either way.
+            family, confidence = "", 0.0
+        elif distinctive_border:
+            family = border_family
+            confidence = max(0.90, border_confidence)
+        elif template_accepted:
+            family = template_family
+            confidence = min(0.99, 0.82 + margin * 5.0)
+        else:
+            family, confidence = "", 0.0
+
+        return _FamilyResult(
+            family=family,
+            confidence=confidence,
+            best_similarity=best_score,
+            runner_up_family=runner_up_family,
+            margin=margin,
+        )

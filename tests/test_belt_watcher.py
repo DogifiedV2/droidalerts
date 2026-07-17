@@ -17,6 +17,7 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 from droid_alerts.belt.matching import NameMatch
 from droid_alerts.belt.ocr import DroidObservation
 from droid_alerts.belt.watcher import (
+    TEMPLATE_MINIMUM_DISPLACEMENT_RATIO,
     adaptive_template_interval,
     run_belt_watcher,
 )
@@ -273,7 +274,10 @@ class WatcherTests(unittest.TestCase):
 
         with (
             patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
-            patch("droid_alerts.belt.watcher.BeltTracker", return_value=tracker),
+            patch(
+                "droid_alerts.belt.watcher.BeltTracker",
+                return_value=tracker,
+            ) as tracker_factory,
             patch(
                 "droid_alerts.belt.watcher.TemplateCardRecognizer",
                 return_value=recognizer,
@@ -292,6 +296,10 @@ class WatcherTests(unittest.TestCase):
 
         self.assertEqual(10.1, tracker.update_now)
         self.assertEqual(10.9, tracker.predict_now)
+        self.assertEqual(
+            TEMPLATE_MINIMUM_DISPLACEMENT_RATIO,
+            tracker_factory.call_args.kwargs["minimum_template_displacement_ratio"],
+        )
         scan = next(event for event in events if event["type"] == "scan")
         self.assertAlmostEqual(0.8, scan["scan_seconds"])
         self.assertAlmostEqual(1.25, scan["scan_throughput_fps"])

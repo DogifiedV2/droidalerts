@@ -395,6 +395,24 @@ class TrackingTests(unittest.TestCase):
         )
         self.assertEqual([], stable.events)
 
+    def test_template_motion_gate_rejects_static_non_belt_card(self):
+        tracker = BeltTracker(minimum_template_displacement_ratio=0.10)
+        for index, x in enumerate((100, 102, 99, 101)):
+            result = tracker.update(
+                [observation("BB9", x, width=60, raw_text="template:BB9")],
+                index * 0.1,
+                500,
+            )
+
+        self.assertTrue(tracker._tracks[0].confirmed)
+        self.assertEqual([], result.events)
+        entered = tracker.update(
+            [observation("BB9", 120, width=60, raw_text="template:BB9")],
+            0.4,
+            500,
+        )
+        self.assertEqual(["entered"], [event.kind for event in entered.events])
+
     def test_conflicting_names_cannot_keep_an_entered_identity_alive(self):
         tracker = BeltTracker(
             confirmation_hits=2,

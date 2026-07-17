@@ -24,6 +24,7 @@ CONFIRMATION_HITS = 4
 SLOW_CONFIRMATION_HITS = 3
 SLOW_CADENCE_SECONDS = 4.0 / 3.0
 SLOW_MINIMUM_IDENTITY_CONFIDENCE = 0.78
+TEMPLATE_MINIMUM_DISPLACEMENT_RATIO = 0.10
 TEMPLATE_IDLE_BACKOFF_START = 12
 
 StatusCallback = Callable[[dict[str, object]], None]
@@ -125,6 +126,7 @@ def run_belt_watcher(
         slow_confirmation_hits=SLOW_CONFIRMATION_HITS,
         slow_cadence_seconds=SLOW_CADENCE_SECONDS,
         slow_minimum_confidence=SLOW_MINIMUM_IDENTITY_CONFIDENCE,
+        minimum_template_displacement_ratio=TEMPLATE_MINIMUM_DISPLACEMENT_RATIO,
     )
     alert_targets = normalize_belt_target_tiers(target_tiers)
     recognizer_init_started = time.perf_counter()
@@ -174,6 +176,7 @@ def run_belt_watcher(
             slow_confirmation_hits=SLOW_CONFIRMATION_HITS,
             slow_cadence_seconds=SLOW_CADENCE_SECONDS,
             slow_minimum_identity_confidence=SLOW_MINIMUM_IDENTITY_CONFIDENCE,
+            minimum_template_displacement_ratio=TEMPLATE_MINIMUM_DISPLACEMENT_RATIO,
             base_track_timeout_seconds=TRACK_TIMEOUT_SECONDS,
             collect_template_samples=sample_collector is not None,
             idle_scan_fps=idle_scan_fps,
@@ -479,6 +482,9 @@ def _candidate_diagnostics(candidate) -> dict[str, object]:
         "reason": candidate.reason,
         "family": candidate.family,
         "family_confidence": candidate.family_confidence,
+        "family_best_similarity": candidate.family_best_similarity,
+        "runner_up_family": candidate.runner_up_family,
+        "family_margin": candidate.family_margin,
         "rarity": candidate.rarity,
         "rarity_confidence": candidate.rarity_confidence,
         "context": {
