@@ -31,6 +31,7 @@ DROID_ACCENTS = {
     "Diamond": ("#3fd9ff", "#155a6e"),
     "Rainbow": ("#c05cff", "#4d2470"),
     "Beskar": ("#c9cdd9", "#4d5160"),
+    "Galactic": ("#7d8cff", "#30396e"),
 }
 RARITY_COLORS = {
     "Default": "#e8e8e8",
@@ -174,10 +175,14 @@ def _is_belt_detection(detection: Detection) -> bool:
     return detection.source == "belt-tracker" or detection.rarity == "Belt"
 
 
+def _uses_attribute_rarity(detection: Detection) -> bool:
+    return _is_belt_detection(detection) or detection.source == "limited-deal"
+
+
 def _title_segments(detection: Detection) -> list[tuple[str, str]]:
     attributes = (
         detection.rarity.split()
-        if _is_belt_detection(detection) and detection.rarity != "Belt"
+        if _uses_attribute_rarity(detection) and detection.rarity != "Belt"
         else [detection.rarity]
     )
     segments = [
@@ -195,10 +200,10 @@ def _title_segments(detection: Detection) -> list[tuple[str, str]]:
 
 
 def _title_lines(detection: Detection) -> list[list[tuple[str, str]]]:
-    """Split belt attributes from the droid name to keep long alerts legible."""
+    """Split belt/deal attributes from the droid name to keep alerts legible."""
 
     segments = _title_segments(detection)
-    if not _is_belt_detection(detection) or detection.rarity == "Belt":
+    if not _uses_attribute_rarity(detection) or detection.rarity == "Belt":
         return [segments]
     attribute_count = len(detection.rarity.split())
     attributes = list(segments[:attribute_count])
@@ -374,7 +379,7 @@ def show_popup(
 
         accent_key = (
             detection.rarity.split(" ", 1)[0]
-            if _is_belt_detection(detection)
+            if _uses_attribute_rarity(detection)
             else detection.droid
         )
         accent, accent_dim = DROID_ACCENTS.get(accent_key, ("#ff0055", "#5a0f2c"))
@@ -413,9 +418,13 @@ def show_popup(
         )
 
         caption = (
-            "BELT ALERT"
-            if _is_belt_detection(detection)
-            else ("PRIORITY SPAWN" if detection.is_priority else "DROID SPAWN")
+            "LIMITED DEAL"
+            if detection.source == "limited-deal"
+            else (
+                "BELT ALERT"
+                if _is_belt_detection(detection)
+                else ("PRIORITY SPAWN" if detection.is_priority else "DROID SPAWN")
+            )
         )
         canvas.create_text(
             center_x,

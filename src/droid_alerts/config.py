@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from .belt.targets import normalize_belt_target_tiers
+from .limited_deals import (
+    normalize_limited_deal_priority_alerts,
+    normalize_limited_deal_target_tiers,
+)
 from .ui_theme import DEFAULT_THEME_KEY, normalize_theme_key
 
 
@@ -158,6 +162,7 @@ class AppConfig:
     ntfy_include_attachment: bool = False
     notification_setup_prompted: bool = False
     intro_shown: bool = False
+    limited_deals_intro_shown: bool = False
     # Fresh 1.3.0 installs must not see the community prompt. Older configs do
     # not contain this key, so from_dict treats a missing value as not prompted.
     discord_community_prompted: bool = True
@@ -173,6 +178,7 @@ class AppConfig:
     anonymous_detection_url: str = "https://gonk.tools/api/droid-alerts/detections"
     anonymous_belt_stats_url: str = "https://gonk.tools/api/droid-alerts/belt-heartbeat"
     anonymous_belt_counts_url: str = "https://gonk.tools/api/droid-alerts/belt-counts"
+    limited_deal_url: str = "https://gonk.tools/api/droid-alerts/limited-deal"
     share_debug_detections: bool = False
     debug_detection_upload_url: str = "https://gonk.tools/api/droid-alerts/debug-detections"
     update_repo: str = "DogifiedV2/droidalerts"
@@ -188,6 +194,9 @@ class AppConfig:
     belt_region_guide_confirmed: bool = False
     # Droid name -> minimum visual rarity tier. Empty means no Belt Tracker alerts.
     belt_target_tiers: dict[str, str] = field(default_factory=dict)
+    # Rotating droid ID -> minimum Limited Deal mutation. Priority combos are exact.
+    limited_deal_target_tiers: dict[str, str] = field(default_factory=dict)
+    limited_deal_priority_alerts: list[list[str]] = field(default_factory=list)
     retention_days: int = 30
     max_storage_mb: int = 500
     timer_reminders_enabled: bool = False
@@ -217,6 +226,12 @@ class AppConfig:
         else:
             raise ValueError("Config thresholds must contain a JSON object")
         belt_target_tiers = normalize_belt_target_tiers(data.get("belt_target_tiers"))
+        limited_deal_target_tiers = normalize_limited_deal_target_tiers(
+            data.get("limited_deal_target_tiers")
+        )
+        limited_deal_priority_alerts = normalize_limited_deal_priority_alerts(
+            data.get("limited_deal_priority_alerts")
+        )
         belt_idle_scan_fps, belt_active_scan_fps = normalize_belt_scan_fps(
             data.get("belt_idle_scan_fps", 4),
             data.get("belt_active_scan_fps", 8),
@@ -293,6 +308,9 @@ class AppConfig:
             ntfy_include_attachment=bool(data.get("ntfy_include_attachment", False)),
             notification_setup_prompted=bool(data.get("notification_setup_prompted", False)),
             intro_shown=bool(data.get("intro_shown", False)),
+            limited_deals_intro_shown=bool(
+                data.get("limited_deals_intro_shown", False)
+            ),
             discord_community_prompted=bool(data.get("discord_community_prompted", False)),
             phone_alerts_enabled=bool(data.get("phone_alerts_enabled", False)),
             phone_credentials_file=str(data.get("phone_credentials_file", "phone_alerts.json")),
@@ -325,6 +343,12 @@ class AppConfig:
                     "https://gonk.tools/api/droid-alerts/belt-counts",
                 )
             ),
+            limited_deal_url=str(
+                data.get(
+                    "limited_deal_url",
+                    "https://gonk.tools/api/droid-alerts/limited-deal",
+                )
+            ),
             share_debug_detections=bool(data.get("share_debug_detections", False)),
             debug_detection_upload_url=str(
                 data.get("debug_detection_upload_url", "https://gonk.tools/api/droid-alerts/debug-detections")
@@ -347,6 +371,8 @@ class AppConfig:
                 data.get("belt_region_guide_confirmed", False)
             ),
             belt_target_tiers=belt_target_tiers,
+            limited_deal_target_tiers=limited_deal_target_tiers,
+            limited_deal_priority_alerts=limited_deal_priority_alerts,
             retention_days=int(data.get("retention_days", 30)),
             max_storage_mb=int(data.get("max_storage_mb", 500)),
             timer_reminders_enabled=bool(data.get("timer_reminders_enabled", False)),
@@ -418,6 +444,7 @@ class AppConfig:
             "ntfy_include_attachment": self.ntfy_include_attachment,
             "notification_setup_prompted": self.notification_setup_prompted,
             "intro_shown": self.intro_shown,
+            "limited_deals_intro_shown": self.limited_deals_intro_shown,
             "discord_community_prompted": self.discord_community_prompted,
             "phone_alerts_enabled": self.phone_alerts_enabled,
             "phone_credentials_file": self.phone_credentials_file,
@@ -431,6 +458,7 @@ class AppConfig:
             "anonymous_detection_url": self.anonymous_detection_url,
             "anonymous_belt_stats_url": self.anonymous_belt_stats_url,
             "anonymous_belt_counts_url": self.anonymous_belt_counts_url,
+            "limited_deal_url": self.limited_deal_url,
             "share_debug_detections": self.share_debug_detections,
             "debug_detection_upload_url": self.debug_detection_upload_url,
             "update_repo": self.update_repo,
@@ -445,6 +473,12 @@ class AppConfig:
             "belt_cpu_warning_confirmed": self.belt_cpu_warning_confirmed,
             "belt_region_guide_confirmed": self.belt_region_guide_confirmed,
             "belt_target_tiers": normalize_belt_target_tiers(self.belt_target_tiers),
+            "limited_deal_target_tiers": normalize_limited_deal_target_tiers(
+                self.limited_deal_target_tiers
+            ),
+            "limited_deal_priority_alerts": normalize_limited_deal_priority_alerts(
+                self.limited_deal_priority_alerts
+            ),
             "retention_days": self.retention_days,
             "max_storage_mb": self.max_storage_mb,
             "timer_reminders_enabled": self.timer_reminders_enabled,

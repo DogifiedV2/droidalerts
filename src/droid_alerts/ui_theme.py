@@ -234,6 +234,13 @@ def apply_app_theme(
     style.configure("Sidebar.TFrame", background=theme.sidebar_bg)
     style.configure("Sidebar.TLabel", background=theme.sidebar_bg, foreground=theme.sidebar_fg)
     style.configure(
+        "SidebarNew.TLabel",
+        background=colors["primary"],
+        foreground=theme.sidebar_bg,
+        padding=(6, 2),
+        font=(font_family, 8, "bold"),
+    )
+    style.configure(
         "SidebarMuted.TLabel",
         background=theme.sidebar_bg,
         foreground=theme.sidebar_muted,
@@ -255,6 +262,26 @@ def apply_app_theme(
         "Sidebar.TButton",
         background=[("pressed", theme.sidebar_active), ("active", theme.sidebar_hover)],
         foreground=[("pressed", theme.sidebar_fg), ("active", theme.sidebar_fg)],
+    )
+    style.configure(
+        "SidebarLink.TButton",
+        background=theme.sidebar_active,
+        foreground=colors["primary"],
+        bordercolor=theme.sidebar_hover,
+        lightcolor=theme.sidebar_hover,
+        darkcolor=theme.sidebar_hover,
+        borderwidth=1,
+        focusthickness=0,
+        focuscolor=colors["primary"],
+        relief="flat",
+        anchor="w",
+        padding=(18, 14),
+        font=(font_family, 11, "bold"),
+    )
+    style.map(
+        "SidebarLink.TButton",
+        background=[("pressed", colors["primary"]), ("active", theme.sidebar_hover)],
+        foreground=[("pressed", theme.sidebar_bg), ("active", theme.sidebar_fg)],
     )
     style.configure(
         "SidebarActive.TButton",

@@ -412,7 +412,7 @@ class BeltUiWindowsTests(unittest.TestCase):
     def test_first_launch_intro_keeps_dashboard_selected(self):
         app = DroidAlertsApp.__new__(DroidAlertsApp)
         app.notebook = Mock()
-        app._setup_dialog = Mock(side_effect=(None, None))
+        app._setup_dialog = Mock(side_effect=(None, None, None))
         app._set_var = Mock()
         app.show_droid_timers = Mock()
         app.hide_droid_timers = Mock()

@@ -37,7 +37,13 @@ def _is_belt_detection(detection: Detection) -> bool:
     return detection.source == "belt-tracker" or detection.rarity == "Belt"
 
 
+def _is_limited_deal_detection(detection: Detection) -> bool:
+    return detection.source == "limited-deal"
+
+
 def event_text(detection: Detection) -> str:
+    if _is_limited_deal_detection(detection):
+        return f"Limited Deal: {detection.rarity} {detection.droid}"
     if _is_belt_detection(detection):
         rarity = "" if detection.rarity == "Belt" else f"{detection.rarity} "
         return f"{rarity}{detection.droid} blueprint is on the belt"
@@ -45,6 +51,8 @@ def event_text(detection: Detection) -> str:
 
 
 def alert_title(detection: Detection) -> str:
+    if _is_limited_deal_detection(detection):
+        return "Droid Alerts Limited Deal"
     if _is_belt_detection(detection):
         return "Droid Alerts Belt Tracker"
     return "Droid Alerts Priority Spawn"
@@ -96,6 +104,15 @@ def discord_webhook_configured(config: AppConfig) -> bool:
 
 
 def discord_color(detection: Detection) -> int:
+    if _is_limited_deal_detection(detection):
+        family = detection.rarity.split(" ", 1)[0]
+        return {
+            "Gold": 0xFFD34D,
+            "Diamond": 0x3FD9FF,
+            "Rainbow": 0xFF33CC,
+            "Beskar": 0xC9CDD9,
+            "Galactic": 0x7D8CFF,
+        }.get(family, 0x9B59B6)
     if _is_belt_detection(detection):
         family = detection.rarity.split(" ", 1)[0]
         return {
@@ -123,9 +140,13 @@ def post_discord(webhook_url: str, detection: Detection) -> None:
             "embeds": [
                 {
                     "title": (
-                        "Belt Tracker Alert"
-                        if _is_belt_detection(detection)
-                        else "Droid Tycoon Priority Spawn"
+                        "Limited Deal Alert"
+                        if _is_limited_deal_detection(detection)
+                        else (
+                            "Belt Tracker Alert"
+                            if _is_belt_detection(detection)
+                            else "Droid Tycoon Priority Spawn"
+                        )
                     ),
                     "description": f"**{label}**",
                     "color": discord_color(detection),

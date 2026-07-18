@@ -41,8 +41,8 @@ Diagnostics; moving the box never resizes it. Alert
 appearance plus less common detection, debug, notification-detail, and storage
 controls stay behind the **Advanced settings** toggle in Settings.
 
-The fixed sidebar keeps Dashboard, Belt Tracker, History, Diagnostics, and
-Settings available in one place. Settings also includes three live themes:
+The fixed sidebar keeps Dashboard, Belt Tracker, Limited Deals, History,
+Diagnostics, and Settings available in one place. Settings also includes three live themes:
 **Default**, **Midnight**, and **Daylight**. Theme changes
 apply immediately and are remembered the next time the app opens.
 
@@ -105,6 +105,20 @@ each session stops adding images at 200 MB. Stop after reproducing the issue and
 Diagnostics; the bundle includes the latest Belt dev log and up to four frames.
 If the bundled template index is unavailable or corrupt, Belt Tracker reports
 the problem instead of silently switching detectors.
+
+## Limited Deals
+
+The **Limited Deals** page shows the offer that is live right now and can alert
+through the same Popup, Sound, Discord, ntfy, and Pushover channels used by the
+Dashboard. Familiar priority combinations plus every Mythic mutation are
+available as quick toggles. For finer control, click **Modify** and choose a minimum deal tier for
+any rotating droid; higher tiers also match through Default → Gold → Diamond →
+Rainbow → Beskar → Galactic.
+
+The app never downloads a schedule or future offers. It caches the current
+hour locally, shows that cache while starting, and always refreshes the live
+deal once when the app opens. While the app remains open, each new hour is
+checked at `HH:00:10`, ten seconds after the offer changes.
 
 Optional behaviour includes automatic watcher startup and pausing while
 Fortnite is closed. Diagnostics can create a redacted support ZIP, show or

@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+from datetime import datetime, timezone
 from pathlib import Path
 from queue import Empty as QueueEmpty
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, filedialog
@@ -61,6 +62,7 @@ from .config import (
     AppConfig,
     assets_dir,
     config_dir,
+    data_dir,
     load_config,
     normalize_belt_scan_fps,
     project_root,
@@ -76,6 +78,20 @@ from .device_capture import (
     session_from_config,
 )
 from .logging_io import alert_samples_dir, append_event, debug_dir, logs_dir, timestamp
+from .limited_deals import (
+    LIMITED_DEAL_DROIDS,
+    LIMITED_DEAL_FAMILY_ORDER,
+    LIMITED_DEAL_PRIORITY_COMBOS,
+    LIMITED_DEAL_TARGET_FAMILIES_BY_LABEL,
+    LIMITED_DEAL_TARGET_LABELS,
+    LimitedDeal,
+    LimitedDealService,
+    LimitedDealStatus,
+    limited_deal_matches,
+    limited_deal_target_label,
+    normalize_limited_deal_priority_alerts,
+    normalize_limited_deal_target_tiers,
+)
 from .maintenance import (
     cleanup_runtime_data,
     clear_debug_captures,
@@ -140,6 +156,8 @@ ALERT_COMBOS: tuple[tuple[str, str], ...] = (
 )
 UPDATE_POLL_INTERVAL_MS = 15 * 60 * 1000
 DISCORD_COMMUNITY_URL = "https://discord.gg/ZmFPjS4784"
+TRACKER_URL = "https://gonk.tools/tracker"
+WIKI_URL = "https://gonk.tools/wiki"
 IDENTIFY_INSTALL_URL = "https://gonk.tools/identify"
 DEFAULT_WINDOW_WIDTH = 1400
 DEFAULT_WINDOW_HEIGHT = 1040
@@ -262,6 +280,8 @@ class DroidAlertsApp:
         self.belt_telemetry: AnonymousBeltTelemetryClient | None = None
         self.device_capture_session: DeviceCaptureSession | None = None
         self.app_telemetry = AnonymousAppTelemetryClient(self.config)
+        self.limited_deal_service: LimitedDealService | None = None
+        self.current_limited_deal: LimitedDeal | None = None
         self._belt_poll_after_id: str | None = None
         self._belt_worker_ready = False
         self._belt_stop_reason = ""
@@ -307,6 +327,7 @@ class DroidAlertsApp:
         self.session_monitoring_seconds = 0.0
         self._watch_segment_started: float | None = None
         self._dashboard_timer_after_id: str | None = None
+        self._limited_deal_countdown_after_id: str | None = None
         self._storage_after_id: str | None = None
         self.history_rows_by_item: dict[str, dict[str, object]] = {}
         self._last_cleanup_at = 0.0
@@ -329,6 +350,12 @@ class DroidAlertsApp:
         self.belt_last_scan_var = StringVar(value="No belt scans yet")
         self.belt_samples_var = StringVar(value="Template collection is off")
         self.belt_priority_tree = None
+        self.limited_deal_offer_var = StringVar(value="Getting limited deal...")
+        self.limited_deal_timer_var = StringVar(value="--:--:--")
+        self.limited_deal_targets_var = StringVar(value="No custom droid rules")
+        self.limited_deal_portrait_label = None
+        self.limited_deal_portrait_image: tk.PhotoImage | None = None
+        self.limited_deal_priority_tree = None
         self.storage_status_var = StringVar(value="Calculating storage…")
         self.channel_status_vars = {
             "Popup": StringVar(value="Ready"),
@@ -344,6 +371,7 @@ class DroidAlertsApp:
         }
         self.setting_vars: dict[str, object] = {"monitor_index": IntVar(value=1)}
         self.alert_vars: dict[tuple[str, str], BooleanVar] = {}
+        self.limited_deal_priority_vars: dict[tuple[str, str], BooleanVar] = {}
         self.advanced_widgets: list[object] = []
         self.monitor_display_var = StringVar(value="Monitor 1")
         self.capture_source_var = StringVar(value="Both watchers: Monitor 1")
@@ -361,6 +389,7 @@ class DroidAlertsApp:
         self._build_ui()
         self.app_telemetry.start()
         self.load_settings()
+        self._start_limited_deals()
         self._apply_initial_geometry()
         self._wire_auto_save()
         if self.config.droid_timers_enabled:
@@ -535,16 +564,21 @@ class DroidAlertsApp:
 
         self.dashboard_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
         self.belt_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
+        self.limited_deals_tab = ttk.Frame(
+            self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame"
+        )
         self.logs_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
         self.files_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
         self.settings_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
         self.notebook.add(self.dashboard_tab, text="Dashboard")
         self.notebook.add(self.belt_tab, text="Belt Tracker")
+        self.notebook.add(self.limited_deals_tab, text="Limited Deals")
         self.notebook.add(self.logs_tab, text="History")
         self.notebook.add(self.files_tab, text="Diagnostics")
         self.notebook.add(self.settings_tab, text="Settings")
         self.dashboard_content = self._create_scrollable_page(self.dashboard_tab)
         self.belt_content = self._create_scrollable_page(self.belt_tab)
+        self.limited_deals_content = self._create_scrollable_page(self.limited_deals_tab)
 
         nav = ttk.Frame(sidebar, style="Sidebar.TFrame")
         nav.grid(row=1, column=0, sticky="new")
@@ -552,6 +586,7 @@ class DroidAlertsApp:
         page_items = (
             ("Dashboard", self.dashboard_tab),
             ("Belt Tracker", self.belt_tab),
+            ("Limited Deals", self.limited_deals_tab),
             ("History", self.logs_tab),
             ("Diagnostics", self.files_tab),
             ("Settings", self.settings_tab),
@@ -569,8 +604,50 @@ class DroidAlertsApp:
             self.tab_buttons.append((button, tab))
             if tab is self.belt_tab:
                 self.belt_tab_button = button
+            elif tab is self.limited_deals_tab:
+                self.limited_deals_tab_button = button
+                self.limited_deals_new_tag = ttk.Label(
+                    nav,
+                    text="NEW!",
+                    cursor="hand2",
+                    style="SidebarNew.TLabel",
+                )
+                self.limited_deals_new_tag.grid(
+                    row=row,
+                    column=0,
+                    sticky="e",
+                    padx=(0, 14),
+                )
+                self.limited_deals_new_tag.bind(
+                    "<Button-1>",
+                    lambda _event: self.notebook.select(self.limited_deals_tab),
+                )
             elif tab is self.logs_tab:
                 self.history_tab_button = button
+
+        sidebar_links = ttk.Frame(sidebar, style="Sidebar.TFrame")
+        sidebar_links.grid(
+            row=2,
+            column=0,
+            sticky="sew",
+            padx=4,
+            pady=(24, 20),
+        )
+        sidebar_links.columnconfigure(0, weight=1)
+        for row, (label, url) in enumerate(
+            (
+                ("Discord  ↗", DISCORD_COMMUNITY_URL),
+                ("Tracker  ↗", TRACKER_URL),
+                ("Wiki  ↗", WIKI_URL),
+            )
+        ):
+            ttk.Button(
+                sidebar_links,
+                text=label,
+                command=lambda target=url: self._open_sidebar_link(target),
+                cursor="hand2",
+                style="SidebarLink.TButton",
+            ).grid(row=row, column=0, sticky="ew", pady=2)
 
         status = ttk.Frame(sidebar, style="Sidebar.TFrame")
         status.grid(row=3, column=0, sticky="sew", padx=5)
@@ -592,6 +669,7 @@ class DroidAlertsApp:
 
         self._build_dashboard_tab()
         self._build_belt_tab()
+        self._build_limited_deals_tab()
         self._build_logs_tab()
         self._build_files_tab()
         self._build_settings_tab()
@@ -617,6 +695,10 @@ class DroidAlertsApp:
             column=0,
             sticky="ew",
         )
+
+    @staticmethod
+    def _open_sidebar_link(url: str) -> None:
+        webbrowser.open(url)
 
     def _create_scrollable_page(self, tab):
         tab.columnconfigure(0, weight=1)
@@ -1160,6 +1242,133 @@ class DroidAlertsApp:
             **muted_style(),
         ).grid(row=3, column=0, sticky="w", pady=(4, 0))
 
+    def _build_limited_deals_tab(self) -> None:
+        page = self.limited_deals_content
+        page.columnconfigure(0, weight=1)
+        page.columnconfigure(1, weight=1)
+
+        current_outer, current = self._labeled_section(page, "CURRENT LIMITED DEAL")
+        current_outer.grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(0, 16),
+        )
+        current.columnconfigure(0, weight=0)
+        current.columnconfigure(1, weight=1)
+        current.columnconfigure(2, weight=0)
+        portrait_holder = ttk.Frame(current, width=92, height=92)
+        portrait_holder.grid(row=0, column=0, sticky="w", padx=(0, 16))
+        portrait_holder.grid_propagate(False)
+        self.limited_deal_portrait_label = ttk.Label(
+            portrait_holder,
+            anchor="center",
+        )
+        self.limited_deal_portrait_label.place(
+            relx=0.5,
+            rely=0.5,
+            anchor="center",
+        )
+        ttk.Label(
+            current,
+            textvariable=self.limited_deal_offer_var,
+            font=self._font(18, "bold"),
+            wraplength=600,
+            justify="left",
+        ).grid(row=0, column=1, sticky="w")
+        ttk.Label(
+            current,
+            textvariable=self.limited_deal_timer_var,
+            font=self._font(20, "bold"),
+            anchor="e",
+        ).grid(row=0, column=2, sticky="e", padx=(20, 0))
+
+        priorities_outer, priorities = self._labeled_section(page, "PRIORITY ALERTS")
+        priorities_outer.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
+        priorities.columnconfigure(0, weight=1)
+        priorities.columnconfigure(1, weight=1)
+        ttk.Label(
+            priorities,
+            text="Alert for these familiar deal-tier combinations, regardless of the droid.",
+            wraplength=460,
+            justify="left",
+            **muted_style(),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        for index, combo in enumerate(LIMITED_DEAL_PRIORITY_COMBOS):
+            var = BooleanVar(value=False)
+            self.limited_deal_priority_vars[combo] = var
+            ttk.Checkbutton(
+                priorities,
+                text=f"{combo[0]} {combo[1]}",
+                variable=var,
+                **bootstyle("round-toggle"),
+            ).grid(row=1 + index // 2, column=index % 2, sticky="w", pady=5)
+
+        priority_actions = ttk.Frame(priorities)
+        priority_rows = (len(LIMITED_DEAL_PRIORITY_COMBOS) + 1) // 2
+        priority_actions.grid(
+            row=1 + priority_rows,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(10, 0),
+        )
+        ttk.Button(
+            priority_actions,
+            text="Select all",
+            command=lambda: self._set_limited_deal_priorities(True),
+            style="Utility.TButton",
+        ).pack(side="left")
+        ttk.Button(
+            priority_actions,
+            text="Clear",
+            command=lambda: self._set_limited_deal_priorities(False),
+            style="Utility.TButton",
+        ).pack(side="left", padx=(8, 0))
+
+        custom_outer, custom = self._labeled_section(page, "CUSTOM DROID ALERTS")
+        custom_outer.grid(row=1, column=1, sticky="nsew", padx=(8, 0))
+        custom.columnconfigure(0, weight=1)
+        custom.rowconfigure(1, weight=1)
+        custom_heading = ttk.Frame(custom)
+        custom_heading.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        custom_heading.columnconfigure(0, weight=1)
+        ttk.Label(
+            custom_heading,
+            textvariable=self.limited_deal_targets_var,
+            **muted_style(),
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Button(
+            custom_heading,
+            text="Modify",
+            command=self.choose_limited_deal_targets,
+            **bootstyle("info-outline"),
+        ).grid(row=0, column=1, sticky="e")
+
+        self.limited_deal_priority_tree = ttk.Treeview(
+            custom,
+            columns=("droid", "class", "minimum_tier"),
+            show="headings",
+            height=10,
+        )
+        self.limited_deal_priority_tree.heading("droid", text="Droid")
+        self.limited_deal_priority_tree.heading("class", text="Class")
+        self.limited_deal_priority_tree.heading("minimum_tier", text="Alert from")
+        self.limited_deal_priority_tree.column("droid", anchor="w", stretch=True, minwidth=120)
+        self.limited_deal_priority_tree.column("class", anchor="w", stretch=False, width=85)
+        self.limited_deal_priority_tree.column(
+            "minimum_tier", anchor="w", stretch=False, width=100
+        )
+        custom_scroll = ttk.Scrollbar(
+            custom,
+            orient="vertical",
+            command=self.limited_deal_priority_tree.yview,
+        )
+        self.limited_deal_priority_tree.configure(yscrollcommand=custom_scroll.set)
+        self.limited_deal_priority_tree.grid(row=1, column=0, sticky="nsew")
+        custom_scroll.grid(row=1, column=1, sticky="ns")
+
     def _build_logs_tab(self) -> None:
         page = self.logs_tab
         page.rowconfigure(1, weight=1)
@@ -1177,6 +1386,7 @@ class DroidAlertsApp:
                 "All",
                 "Priority alerts",
                 "Belt Tracker",
+                "Limited Deals",
                 "Detections",
                 "Delivery failures",
                 "Debug",
@@ -2032,6 +2242,14 @@ class DroidAlertsApp:
             selected = set(self.config.targets)
             for combo, var in self.alert_vars.items():
                 var.set(combo in selected)
+            limited_deal_priorities = {
+                tuple(combo)
+                for combo in normalize_limited_deal_priority_alerts(
+                    self.config.limited_deal_priority_alerts
+                )
+            }
+            for combo, var in self.limited_deal_priority_vars.items():
+                var.set(combo in limited_deal_priorities)
             for key in (
                 "popup_enabled",
                 "sound_enabled",
@@ -2099,6 +2317,7 @@ class DroidAlertsApp:
             self.refresh_sound_choices()
             self.refresh_channel_statuses()
             self._refresh_belt_target_text()
+            self._refresh_limited_deal_target_text()
             self._load_belt_region()
             self._refresh_capture_source_text()
             if not self.is_watching():
@@ -2879,6 +3098,43 @@ class DroidAlertsApp:
                 values=(name, belt_target_label(target_tiers[name])),
             )
 
+    def _set_limited_deal_priorities(self, selected: bool) -> None:
+        for var in self.limited_deal_priority_vars.values():
+            var.set(selected)
+        self.detail_var.set(
+            "All Limited Deal priority alerts selected"
+            if selected
+            else "Limited Deal priority alerts cleared"
+        )
+
+    def _refresh_limited_deal_target_text(self) -> None:
+        target_tiers = normalize_limited_deal_target_tiers(
+            self.config.limited_deal_target_tiers
+        )
+        selected_droids = [
+            droid for droid in LIMITED_DEAL_DROIDS if str(droid.id) in target_tiers
+        ]
+        self.limited_deal_targets_var.set(
+            f"{len(selected_droids)} custom rule{'s' if len(selected_droids) != 1 else ''}"
+            if selected_droids
+            else "No custom droid rules"
+        )
+        if self.limited_deal_priority_tree is None:
+            return
+        for item in self.limited_deal_priority_tree.get_children():
+            self.limited_deal_priority_tree.delete(item)
+        for droid in selected_droids:
+            self.limited_deal_priority_tree.insert(
+                "",
+                "end",
+                iid=f"limited-{droid.id}",
+                values=(
+                    droid.name,
+                    droid.rarity,
+                    limited_deal_target_label(target_tiers[str(droid.id)]),
+                ),
+            )
+
     def select_belt_region(self) -> None:
         if self.is_belt_tracking():
             self.belt_detail_var.set("Stop Belt Tracker before changing its region.")
@@ -3215,6 +3471,275 @@ class DroidAlertsApp:
         )
         dialog.geometry(f"{dialog_width}x{dialog_height}")
         dialog.minsize(min(620, dialog_width), min(700, dialog_height))
+        search_entry.focus_set()
+
+    def choose_limited_deal_targets(self) -> None:
+        dialog = tk.Toplevel(self.root)
+        self._style_dialog_window(dialog)
+        dialog.title("Limited Deal Alert Rules")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        body = ttk.Frame(dialog, padding=20)
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body,
+            text="Custom Droid Alerts",
+            font=self._font(14, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            body,
+            text=(
+                "Choose the minimum Limited Deal tier for each droid. Higher tiers also alert: "
+                "Default → Gold → Diamond → Rainbow → Beskar → Galactic."
+            ),
+            wraplength=700,
+            justify="left",
+            **muted_style(),
+        ).pack(anchor="w", pady=(4, 12))
+
+        search_row = ttk.Frame(body)
+        search_row.pack(fill="x", pady=(0, 10))
+        search_row.columnconfigure(1, weight=1)
+        ttk.Label(search_row, text="Search").grid(
+            row=0, column=0, sticky="w", padx=(0, 8)
+        )
+        search_var = StringVar()
+        search_entry = ttk.Entry(search_row, textvariable=search_var)
+        search_entry.grid(row=0, column=1, sticky="ew")
+        ttk.Button(
+            search_row,
+            text="Clear",
+            command=lambda: search_var.set(""),
+            style="Utility.TButton",
+        ).grid(row=0, column=2, padx=(8, 0))
+
+        list_frame = ttk.Frame(body)
+        list_frame.pack(fill="both", expand=True)
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
+        picker = ttk.Treeview(
+            list_frame,
+            columns=("droid", "class", "minimum_tier"),
+            show="headings",
+            selectmode="extended",
+            height=12,
+        )
+        picker.heading("droid", text="Droid")
+        picker.heading("class", text="Class")
+        picker.heading("minimum_tier", text="Alert from")
+        picker.column("droid", anchor="w", stretch=True, minwidth=260)
+        picker.column("class", anchor="w", stretch=False, width=110)
+        picker.column("minimum_tier", anchor="w", stretch=False, width=135)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=picker.yview)
+        picker.configure(yscrollcommand=scrollbar.set)
+        picker.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        rules = normalize_limited_deal_target_tiers(
+            self.config.limited_deal_target_tiers
+        )
+        count_var = StringVar()
+        feedback_var = StringVar()
+        tier_var = StringVar(
+            value=LIMITED_DEAL_TARGET_LABELS[LIMITED_DEAL_FAMILY_ORDER[0]]
+        )
+        tier_values = ("Off",) + tuple(
+            LIMITED_DEAL_TARGET_LABELS[family]
+            for family in LIMITED_DEAL_FAMILY_ORDER
+        )
+
+        def refresh_count(_event=None) -> None:
+            selected_count = len(picker.selection())
+            visible_count = len(picker.get_children())
+            count_var.set(
+                f"{len(rules)} alert rule{'s' if len(rules) != 1 else ''} · "
+                f"{visible_count} shown · {selected_count} selected"
+            )
+
+        def refresh_picker(*_args) -> None:
+            selected = set(picker.selection())
+            query = search_var.get().strip().casefold()
+            for item in picker.get_children():
+                picker.delete(item)
+            for droid in LIMITED_DEAL_DROIDS:
+                haystack = f"{droid.name} {droid.rarity}".casefold()
+                if query and query not in haystack:
+                    continue
+                item_id = str(droid.id)
+                picker.insert(
+                    "",
+                    "end",
+                    iid=item_id,
+                    values=(
+                        droid.name,
+                        droid.rarity,
+                        limited_deal_target_label(rules.get(item_id)),
+                    ),
+                )
+                if item_id in selected:
+                    picker.selection_add(item_id)
+            refresh_count()
+
+        def select_all(_event=None) -> str:
+            picker.selection_set(picker.get_children())
+            refresh_count()
+            return "break"
+
+        def apply_tier(_event=None) -> str:
+            selected = tuple(picker.selection())
+            if not selected:
+                feedback_var.set("Select one or more droids first.")
+                return "break"
+            label = tier_var.get()
+            family = LIMITED_DEAL_TARGET_FAMILIES_BY_LABEL.get(label)
+            for droid_id in selected:
+                if family is None:
+                    rules.pop(droid_id, None)
+                else:
+                    rules[droid_id] = family
+                if picker.exists(droid_id):
+                    droid = next(
+                        item for item in LIMITED_DEAL_DROIDS if item.id == int(droid_id)
+                    )
+                    picker.item(
+                        droid_id,
+                        values=(
+                            droid.name,
+                            droid.rarity,
+                            limited_deal_target_label(rules.get(droid_id)),
+                        ),
+                    )
+            feedback_var.set(
+                f"Updated {len(selected)} droid{'s' if len(selected) != 1 else ''} to {label}."
+            )
+            refresh_count()
+            return "break"
+
+        def cycle_tier(event) -> str:
+            droid_id = picker.identify_row(event.y)
+            if not droid_id:
+                return "break"
+            current = rules.get(droid_id)
+            choices: tuple[str | None, ...] = (None,) + LIMITED_DEAL_FAMILY_ORDER
+            next_family = choices[(choices.index(current) + 1) % len(choices)]
+            if next_family is None:
+                rules.pop(droid_id, None)
+            else:
+                rules[droid_id] = next_family
+            droid = next(item for item in LIMITED_DEAL_DROIDS if item.id == int(droid_id))
+            picker.selection_set(droid_id)
+            picker.item(
+                droid_id,
+                values=(
+                    droid.name,
+                    droid.rarity,
+                    limited_deal_target_label(rules.get(droid_id)),
+                ),
+            )
+            tier_var.set(limited_deal_target_label(rules.get(droid_id)))
+            feedback_var.set(f"{droid.name}: {limited_deal_target_label(rules.get(droid_id))}")
+            refresh_count()
+            return "break"
+
+        def set_all_default() -> None:
+            rules.clear()
+            rules.update(
+                {str(droid.id): LIMITED_DEAL_FAMILY_ORDER[0] for droid in LIMITED_DEAL_DROIDS}
+            )
+            feedback_var.set("Every rotating droid will alert from Default upward.")
+            refresh_picker()
+
+        def clear_rules() -> None:
+            rules.clear()
+            feedback_var.set("All custom Limited Deal rules cleared.")
+            refresh_picker()
+
+        def save_targets(_event=None) -> str:
+            config = load_config()
+            config.limited_deal_target_tiers = normalize_limited_deal_target_tiers(rules)
+            save_config(config)
+            self.config = config
+            self._refresh_limited_deal_target_text()
+            self._evaluate_current_limited_deal()
+            self.detail_var.set("Limited Deal droid rules saved")
+            dialog.destroy()
+            return "break"
+
+        picker.bind("<<TreeviewSelect>>", refresh_count)
+        picker.bind("<Control-a>", select_all)
+        picker.bind("<Command-a>", select_all)
+        picker.bind("<Double-1>", cycle_tier)
+        search_var.trace_add("write", refresh_picker)
+        ttk.Label(body, textvariable=count_var, **muted_style()).pack(
+            anchor="w", pady=(8, 0)
+        )
+
+        edit_row = ttk.Frame(body)
+        edit_row.pack(fill="x", pady=(10, 0))
+        ttk.Label(edit_row, text="Set selected to").pack(side="left")
+        tier_picker = ttk.Combobox(
+            edit_row,
+            textvariable=tier_var,
+            values=tier_values,
+            state="readonly",
+            width=14,
+        )
+        tier_picker.pack(side="left", padx=(8, 0))
+        tier_picker.bind("<<ComboboxSelected>>", apply_tier)
+        ttk.Button(
+            edit_row,
+            text="Apply",
+            command=apply_tier,
+            **bootstyle("info-outline"),
+        ).pack(side="left", padx=(8, 0))
+        ttk.Label(edit_row, textvariable=feedback_var, **muted_style()).pack(
+            side="left", padx=(12, 0)
+        )
+        ttk.Label(
+            body,
+            text="Tip: select several rows to edit together, or double-click a row to advance it.",
+            **muted_style(),
+        ).pack(anchor="w", pady=(6, 0))
+
+        actions = ttk.Frame(body)
+        actions.pack(fill="x", pady=(12, 0))
+        ttk.Button(
+            actions,
+            text="All Default+",
+            command=set_all_default,
+            **bootstyle("info-outline"),
+        ).pack(side="left")
+        ttk.Button(
+            actions,
+            text="Clear all",
+            command=clear_rules,
+            **bootstyle("danger-outline"),
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Cancel", command=dialog.destroy).pack(
+            side="right", padx=(8, 0)
+        )
+        ttk.Button(
+            actions,
+            text="Save",
+            command=save_targets,
+            **bootstyle("primary"),
+        ).pack(side="right")
+        dialog.bind("<Control-s>", save_targets)
+        dialog.bind("<Command-s>", save_targets)
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        refresh_picker()
+        dialog.update_idletasks()
+        dialog_width, dialog_height = fit_window_size(
+            max(PRIORITY_DIALOG_WIDTH, dialog.winfo_reqwidth() + 20),
+            max(PRIORITY_DIALOG_HEIGHT, dialog.winfo_reqheight() + 20),
+            dialog.winfo_screenwidth(),
+            dialog.winfo_screenheight(),
+            horizontal_margin=80,
+            vertical_margin=120,
+        )
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        dialog.minsize(min(660, dialog_width), min(700, dialog_height))
         search_entry.focus_set()
 
     def _belt_overlay_changed(self) -> None:
@@ -4032,6 +4557,253 @@ class DroidAlertsApp:
         except (RuntimeError, tk.TclError):
             pass
 
+    def _start_limited_deals(self) -> None:
+        self._limited_deal_countdown_tick()
+        if not self.config.limited_deal_url.strip():
+            self.limited_deal_offer_var.set("Limited deal unavailable")
+            return
+        service = LimitedDealService(
+            self.config.limited_deal_url,
+            data_dir() / "limited_deal_cache.json",
+            self._queue_limited_deal_status,
+        )
+        self.limited_deal_service = service
+        service.start()
+
+    def _queue_limited_deal_status(self, status: LimitedDealStatus) -> None:
+        self._post_to_ui(
+            lambda status=status: self._handle_limited_deal_status(status)
+        )
+
+    def _handle_limited_deal_status(self, status: LimitedDealStatus) -> None:
+        if self._shutting_down:
+            return
+        deal = status.deal if status.deal is not None and status.deal.is_current() else None
+        self.current_limited_deal = deal
+
+        if deal is None:
+            self.limited_deal_offer_var.set(
+                "Limited deal unavailable" if status.error else "Getting limited deal..."
+            )
+            self.limited_deal_timer_var.set("--:--:--")
+            self._set_limited_deal_portrait(None)
+            if status.error:
+                self.detail_var.set(f"Limited Deal check failed: {status.error}")
+            return
+
+        self.limited_deal_offer_var.set(
+            f"{deal.droid} - {deal.mutation} {deal.rarity}"
+        )
+        self._set_limited_deal_portrait(status.portrait_path)
+        self._render_limited_deal_countdown(datetime.now(timezone.utc))
+        if status.error:
+            self.detail_var.set(f"Limited Deal check failed: {status.error}")
+        self._evaluate_current_limited_deal()
+
+    def _set_limited_deal_portrait(self, path: Path | None) -> None:
+        label = self.limited_deal_portrait_label
+        if label is None:
+            return
+        if path is None or not path.is_file():
+            self.limited_deal_portrait_image = None
+            label.configure(image="")
+            return
+        try:
+            source = tk.PhotoImage(master=self.root, file=str(path))
+            largest_side = max(source.width(), source.height())
+            factor = max(1, (largest_side + 89) // 90)
+            image = source.subsample(factor, factor)
+        except (OSError, RuntimeError, tk.TclError):
+            self.limited_deal_portrait_image = None
+            label.configure(image="")
+            return
+        self.limited_deal_portrait_image = image
+        label.configure(image=image)
+
+    def _limited_deal_countdown_tick(self) -> None:
+        self._limited_deal_countdown_after_id = None
+        if self._shutting_down:
+            return
+        self._render_limited_deal_countdown(datetime.now(timezone.utc))
+        self._limited_deal_countdown_after_id = self.root.after(
+            250,
+            self._limited_deal_countdown_tick,
+        )
+
+    def _render_limited_deal_countdown(self, now: datetime) -> None:
+        deal = self.current_limited_deal
+        if deal is None:
+            return
+        try:
+            ends_at = datetime.fromisoformat(deal.ends_at.replace("Z", "+00:00"))
+        except (TypeError, ValueError, OverflowError):
+            self.limited_deal_timer_var.set("--:--:--")
+            return
+        remaining = max(0, int((ends_at - now).total_seconds() + 0.999))
+        if remaining == 0:
+            self.limited_deal_offer_var.set("Getting limited deal...")
+            self.limited_deal_timer_var.set("00:00:00")
+            self._set_limited_deal_portrait(None)
+            return
+        hours, remainder = divmod(remaining, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        self.limited_deal_timer_var.set(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+
+    def _evaluate_current_limited_deal(self) -> None:
+        service = self.limited_deal_service
+        deal = self.current_limited_deal
+        if service is None or deal is None or not deal.is_current():
+            return
+        config = load_config()
+        if not limited_deal_matches(
+            deal,
+            config.limited_deal_priority_alerts,
+            config.limited_deal_target_tiers,
+        ):
+            return
+        if service.was_alerted(deal):
+            return
+        service.mark_alerted(deal)
+        self._send_limited_deal_alert(deal, config)
+
+    def _send_limited_deal_alert(self, deal: LimitedDeal, config: AppConfig) -> None:
+        detection = Detection(
+            droid=deal.droid,
+            rarity=f"{deal.mutation} {deal.rarity}",
+            row_box=(0, 0, 0, 0),
+            droid_score=1.0,
+            rarity_score=1.0,
+            rarity_margin=1.0,
+            score=1.0,
+            source="limited-deal",
+            shape_score=1.0,
+        )
+        alert_event: dict[str, object] = {
+            "ts": timestamp(),
+            "event_type": "limited_deal",
+            "source": "limited_deal",
+            "droid": deal.droid,
+            "droid_id": deal.droid_id,
+            "rarity": detection.rarity,
+            "deal_mutation": deal.mutation,
+            "droid_rarity": deal.rarity,
+            "starts_at": deal.starts_at,
+            "ends_at": deal.ends_at,
+            "alerted": True,
+            "is_priority": True,
+            "detail": "Matched Limited Deal alert rules",
+        }
+        append_event(alert_event)
+        self.detail_var.set(event_text(detection))
+
+        if config.sound_enabled:
+            try:
+                AlertPolicy(config).notify(detection)
+            except Exception as exc:
+                self.channel_status_vars["Sound"].set("Failed to play")
+                self.detail_var.set(f"Limited Deal sound failed: {exc}")
+        if config.popup_enabled:
+            try:
+                show_popup(
+                    detection,
+                    config.popup_seconds,
+                    icon_path=popup_icon_path(config),
+                    parent=self.root,
+                    monitor=self._current_monitor_info(),
+                    position=config.popup_position,
+                    scale=config.popup_scale,
+                    opacity=config.popup_opacity,
+                )
+            except Exception as exc:
+                self.channel_status_vars["Popup"].set("Failed to show")
+                self.detail_var.set(f"Limited Deal popup failed: {exc}")
+
+        deliveries: list[tuple[str, object, tuple[object, ...], dict[str, object]]] = []
+        if config.discord_enabled:
+            try:
+                webhook_url, _source = load_discord_webhook(config)
+            except Exception as exc:
+                webhook_url = None
+                self.channel_status_vars["Discord"].set(f"Failed · {str(exc)[:70]}")
+            if webhook_url:
+                deliveries.append(("Discord", send_discord_alert, (webhook_url, detection), {}))
+        if config.ntfy_enabled and ntfy_configured(config):
+            deliveries.append(
+                ("ntfy", send_ntfy_alert, (config, detection), {"attachment_path": None})
+            )
+        if config.phone_alerts_enabled:
+            try:
+                credentials, _source = load_phone_alert_credentials(config)
+            except Exception as exc:
+                credentials = None
+                self.channel_status_vars["Pushover"].set(f"Failed · {str(exc)[:70]}")
+            if credentials:
+                deliveries.append(
+                    (
+                        "Pushover",
+                        send_phone_alert,
+                        (credentials, detection),
+                        {"sound": config.phone_sound, "attachment_path": None},
+                    )
+                )
+
+        for label, target, args, kwargs in deliveries:
+            self.channel_status_vars[label].set("Sending…")
+            threading.Thread(
+                target=self._deliver_limited_deal_alert,
+                args=(label, target, args, kwargs, detection, deal.starts_at),
+                name=f"DroidAlertsLimitedDeal{label}",
+                daemon=True,
+            ).start()
+        self.refresh_logs(update_detail=False)
+
+    def _deliver_limited_deal_alert(
+        self,
+        label: str,
+        target,
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+        detection: Detection,
+        starts_at: str,
+    ) -> None:
+        try:
+            result = target(*args, **kwargs)
+            success = bool(getattr(result, "success", False))
+            detail = str(getattr(result, "message", "") or "")
+        except Exception as exc:
+            success = False
+            detail = str(exc)
+        delivery_event: dict[str, object] = {
+            "ts": timestamp(),
+            "event_type": "delivery",
+            "source": "limited_deal",
+            "channel": label,
+            "success": success,
+            "detail": detail,
+            "droid": detection.droid,
+            "rarity": detection.rarity,
+            "starts_at": starts_at,
+            "alerted": True,
+            "is_priority": True,
+            "score": detection.score,
+        }
+        append_event(delivery_event)
+        self._post_to_ui(
+            lambda label=label, event=delivery_event: self._limited_deal_delivery_finished(
+                label, event
+            )
+        )
+
+    def _limited_deal_delivery_finished(
+        self, label: str, event: dict[str, object]
+    ) -> None:
+        success = bool(event.get("success"))
+        detail = str(event.get("detail") or "")
+        self.channel_status_vars[label].set(
+            "Delivered just now" if success else f"Failed · {detail[:70]}"
+        )
+        self.refresh_logs(update_detail=False)
+
     def _queue_watcher_status(self, event: dict[str, object]) -> None:
         self._post_to_ui(lambda event=event: self._handle_watcher_status(event))
 
@@ -4184,7 +4956,11 @@ class DroidAlertsApp:
             var.set(value)
 
     def _wire_auto_save(self) -> None:
-        for var in [*self.setting_vars.values(), *self.alert_vars.values()]:
+        for var in [
+            *self.setting_vars.values(),
+            *self.alert_vars.values(),
+            *self.limited_deal_priority_vars.values(),
+        ]:
             if hasattr(var, "trace_add"):
                 var.trace_add("write", self._on_setting_changed)
         self._autosave_ready = True
@@ -4222,6 +4998,7 @@ class DroidAlertsApp:
                 save_config(config)
                 self.config = config
             self.prompt_notification_setup_if_needed()
+            self.show_limited_deals_intro_if_needed()
             return
 
         self._setup_dialog(
@@ -4262,6 +5039,27 @@ class DroidAlertsApp:
         self.config = config
 
         self.prompt_notification_setup_if_needed()
+        self.show_limited_deals_intro_if_needed()
+
+    def show_limited_deals_intro_if_needed(self) -> None:
+        config = load_config()
+        if config.limited_deals_intro_shown:
+            return
+        confirmed = self._setup_dialog(
+            "Limited Deals",
+            intro=(
+                "Get alerted when the limited deal is something you want. "
+                "Pick a range of droids, or select any droid you want! "
+                "Alert takes around 10 seconds"
+            ),
+            ok_text="Got It",
+            cancel_text="",
+        )
+        if confirmed is None:
+            return
+        config.limited_deals_intro_shown = True
+        save_config(config)
+        self.config = config
 
     def offer_discord_community(self) -> None:
         """Offer the community link once to installs carrying a pre-1.3 config."""
@@ -4319,6 +5117,11 @@ class DroidAlertsApp:
     def save_settings(self, *, interactive: bool = True, update_detail: bool = True) -> AppConfig | None:
         previous_config = self.config
         selected = [combo for combo, var in self.alert_vars.items() if var.get()]
+        selected_limited_deal_priorities = [
+            combo
+            for combo, var in self.limited_deal_priority_vars.items()
+            if var.get()
+        ]
         if interactive and not selected and not self._confirm_message(
             "No Priority Alerts",
             "Continue with no priority alerts selected?",
@@ -4407,6 +5210,9 @@ class DroidAlertsApp:
         config.update_repo = str(self._value("update_repo")).strip() or "DogifiedV2/droidalerts"
         config.advanced_mode = bool(self._value("advanced_mode"))
         config.alert_targets = [list(combo) for combo in selected]
+        config.limited_deal_priority_alerts = [
+            list(combo) for combo in selected_limited_deal_priorities
+        ]
 
         # Channels that are on but not configured yet simply stay quiet until
         # their Set Up button is used, with no wizard nagging on every save.
@@ -4420,6 +5226,7 @@ class DroidAlertsApp:
 
         save_config(config)
         self.config = config
+        self._evaluate_current_limited_deal()
         timer_changed = any(
             getattr(previous_config, key) != getattr(config, key)
             for key in ("timer_reminders_enabled", "timer_reminder_seconds", "timer_offset_seconds")
@@ -5172,6 +5979,7 @@ class DroidAlertsApp:
                 continue
             if selected_filter == "Priority alerts" and not (
                 event_type == "alert"
+                or event_type == "limited_deal"
                 or (event_type.startswith("belt_") and bool(row.get("alerted")))
                 or (not event_type and bool(row.get("alerted")))
             ):
@@ -5180,11 +5988,17 @@ class DroidAlertsApp:
                 str(row.get("source") or "") == "belt_tracker" or event_type.startswith("belt_")
             ):
                 continue
+            if selected_filter == "Limited Deals" and not (
+                str(row.get("source") or "") == "limited_deal"
+                or event_type == "limited_deal"
+            ):
+                continue
             if selected_filter == "Detections" and event_type not in {
                 "alert",
                 "detected",
                 "seen",
                 "belt_entered",
+                "limited_deal",
             }:
                 continue
             if selected_filter == "Delivery failures" and not (
@@ -5907,6 +6721,8 @@ class DroidAlertsApp:
         self._belt_restart_after_stop = False
         self.detail_var.set("Update installed, restarting...")
         self.app_telemetry.stop()
+        if self.limited_deal_service is not None:
+            self.limited_deal_service.stop()
         if self.stop_event is not None:
             self.stop_event.set()
         if self.belt_stop_event is not None:
@@ -5932,6 +6748,8 @@ class DroidAlertsApp:
         self._shutting_down = True
         self._belt_restart_after_stop = False
         self.app_telemetry.stop()
+        if self.limited_deal_service is not None:
+            self.limited_deal_service.stop()
         if self._autosave_after_id is not None:
             try:
                 self.root.after_cancel(self._autosave_after_id)
@@ -5942,6 +6760,7 @@ class DroidAlertsApp:
         for after_id in (
             self._log_refresh_after_id,
             self._dashboard_timer_after_id,
+            self._limited_deal_countdown_after_id,
             self._storage_after_id,
             self._update_poll_after_id,
             self._belt_poll_after_id,
