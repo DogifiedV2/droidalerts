@@ -222,7 +222,10 @@ class MSSCapture:
         self._mss = _mss_instance()
         self.monitor_index = monitor_index
         if monitor_index < 1 or monitor_index >= len(self._mss.monitors):
-            self.monitor_index = 1
+            self._mss.close()
+            raise RuntimeError(
+                f"Monitor {monitor_index} is unavailable. Select an available monitor in Droid Alerts."
+            )
         mon = self._mss.monitors[self.monitor_index]
         self.monitor = MonitorInfo(
             left=int(mon["left"]),

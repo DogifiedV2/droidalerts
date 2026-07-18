@@ -10,6 +10,7 @@ import cv2
 
 from .alerts import AlertPolicy, row_hash
 from .capture import create_capture, set_dpi_awareness
+from .classifier import Detection
 from .config import (
     CALIBRATION_FILE,
     CONFIG_FILE,
@@ -32,7 +33,16 @@ from .notifications import (
 from .pipeline import Pipeline
 from .popup import popup_icon_path, show_popup
 from .region import RegionResolver
+from .rebirth import (
+    RebirthAlertDetector,
+    RebirthMatch,
+    RebirthPresenceGate,
+    rebirth_region,
+)
 from .telemetry import AnonymousTelemetryClient
+
+
+REBIRTH_SCAN_INTERVAL_SECONDS = 0.4
 
 
 def _capture_target_signature(config: AppConfig) -> tuple[object, ...]:
@@ -259,9 +269,15 @@ def run_watch(
         screen_width=screen_w,
         screen_height=screen_h,
         region_source=region_source,
+        rebirth_alert_enabled=config.rebirth_alert_enabled,
         **_capture_status(active_capture_config),
     )
     last_scan_status_at = 0.0
+    rebirth_detector: RebirthAlertDetector | None = None
+    rebirth_detector_failed = False
+    rebirth_gate = RebirthPresenceGate()
+    next_rebirth_scan_at = 0.0
+    last_rebirth_alert_at = float("-inf")
 
     def deliver(target, args: tuple, kwargs: dict, event: dict[str, object]) -> None:
         result = None
@@ -290,6 +306,122 @@ def run_watch(
         }
         _append_event_safely(delivery_event, emit=emit)
         emit("delivery", result=delivery_event)
+
+    def fire_rebirth_alert(
+        match: RebirthMatch,
+        rebirth_band,
+        rebirth_box,
+    ) -> None:
+        local_box = match.box or (0, 0, rebirth_band.shape[1], rebirth_band.shape[0])
+        x1, y1, x2, y2 = local_box
+        detection = Detection(
+            droid="Rebirth",
+            rarity="Available",
+            row_box=(
+                rebirth_box.left + x1,
+                rebirth_box.top + y1,
+                rebirth_box.left + x2,
+                rebirth_box.top + y2,
+            ),
+            droid_score=match.score,
+            rarity_score=match.score,
+            rarity_margin=match.score,
+            score=match.score,
+            source="rebirth-alert",
+        )
+        event = {
+            "ts": timestamp(),
+            "event_type": "alert",
+            "frame": frame_index,
+            "screen_width": screen_w,
+            "screen_height": screen_h,
+            "monitor_index": active_capture_config.monitor_index,
+            "capture_source": active_capture_config.capture_source,
+            "capture_region": {
+                "source": "rebirth-right",
+                "left": rebirth_box.left,
+                "top": rebirth_box.top,
+                "width": rebirth_box.width,
+                "height": rebirth_box.height,
+            },
+            "template_scale": round(match.template_scale, 4),
+            "alerted": True,
+            **detection.to_dict(),
+        }
+        # Rebirth alerts are opt-in priority events even though they are not a
+        # chat droid/rarity pair from classifier.PRIORITY_ALERTS.
+        event["is_priority"] = True
+        event["should_alert"] = True
+
+        sample_path = None
+        needs_attachment = (
+            (config.ntfy_enabled and config.ntfy_include_attachment)
+            or (phone_credentials is not None and config.phone_include_attachment)
+        )
+        if config.save_alert_samples or needs_attachment:
+            try:
+                sample_path = _save_rebirth_sample(rebirth_band, local_box)
+            except Exception as exc:
+                print(f"[SAMPLE] Failed to save Rebirth Alert screenshot: {exc}")
+            else:
+                event["sample_path"] = str(sample_path)
+
+        _append_event_safely(event, emit=emit)
+        emit("alert", event=event)
+        print(f"[ALERT] {event['ts']} Rebirth droid available score={match.score:.2f}")
+        try:
+            policy.notify(detection)
+        except Exception as exc:
+            print(f"[SOUND] Failed to play Rebirth Alert: {exc}")
+            emit("sound_error", message=str(exc))
+        if config.popup_enabled:
+            show_popup(
+                detection,
+                config.popup_seconds,
+                icon_path=popup_icon_path(config),
+                parent=popup_parent,
+                monitor=getattr(capture, "monitor", None),
+                position=config.popup_position,
+                scale=config.popup_scale,
+                opacity=config.popup_opacity,
+            )
+        if webhook_url:
+            threading.Thread(
+                target=deliver,
+                args=(send_discord_alert, (webhook_url, detection), {}, event),
+                daemon=True,
+            ).start()
+        if config.ntfy_enabled and ntfy_configured(config):
+            threading.Thread(
+                target=deliver,
+                args=(
+                    send_ntfy_alert,
+                    (config, detection),
+                    {
+                        "attachment_path": (
+                            sample_path if config.ntfy_include_attachment else None
+                        )
+                    },
+                    event,
+                ),
+                daemon=True,
+            ).start()
+        if phone_credentials:
+            threading.Thread(
+                target=deliver,
+                args=(
+                    send_phone_alert,
+                    (phone_credentials, detection),
+                    {
+                        "sound": config.phone_sound,
+                        "attachment_path": (
+                            sample_path if config.phone_include_attachment else None
+                        ),
+                    },
+                    event,
+                ),
+                daemon=True,
+            ).start()
 
     # Live settings: the GUI autosaves config.json (and region nudges save
     # calibration.json); watching the file mtimes lets changes apply on the
@@ -371,6 +503,8 @@ def run_watch(
                     pipeline.apply_thresholds(config.thresholds)
                     pipeline.detector.extra_checks = config.extra_checks
                     log_dedupe_seconds = max(12.0, config.dedupe_seconds)
+                    if not config.rebirth_alert_enabled:
+                        rebirth_gate.reset()
                     webhook_url = None
                     if config.discord_enabled:
                         try:
@@ -411,6 +545,7 @@ def run_watch(
                         screen_width=screen_w,
                         screen_height=screen_h,
                         region_source=region_source,
+                        rebirth_alert_enabled=config.rebirth_alert_enabled,
                         **_capture_status(active_capture_config),
                     )
 
@@ -431,6 +566,7 @@ def run_watch(
                         screen_width=screen_w,
                         screen_height=screen_h,
                         region_source=region_source,
+                        rebirth_alert_enabled=config.rebirth_alert_enabled,
                         **_capture_status(active_capture_config),
                     )
 
@@ -450,6 +586,7 @@ def run_watch(
                         screen_width=screen_w,
                         screen_height=screen_h,
                         region_source=region_source,
+                        rebirth_alert_enabled=config.rebirth_alert_enabled,
                         **_capture_status(active_capture_config),
                     )
                 band = capture.grab(box)
@@ -474,11 +611,46 @@ def run_watch(
                             screen_width=screen_w,
                             screen_height=screen_h,
                             region_source=region_source,
+                            rebirth_alert_enabled=config.rebirth_alert_enabled,
                             **_capture_status(active_capture_config),
                         )
                 continue
 
             result = pipeline.detect(band, screen_height=screen_h, screen_width=screen_w, keep_normalized=True)
+            scan_now = time.monotonic()
+            if config.rebirth_alert_enabled and scan_now >= next_rebirth_scan_at:
+                next_rebirth_scan_at = scan_now + REBIRTH_SCAN_INTERVAL_SECONDS
+                if rebirth_detector is None and not rebirth_detector_failed:
+                    try:
+                        rebirth_detector = RebirthAlertDetector()
+                    except Exception as exc:
+                        rebirth_detector_failed = True
+                        print(f"[REBIRTH] Detector unavailable: {exc}")
+                        emit("rebirth_error", message=str(exc))
+                if rebirth_detector is not None:
+                    rebirth_box = rebirth_region(box, screen_w, screen_h)
+                    try:
+                        rebirth_band = capture.grab(rebirth_box)
+                        rebirth_match = rebirth_detector.detect(
+                            rebirth_band,
+                            screen_width=screen_w,
+                            screen_height=screen_h,
+                        )
+                    except Exception as exc:
+                        print(f"[REBIRTH] Scan failed: {exc}")
+                        emit("rebirth_error", message=str(exc))
+                    else:
+                        confirmed = rebirth_gate.update(rebirth_match.matched)
+                        emit(
+                            "rebirth_scan",
+                            matched=rebirth_match.matched,
+                            score=round(rebirth_match.score, 4),
+                            scanned_at=timestamp(),
+                        )
+                        cooldown = max(12.0, config.dedupe_seconds, config.alert_cooldown_seconds)
+                        if confirmed and scan_now - last_rebirth_alert_at >= cooldown:
+                            last_rebirth_alert_at = scan_now
+                            fire_rebirth_alert(rebirth_match, rebirth_band, rebirth_box)
             status_now = time.monotonic()
             if status_now - last_scan_status_at >= 1.0:
                 last_scan_status_at = status_now
@@ -727,6 +899,21 @@ def _save_sample(normalized_band, detection, label: str) -> tuple[Path, Path]:
     write_cv_image(raw_path, normalized_band)
     write_cv_image(det_path, draw_detections(normalized_band, [detection]))
     return raw_path, det_path
+
+
+def _save_rebirth_sample(
+    rebirth_band,
+    match_box: tuple[int, int, int, int],
+) -> Path:
+    stamp = timestamp()
+    folder = alert_samples_dir() / "Rebirth_Alert"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{stamp}_det.png"
+    marked = rebirth_band.copy()
+    x1, y1, x2, y2 = match_box
+    cv2.rectangle(marked, (x1, y1), (max(x1, x2 - 1), max(y1, y2 - 1)), (0, 255, 255), 2)
+    write_cv_image(path, marked)
+    return path
 
 
 def _stop_requested(stop_event) -> bool:

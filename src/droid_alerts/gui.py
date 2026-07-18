@@ -159,10 +159,24 @@ DISCORD_COMMUNITY_URL = "https://discord.gg/ZmFPjS4784"
 TRACKER_URL = "https://gonk.tools/tracker"
 WIKI_URL = "https://gonk.tools/wiki"
 IDENTIFY_INSTALL_URL = "https://gonk.tools/identify"
-DEFAULT_WINDOW_WIDTH = 1400
+DEFAULT_WINDOW_WIDTH = 1470
 DEFAULT_WINDOW_HEIGHT = 1040
+SIDEBAR_WIDTH = 232
 PRIORITY_DIALOG_WIDTH = 760
 PRIORITY_DIALOG_HEIGHT = 820
+REBIRTH_ALERT_TOOLTIP = (
+    "Receive a notification when a droid you need for rebirth spawns"
+)
+WHATS_NEW_ITEMS = (
+    "Limited Deals Tab",
+    "Belt Tracker Tab",
+    "Rebirth Priority Alert",
+    "Capture Card Display",
+    "GUI Rework",
+    "Themes in settings",
+    "Tracker: Added new settings for faster tracking",
+    "Added a wiki: has all galactic info!",
+)
 BELT_REGION_INSTRUCTIONS = (
     "Officially supported setup: stand at the start of the belt and match the guide with two "
     "complete blueprints visible. Price labels may be inside the box; they are ignored. Other "
@@ -176,6 +190,61 @@ def bootstyle(value: str) -> dict[str, str]:
 
 def muted_style() -> dict[str, str]:
     return {"style": "Muted.TLabel"}
+
+
+class HoverTooltip:
+    """Show short help text beside a widget while the pointer rests on it."""
+
+    def __init__(self, widget, text: str, *, delay_ms: int = 350) -> None:
+        self.widget = widget
+        self.text = text
+        self.delay_ms = max(0, int(delay_ms))
+        self._after_id: str | None = None
+        self._window: tk.Toplevel | None = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+        widget.bind("<ButtonPress>", self.hide, add="+")
+
+    def _schedule(self, _event=None) -> None:
+        self.hide()
+        self._after_id = self.widget.after(self.delay_ms, self.show)
+
+    def show(self) -> None:
+        self._after_id = None
+        if self._window is not None or not self.widget.winfo_exists():
+            return
+        window = tk.Toplevel(self.widget)
+        window.wm_overrideredirect(True)
+        try:
+            window.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        tk.Label(
+            window,
+            text=self.text,
+            background="#fff4c2",
+            foreground="#171717",
+            relief="solid",
+            borderwidth=1,
+            padx=8,
+            pady=5,
+        ).pack()
+        window.update_idletasks()
+        x = self.widget.winfo_pointerx() + 14
+        y = self.widget.winfo_pointery() + 18
+        window.wm_geometry(f"+{x}+{y}")
+        self._window = window
+
+    def hide(self, _event=None) -> None:
+        if self._after_id is not None:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except tk.TclError:
+                pass
+            self._after_id = None
+        if self._window is not None:
+            self._window.destroy()
+            self._window = None
 
 
 def fit_window_size(
@@ -374,8 +443,9 @@ class DroidAlertsApp:
         self.limited_deal_priority_vars: dict[tuple[str, str], BooleanVar] = {}
         self.advanced_widgets: list[object] = []
         self.monitor_display_var = StringVar(value="Monitor 1")
-        self.capture_source_var = StringVar(value="Both watchers: Monitor 1")
+        self.capture_source_var = StringVar(value="Active source: Monitor 1")
         self.monitor_indexes_by_label: dict[str, int] = {}
+        self.use_monitor_button = None
         self.options_outer = None
         self.options_canvas: tk.Canvas | None = None
         self.options_canvas_window: int | None = None
@@ -474,7 +544,7 @@ class DroidAlertsApp:
 
         sidebar = ttk.Frame(
             outer,
-            width=214,
+            width=SIDEBAR_WIDTH,
             padding=(14, 18, 14, 16),
             style="Sidebar.TFrame",
         )
@@ -665,6 +735,11 @@ class DroidAlertsApp:
         self._refresh_header_status()
         self.notebook.bind("<<NotebookTabChanged>>", self._highlight_active_tab, add="+")
         self.notebook.bind("<<NotebookTabChanged>>", self._on_belt_tab_opened, add="+")
+        self.notebook.bind(
+            "<<NotebookTabChanged>>",
+            self._on_limited_deals_tab_opened,
+            add="+",
+        )
         self._highlight_active_tab()
 
         self._build_dashboard_tab()
@@ -895,7 +970,7 @@ class DroidAlertsApp:
         display_group.grid(row=1, column=0, sticky="nw", pady=(10, 0))
         ttk.Label(
             display_group,
-            text="Game display",
+            text="Monitor capture",
             style="SubtleMuted.TLabel",
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 5))
         self.monitor_combobox = ttk.Combobox(
@@ -913,6 +988,13 @@ class DroidAlertsApp:
             command=self.identify_displays,
             style="Utility.TButton",
         ).grid(row=1, column=1, sticky="w", padx=(8, 0))
+        self.use_monitor_button = ttk.Button(
+            display_group,
+            text="Use this monitor",
+            command=self.use_monitor_capture,
+            style="Utility.TButton",
+        )
+        self.use_monitor_button.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         alternate_sources = ttk.Frame(source_panel, style="Subtle.TFrame")
         alternate_sources.grid(row=1, column=1, sticky="nw", padx=(24, 0), pady=(10, 0))
@@ -1020,6 +1102,25 @@ class DroidAlertsApp:
                 variable=var,
                 **bootstyle("round-toggle"),
             ).grid(row=index // 2, column=index % 2, sticky="w", pady=5)
+
+        rebirth_index = len(ALERT_COMBOS)
+        self.setting_vars["rebirth_alert_enabled"] = BooleanVar(value=False)
+        self.rebirth_alert_check = ttk.Checkbutton(
+            alerts,
+            text="Enable Rebirth Alert",
+            variable=self.setting_vars["rebirth_alert_enabled"],
+            **bootstyle("round-toggle"),
+        )
+        self.rebirth_alert_check.grid(
+            row=rebirth_index // 2,
+            column=rebirth_index % 2,
+            sticky="w",
+            pady=5,
+        )
+        self.rebirth_alert_tooltip = HoverTooltip(
+            self.rebirth_alert_check,
+            REBIRTH_ALERT_TOOLTIP,
+        )
 
     def _build_alert_channels(self, parent, *, row: int) -> None:
         channels_outer, channels = self._labeled_section(parent, "ALERT CHANNELS")
@@ -1963,6 +2064,14 @@ class DroidAlertsApp:
             self._belt_overlay_requested = True
             self._configure_belt_overlay()
 
+    def _on_limited_deals_tab_opened(self, _event=None) -> None:
+        try:
+            selected = self.root.nametowidget(self.notebook.select())
+        except Exception:
+            return
+        if selected is self.limited_deals_tab:
+            self.show_limited_deals_intro_if_needed()
+
     def _show_belt_cpu_warning_if_needed(self) -> None:
         config = getattr(self, "config", None) or load_config()
         if config.belt_cpu_warning_confirmed:
@@ -2265,6 +2374,7 @@ class DroidAlertsApp:
                 "save_debug_screenshots",
                 "share_debug_detections",
                 "start_watcher_on_launch",
+                "rebirth_alert_enabled",
                 "timer_reminders_enabled",
                 "belt_overlay_enabled",
                 "belt_dev_mode",
@@ -2349,7 +2459,30 @@ class DroidAlertsApp:
     def _refresh_capture_source_text(self) -> None:
         if not hasattr(self, "capture_source_var"):
             return
-        self.capture_source_var.set(f"Both watchers: {self._capture_target_label()}")
+        if self.config.capture_source == "window":
+            selected = (
+                self.config.capture_window_title
+                or self.config.capture_window_process
+                or "Selected window"
+            )
+            text = (
+                f"Active source: Window: {selected} - follows the selected window "
+                "between monitors"
+            )
+        else:
+            text = f"Active source: {self._capture_target_label()}"
+        self.capture_source_var.set(text)
+
+        monitor_active = self.config.capture_source == "monitor"
+        monitor_combobox = getattr(self, "monitor_combobox", None)
+        if monitor_combobox is not None:
+            monitor_combobox.configure(state="readonly" if monitor_active else "disabled")
+        use_monitor_button = getattr(self, "use_monitor_button", None)
+        if use_monitor_button is not None:
+            use_monitor_button.configure(
+                state="disabled" if monitor_active else "normal",
+                text="Monitor active" if monitor_active else "Use this monitor",
+            )
 
     def _set_monitor_capture_source(self) -> None:
         self.config.capture_source = "monitor"
@@ -2484,14 +2617,17 @@ class DroidAlertsApp:
 
         selected_monitor = next(
             (monitor for monitor in monitors if monitor.index == selected_index),
-            monitors[0],
+            None,
         )
-        if selected_monitor.index != selected_index:
-            self._set_var("monitor_index", selected_monitor.index)
+        if selected_monitor is None:
+            unavailable_label = f"Monitor {selected_index} (temporarily unavailable)"
+            self.monitor_indexes_by_label[unavailable_label] = selected_index
+            self.monitor_combobox.configure(values=(*labels, unavailable_label))
+            self.monitor_display_var.set(unavailable_label)
+            self._refresh_capture_source_text()
+            return
         self.monitor_display_var.set(format_monitor_label(selected_monitor, primary))
         self._refresh_capture_source_text()
-        if sync_belt and selected_monitor.index != selected_index:
-            self._on_belt_monitor_changed()
 
     def _apply_monitor_index(self, monitor_index: int) -> None:
         previous_index = max(1, int(self._value("monitor_index")))
@@ -2509,6 +2645,10 @@ class DroidAlertsApp:
         self.belt_last_scan_var.set("No belt scans yet")
 
     def on_monitor_selected(self, _event=None) -> None:
+        # Window and capture-device modes are explicit alternatives. Their
+        # inactive monitor choice must not silently replace the active source.
+        if self.config.capture_source != "monitor":
+            return
         label = self.monitor_display_var.get()
         monitor_index = self.monitor_indexes_by_label.get(label)
         if monitor_index is None:
@@ -2538,6 +2678,41 @@ class DroidAlertsApp:
             self.detail_var.set(f"{label} selected; chat region could not be shown: {overlay_error}")
         else:
             self.detail_var.set(f"{label} selected and applied")
+
+    def use_monitor_capture(self) -> None:
+        """Explicitly leave window/device capture and activate the shown monitor."""
+        if self.config.capture_source == "monitor":
+            return
+
+        overlay_was_open = False
+        if self.region_overlay is not None:
+            try:
+                overlay_was_open = bool(self.region_overlay.winfo_exists())
+            except Exception:
+                overlay_was_open = False
+        if overlay_was_open:
+            self.close_region_overlay()
+        if self.is_belt_tracking():
+            self._belt_restart_after_stop = True
+            self.stop_belt_tracking(reason="monitor-change")
+
+        self._set_monitor_capture_source()
+        saved = self.save_settings(interactive=False, update_detail=False)
+        if saved is None:
+            self.detail_var.set("Monitor capture could not be activated; fix the invalid setting")
+            if overlay_was_open:
+                try:
+                    self.toggle_region_overlay()
+                except Exception:
+                    pass
+            return
+
+        self._maybe_close_device_capture_session()
+        if not self.is_watching():
+            self.watcher_detail_var.set(self._watcher_ready_text())
+        self.detail_var.set(f"{self.monitor_display_var.get()} is now the active capture source")
+        if overlay_was_open:
+            self.root.after(0, self.toggle_region_overlay)
 
     def select_capture_window(self) -> None:
         if sys.platform != "win32":
@@ -2572,7 +2747,7 @@ class DroidAlertsApp:
             body,
             text=(
                 "Keep Fortnite restored; Windows can pause capture while it is minimized. "
-                "This changes both the chat watcher and Belt Tracker. Timers still use Game display."
+                "This changes both the chat watcher and Belt Tracker. Timers still use the selected monitor."
             ),
             wraplength=560,
             justify="left",
@@ -2707,7 +2882,7 @@ class DroidAlertsApp:
                         pass
                 return
             self.watcher_detail_var.set(self._watcher_ready_text())
-            self.detail_var.set("Chat watcher changed back to Game display")
+            self.detail_var.set("Chat watcher changed back to monitor capture")
             close_dialog()
             if overlay_was_open:
                 self.root.after(0, self.toggle_region_overlay)
@@ -2794,7 +2969,7 @@ class DroidAlertsApp:
         ).grid(row=0, column=0, sticky="w")
         ttk.Button(
             buttons,
-            text="Use Game Display",
+            text="Use Monitor Capture",
             command=use_game_display,
             style="Utility.TButton",
         ).grid(row=0, column=1, sticky="w", padx=(8, 0))
@@ -4810,13 +4985,13 @@ class DroidAlertsApp:
     def _handle_watcher_status(self, event: dict[str, object]) -> None:
         event_type = str(event.get("type") or "")
         if event_type in {"watcher_ready", "config_reloaded"}:
-            monitor_index = event.get("monitor_index")
-            if monitor_index is not None and int(monitor_index) != int(self._value("monitor_index")):
-                self._apply_monitor_index(int(monitor_index))
+            capture_source = str(event.get("capture_source") or "monitor")
+            # Watcher events describe the running capture; they must never
+            # rewrite the user's desired monitor. A delayed status event can
+            # otherwise reset the selector and autosave the old monitor.
             width = event.get("screen_width", "?")
             height = event.get("screen_height", "?")
             source = event.get("region_source", "automatic")
-            capture_source = str(event.get("capture_source") or "monitor")
             capture_label = str(event.get("capture_label") or "").strip()
             if capture_source == "window":
                 target_label = f"Window: {capture_label or 'Selected window'}"
@@ -4824,7 +4999,7 @@ class DroidAlertsApp:
                 target_label = f"Capture device: {capture_label or 'Selected device'}"
             else:
                 target_label = self.monitor_display_var.get()
-            self.watcher_status_var.set("Watching for priority spawns")
+            self.watcher_status_var.set("Watching for alerts")
             self.watcher_detail_var.set(
                 f"{target_label} · {width} × {height} · Region: {source}"
             )
@@ -4840,9 +5015,15 @@ class DroidAlertsApp:
                 self.session_detection_count += 1
                 if event_type == "alert":
                     self.session_alert_count += 1
-                    self.last_alert_var.set(
-                        f"Last alert: {row.get('rarity', '')} {row.get('droid', '')} · {self._display_timestamp(str(row.get('ts', '')))}"
-                    )
+                    detected_at = self._display_timestamp(str(row.get("ts", "")))
+                    if str(row.get("source") or "") == "rebirth-alert":
+                        self.last_alert_var.set(
+                            f"Last alert: Rebirth droid available · {detected_at}"
+                        )
+                    else:
+                        self.last_alert_var.set(
+                            f"Last alert: {row.get('rarity', '')} {row.get('droid', '')} · {detected_at}"
+                        )
         elif event_type == "delivery":
             result = event.get("result")
             if isinstance(result, dict):
@@ -4856,6 +5037,10 @@ class DroidAlertsApp:
             message = str(event.get("message") or "Unknown capture error")
             self._set_watcher_state("Warning")
             self.watcher_detail_var.set(f"Screen capture failed; retrying automatically: {message}")
+        elif event_type == "rebirth_error":
+            message = str(event.get("message") or "Unknown Rebirth detector error")
+            self._set_watcher_state("Warning")
+            self.watcher_detail_var.set(f"Rebirth detection unavailable: {message}")
         elif event_type == "sound_error":
             message = str(event.get("message") or "Unknown sound error")
             self.channel_status_vars["Sound"].set(f"Failed · {message[:70]}")
@@ -4988,9 +5173,40 @@ class DroidAlertsApp:
         else:
             self.detail_var.set("Settings saved automatically")
 
+    def show_whats_new_if_needed(self, config: AppConfig | None = None) -> bool:
+        """Show release notes after an update, never on a fresh first launch."""
+
+        config = config or load_config()
+        last_seen_version = config.last_seen_version.strip()
+        completed_first_start = bool(
+            config.intro_shown or config.notification_setup_prompted
+        )
+
+        if not last_seen_version and not completed_first_start:
+            config.last_seen_version = __version__
+            save_config(config)
+            self.config = config
+            return False
+        if last_seen_version == __version__:
+            return False
+
+        # Persist before opening the dialog so closing it still counts as the
+        # one update notice for this version.
+        config.last_seen_version = __version__
+        save_config(config)
+        self.config = config
+        self._setup_dialog(
+            "What's New",
+            intro="\n".join(f"• {item}" for item in WHATS_NEW_ITEMS),
+            ok_text="Got It",
+            cancel_text="",
+        )
+        return True
+
     def run_first_time_intro(self) -> None:
         """First-launch walkthrough for region checking, timers, and phone alerts."""
         config = load_config()
+        self.show_whats_new_if_needed(config)
         # Existing installs (already past the phone prompt) skip the intro.
         if config.intro_shown or config.notification_setup_prompted:
             if not config.intro_shown:
@@ -4998,7 +5214,6 @@ class DroidAlertsApp:
                 save_config(config)
                 self.config = config
             self.prompt_notification_setup_if_needed()
-            self.show_limited_deals_intro_if_needed()
             return
 
         self._setup_dialog(
@@ -5039,7 +5254,6 @@ class DroidAlertsApp:
         self.config = config
 
         self.prompt_notification_setup_if_needed()
-        self.show_limited_deals_intro_if_needed()
 
     def show_limited_deals_intro_if_needed(self) -> None:
         config = load_config()
@@ -5189,6 +5403,7 @@ class DroidAlertsApp:
         config.update_check_enabled = bool(self._value("update_check_enabled"))
         config.extra_checks = bool(self._value("extra_checks"))
         config.start_watcher_on_launch = bool(self._value("start_watcher_on_launch"))
+        config.rebirth_alert_enabled = bool(self._value("rebirth_alert_enabled"))
         config.ui_theme = normalize_theme_key(self._value("ui_theme"))
         config.belt_overlay_enabled = bool(self._value("belt_overlay_enabled"))
         config.belt_dev_mode = bool(self._value("belt_dev_mode"))

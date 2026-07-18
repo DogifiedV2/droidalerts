@@ -15,7 +15,7 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts import capture as capture_module
 from droid_alerts import watcher
-from droid_alerts.capture import MonitorInfo, PixelBox
+from droid_alerts.capture import MSSCapture, MonitorDescriptor, MonitorInfo, PixelBox
 from droid_alerts.config import AppConfig
 from droid_alerts.gui import DroidAlertsApp
 from droid_alerts.window_capture import (
@@ -160,7 +160,120 @@ class WindowSelectionTests(unittest.TestCase):
         self.assertEqual("", app.config.capture_window_title)
         self.assertEqual("", app.config.capture_window_process)
         self.assertEqual("", app.config.capture_window_class)
-        self.assertEqual(["Both watchers: Monitor 2"], capture_source_text)
+        self.assertEqual(["Active source: Monitor 2"], capture_source_text)
+
+    def test_window_source_disables_monitor_switching_and_explains_that_it_follows(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.config = AppConfig(
+            capture_source="window",
+            capture_window_title="Fortnite",
+            capture_window_process="Fortnite.exe",
+            capture_window_class="UnrealWindow",
+        )
+        app.capture_source_var = Mock()
+        app.monitor_combobox = Mock()
+        app.use_monitor_button = Mock()
+
+        app._refresh_capture_source_text()
+
+        app.capture_source_var.set.assert_called_once_with(
+            "Active source: Window: Fortnite - follows the selected window between monitors"
+        )
+        app.monitor_combobox.configure.assert_called_once_with(state="disabled")
+        app.use_monitor_button.configure.assert_called_once_with(
+            state="normal",
+            text="Use this monitor",
+        )
+
+    def test_window_watcher_status_does_not_reset_the_inactive_monitor_choice(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.setting_vars = {"monitor_index": SimpleNamespace(get=lambda: 2)}
+        app._apply_monitor_index = Mock()
+        app.watcher_status_var = Mock()
+        app.watcher_detail_var = Mock()
+        app._set_watcher_state = Mock()
+        app._maybe_close_device_capture_session = Mock()
+
+        app._handle_watcher_status(
+            {
+                "type": "watcher_ready",
+                "monitor_index": 1,
+                "capture_source": "window",
+                "capture_label": "Fortnite",
+                "screen_width": 2560,
+                "screen_height": 1440,
+                "region_source": "automatic",
+            }
+        )
+
+        app._apply_monitor_index.assert_not_called()
+        app.watcher_detail_var.set.assert_called_once_with(
+            "Window: Fortnite · 2560 × 1440 · Region: automatic"
+        )
+
+    def test_monitor_watcher_status_does_not_autosave_an_old_monitor(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.setting_vars = {"monitor_index": SimpleNamespace(get=lambda: 2)}
+        app._apply_monitor_index = Mock()
+        app.monitor_display_var = SimpleNamespace(get=lambda: "Monitor 2")
+        app.watcher_status_var = Mock()
+        app.watcher_detail_var = Mock()
+        app._set_watcher_state = Mock()
+        app._maybe_close_device_capture_session = Mock()
+
+        app._handle_watcher_status(
+            {
+                "type": "config_reloaded",
+                "monitor_index": 1,
+                "capture_source": "monitor",
+                "capture_label": "Monitor 1",
+                "screen_width": 1920,
+                "screen_height": 1080,
+                "region_source": "automatic",
+            }
+        )
+
+        app._apply_monitor_index.assert_not_called()
+
+    def test_temporarily_missing_monitor_is_not_replaced_with_monitor_one(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.setting_vars = {"monitor_index": SimpleNamespace(get=lambda: 2)}
+        app.monitor_combobox = Mock()
+        app.monitor_display_var = Mock()
+        app._refresh_capture_source_text = Mock()
+        only_monitor = MonitorDescriptor(
+            index=1,
+            left=0,
+            top=0,
+            width=3840,
+            height=2160,
+            is_primary=True,
+        )
+
+        with patch("droid_alerts.gui.list_monitors", return_value=[only_monitor]):
+            app.refresh_monitor_choices()
+
+        self.assertEqual(2, app.setting_vars["monitor_index"].get())
+        app.monitor_display_var.set.assert_called_once_with(
+            "Monitor 2 (temporarily unavailable)"
+        )
+
+    def test_missing_monitor_capture_fails_instead_of_watching_monitor_one(self):
+        fake_mss = SimpleNamespace(
+            monitors=[
+                {"left": 0, "top": 0, "width": 3840, "height": 2160},
+                {"left": 0, "top": 0, "width": 3840, "height": 2160},
+            ],
+            close=Mock(),
+        )
+
+        with (
+            patch("droid_alerts.capture._mss_instance", return_value=fake_mss),
+            self.assertRaisesRegex(RuntimeError, "Monitor 2 is unavailable"),
+        ):
+            MSSCapture(monitor_index=2)
+
+        fake_mss.close.assert_called_once()
 
     def test_failed_capture_open_closes_the_partially_started_backend(self):
         backend = SimpleNamespace(

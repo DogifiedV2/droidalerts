@@ -23,6 +23,7 @@ except Exception:  # pragma: no cover - tkinter availability is platform depende
 DROID_TEXT_COLORS = {
     "Diamond": "#3fd9ff",
     "Beskar": "#e8eaf0",
+    "Rebirth": "#ffb11b",
 }
 RAINBOW_LETTERS = ["#ff5252", "#ff9f2e", "#ffe14d", "#5ce06b", "#42c9ff", "#b06bff", "#ff6bd6"]
 DROID_ACCENTS = {
@@ -32,6 +33,7 @@ DROID_ACCENTS = {
     "Rainbow": ("#c05cff", "#4d2470"),
     "Beskar": ("#c9cdd9", "#4d5160"),
     "Galactic": ("#7d8cff", "#30396e"),
+    "Rebirth": ("#ffb11b", "#6b4210"),
 }
 RARITY_COLORS = {
     "Default": "#e8e8e8",
@@ -179,7 +181,13 @@ def _uses_attribute_rarity(detection: Detection) -> bool:
     return _is_belt_detection(detection) or detection.source == "limited-deal"
 
 
+def _is_rebirth_detection(detection: Detection) -> bool:
+    return detection.source == "rebirth-alert"
+
+
 def _title_segments(detection: Detection) -> list[tuple[str, str]]:
+    if _is_rebirth_detection(detection):
+        return [("REBIRTH DROID AVAILABLE", DROID_TEXT_COLORS["Rebirth"])]
     attributes = (
         detection.rarity.split()
         if _uses_attribute_rarity(detection) and detection.rarity != "Belt"
@@ -203,6 +211,8 @@ def _title_lines(detection: Detection) -> list[list[tuple[str, str]]]:
     """Split belt/deal attributes from the droid name to keep alerts legible."""
 
     segments = _title_segments(detection)
+    if _is_rebirth_detection(detection):
+        return [segments]
     if not _uses_attribute_rarity(detection) or detection.rarity == "Belt":
         return [segments]
     attribute_count = len(detection.rarity.split())
@@ -378,9 +388,13 @@ def show_popup(
         canvas.configure(bg=canvas_bg, highlightthickness=0)
 
         accent_key = (
-            detection.rarity.split(" ", 1)[0]
-            if _uses_attribute_rarity(detection)
-            else detection.droid
+            "Rebirth"
+            if _is_rebirth_detection(detection)
+            else (
+                detection.rarity.split(" ", 1)[0]
+                if _uses_attribute_rarity(detection)
+                else detection.droid
+            )
         )
         accent, accent_dim = DROID_ACCENTS.get(accent_key, ("#ff0055", "#5a0f2c"))
 
@@ -418,12 +432,16 @@ def show_popup(
         )
 
         caption = (
-            "LIMITED DEAL"
-            if detection.source == "limited-deal"
+            "REBIRTH ALERT"
+            if _is_rebirth_detection(detection)
             else (
-                "BELT ALERT"
-                if _is_belt_detection(detection)
-                else ("PRIORITY SPAWN" if detection.is_priority else "DROID SPAWN")
+                "LIMITED DEAL"
+                if detection.source == "limited-deal"
+                else (
+                    "BELT ALERT"
+                    if _is_belt_detection(detection)
+                    else ("PRIORITY SPAWN" if detection.is_priority else "DROID SPAWN")
+                )
             )
         )
         canvas.create_text(

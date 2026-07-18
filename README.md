@@ -125,7 +125,8 @@ Fortnite is closed. Diagnostics can create a redacted support ZIP, show or
 reposition the chat region, report local disk usage, and clear debug captures
 or history. With automatic update checks enabled, the app checks every 15
 minutes and shows a clickable **Update ready** action in the page header when a
-new release is available.
+new release is available. After an update, existing installations see the new
+version's **What's New** notes once; fresh installations skip that update popup.
 
 If there is no release zip yet, use the source version instead:
 
@@ -133,6 +134,16 @@ If there is no release zip yet, use the source version instead:
    Tick **Add python.exe to PATH** in the installer.
 2. Download this repository as a ZIP and unzip it.
 3. Double-click `Start Droid Alerts.bat`.
+
+## Rebirth Alert
+
+The Dashboard's **Priority Alerts** section includes an **Enable Rebirth Alert**
+toggle. It watches for the notification on the right side of the game when a
+rebirth droid is available. Turn it on, then start the normal Dashboard watcher.
+It uses the selected capture source and the existing popup, sound, Discord,
+ntfy, and Pushover alert channels. The detector scans a small right-side box
+aligned to the saved chat-alert height and confirms it across consecutive scans
+before alerting.
 
 ## Get alerts on your phone
 

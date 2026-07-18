@@ -163,6 +163,7 @@ class AppConfig:
     notification_setup_prompted: bool = False
     intro_shown: bool = False
     limited_deals_intro_shown: bool = False
+    last_seen_version: str = ""
     # Fresh 1.3.0 installs must not see the community prompt. Older configs do
     # not contain this key, so from_dict treats a missing value as not prompted.
     discord_community_prompted: bool = True
@@ -185,6 +186,7 @@ class AppConfig:
     advanced_mode: bool = False
     extra_checks: bool = False
     start_watcher_on_launch: bool = False
+    rebirth_alert_enabled: bool = False
     belt_overlay_enabled: bool = True
     belt_dev_mode: bool = False
     belt_template_collection_enabled: bool = False
@@ -311,6 +313,7 @@ class AppConfig:
             limited_deals_intro_shown=bool(
                 data.get("limited_deals_intro_shown", False)
             ),
+            last_seen_version=str(data.get("last_seen_version", "")).strip(),
             discord_community_prompted=bool(data.get("discord_community_prompted", False)),
             phone_alerts_enabled=bool(data.get("phone_alerts_enabled", False)),
             phone_credentials_file=str(data.get("phone_credentials_file", "phone_alerts.json")),
@@ -357,6 +360,7 @@ class AppConfig:
             advanced_mode=bool(data.get("advanced_mode", False)),
             extra_checks=bool(data.get("extra_checks", False)),
             start_watcher_on_launch=bool(data.get("start_watcher_on_launch", False)),
+            rebirth_alert_enabled=bool(data.get("rebirth_alert_enabled", False)),
             belt_overlay_enabled=bool(data.get("belt_overlay_enabled", True)),
             belt_dev_mode=bool(data.get("belt_dev_mode", False)),
             belt_template_collection_enabled=bool(
@@ -445,6 +449,7 @@ class AppConfig:
             "notification_setup_prompted": self.notification_setup_prompted,
             "intro_shown": self.intro_shown,
             "limited_deals_intro_shown": self.limited_deals_intro_shown,
+            "last_seen_version": self.last_seen_version.strip(),
             "discord_community_prompted": self.discord_community_prompted,
             "phone_alerts_enabled": self.phone_alerts_enabled,
             "phone_credentials_file": self.phone_credentials_file,
@@ -465,6 +470,7 @@ class AppConfig:
             "advanced_mode": self.advanced_mode,
             "extra_checks": self.extra_checks,
             "start_watcher_on_launch": self.start_watcher_on_launch,
+            "rebirth_alert_enabled": self.rebirth_alert_enabled,
             "belt_overlay_enabled": self.belt_overlay_enabled,
             "belt_dev_mode": self.belt_dev_mode,
             "belt_template_collection_enabled": self.belt_template_collection_enabled,

@@ -41,7 +41,13 @@ def _is_limited_deal_detection(detection: Detection) -> bool:
     return detection.source == "limited-deal"
 
 
+def _is_rebirth_detection(detection: Detection) -> bool:
+    return detection.source == "rebirth-alert"
+
+
 def event_text(detection: Detection) -> str:
+    if _is_rebirth_detection(detection):
+        return "A rebirth droid is available"
     if _is_limited_deal_detection(detection):
         return f"Limited Deal: {detection.rarity} {detection.droid}"
     if _is_belt_detection(detection):
@@ -51,6 +57,8 @@ def event_text(detection: Detection) -> str:
 
 
 def alert_title(detection: Detection) -> str:
+    if _is_rebirth_detection(detection):
+        return "Droid Alerts Rebirth Alert"
     if _is_limited_deal_detection(detection):
         return "Droid Alerts Limited Deal"
     if _is_belt_detection(detection):
@@ -104,6 +112,8 @@ def discord_webhook_configured(config: AppConfig) -> bool:
 
 
 def discord_color(detection: Detection) -> int:
+    if _is_rebirth_detection(detection):
+        return 0xFFB11B
     if _is_limited_deal_detection(detection):
         family = detection.rarity.split(" ", 1)[0]
         return {
@@ -140,12 +150,16 @@ def post_discord(webhook_url: str, detection: Detection) -> None:
             "embeds": [
                 {
                     "title": (
-                        "Limited Deal Alert"
-                        if _is_limited_deal_detection(detection)
+                        "Rebirth Alert"
+                        if _is_rebirth_detection(detection)
                         else (
-                            "Belt Tracker Alert"
-                            if _is_belt_detection(detection)
-                            else "Droid Tycoon Priority Spawn"
+                            "Limited Deal Alert"
+                            if _is_limited_deal_detection(detection)
+                            else (
+                                "Belt Tracker Alert"
+                                if _is_belt_detection(detection)
+                                else "Droid Tycoon Priority Spawn"
+                            )
                         )
                     ),
                     "description": f"**{label}**",

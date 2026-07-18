@@ -239,6 +239,60 @@ class RuntimeResilienceTests(unittest.TestCase):
 
 
 class GuiRegressionTests(unittest.TestCase):
+    def test_update_version_marker_round_trips_and_defaults_empty(self):
+        self.assertEqual("", AppConfig.from_dict({}).last_seen_version)
+        restored = AppConfig.from_dict(
+            AppConfig(last_seen_version="1.3.6").to_dict()
+        )
+        self.assertEqual("1.3.6", restored.last_seen_version)
+
+    def test_fresh_install_records_version_without_showing_update_notes(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app._setup_dialog = Mock()
+        config = AppConfig(
+            intro_shown=False,
+            notification_setup_prompted=False,
+            last_seen_version="",
+        )
+
+        with patch.object(gui, "save_config") as save:
+            shown = app.show_whats_new_if_needed(config)
+
+        self.assertFalse(shown)
+        self.assertEqual(gui.__version__, config.last_seen_version)
+        save.assert_called_once_with(config)
+        app._setup_dialog.assert_not_called()
+
+    def test_existing_install_without_version_marker_sees_current_update_notes(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app._setup_dialog = Mock(return_value={})
+        config = AppConfig(intro_shown=True, last_seen_version="")
+
+        with patch.object(gui, "save_config") as save:
+            shown = app.show_whats_new_if_needed(config)
+
+        self.assertTrue(shown)
+        self.assertEqual(gui.__version__, config.last_seen_version)
+        save.assert_called_once_with(config)
+        call = app._setup_dialog.call_args
+        self.assertEqual("What's New", call.args[0])
+        self.assertEqual(
+            "\n".join(f"• {item}" for item in gui.WHATS_NEW_ITEMS),
+            call.kwargs["intro"],
+        )
+
+    def test_changed_version_shows_notes_once(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app._setup_dialog = Mock(return_value={})
+        config = AppConfig(last_seen_version="1.0.0")
+
+        with patch.object(gui, "save_config") as save:
+            self.assertTrue(app.show_whats_new_if_needed(config))
+            self.assertFalse(app.show_whats_new_if_needed(config))
+
+        save.assert_called_once_with(config)
+        app._setup_dialog.assert_called_once()
+
     def test_preferred_window_size_is_capped_to_the_usable_screen(self):
         self.assertEqual(
             (1400, 1040),
