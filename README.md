@@ -41,6 +41,11 @@ Diagnostics; moving the box never resizes it. Alert
 appearance plus less common detection, debug, notification-detail, and storage
 controls stay behind the **Advanced settings** toggle in Settings.
 
+The fixed sidebar keeps Dashboard, Belt Tracker, History, Diagnostics, and
+Settings available in one place. Settings also includes three live themes:
+**Default**, **Midnight**, and **Daylight**. Theme changes
+apply immediately and are remembered the next time the app opens.
+
 ## Belt Tracker
 
 The **Belt Tracker** tab watches the moving blueprint belt and can alert from a
@@ -49,7 +54,7 @@ chat alerts.
 
 1. Choose the Fortnite display, window, or capture device once on the Dashboard.
    Both watchers use that capture source.
-2. Enable **Debug mode**, then open Belt Tracker and click **Select Belt Region**.
+2. Open Belt Tracker and click **Select Belt Region**.
 3. Use the recommended and only officially supported setup shown in the guide:
    stand at the start of the belt and match the cyan example box with two
    complete blueprint cards visible. Price labels may be inside the box; Belt
@@ -82,7 +87,8 @@ cards sooner but use proportionally more CPU.
 
 To collect examples for detector review, keep two complete blueprints visible
 in the officially supported framing and enable **Save detections for review**
-before starting Belt Tracker.
+under **Settings → Advanced settings → Belt Developer Tools** before starting
+Belt Tracker.
 Tracking stays on the same fast template path. It retains the sharpest fully
 visible crop from each confirmed appearance under
 `data/belt_template_samples/detections`, rejects near-duplicates, and keeps at
@@ -90,8 +96,9 @@ most 20 diverse samples per detected droid. Each JSON sidecar records the
 detected name and rarity tier plus the identity's fixed class. These results never
 enter `confirmed/` and do not alter the live template index automatically.
 
-If Belt Tracker is unusually slow or misses cards, enable **Dev mode** before
-starting it. Dev mode records detector-stage timings, candidate rejection
+If Belt Tracker is unusually slow or misses cards, enable **Developer logging**
+under **Belt Developer Tools** before starting it. Developer logging records
+detector-stage timings, candidate rejection
 reasons, tracker state, and one compressed belt-region frame per second under
 `data/belt_dev`. Entered and ambiguous results also receive event evidence, and
 each session stops adding images at 200 MB. Stop after reproducing the issue and create a Support Bundle in
@@ -103,8 +110,8 @@ Optional behaviour includes automatic watcher startup and pausing while
 Fortnite is closed. Diagnostics can create a redacted support ZIP, show or
 reposition the chat region, report local disk usage, and clear debug captures
 or history. With automatic update checks enabled, the app checks every 15
-minutes and shows a clickable **Update ready!** beside the version when a new
-release is available.
+minutes and shows a clickable **Update ready** action in the page header when a
+new release is available.
 
 If there is no release zip yet, use the source version instead:
 

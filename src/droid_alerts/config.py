@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .belt.targets import normalize_belt_target_tiers
+from .ui_theme import DEFAULT_THEME_KEY, normalize_theme_key
 
 
 def app_root() -> Path:
@@ -113,6 +114,7 @@ class Thresholds:
 @dataclass
 class AppConfig:
     config_version: int = 2
+    ui_theme: str = DEFAULT_THEME_KEY
     monitor_index: int = 1
     capture_source: str = "monitor"
     capture_window_title: str = ""
@@ -249,6 +251,7 @@ class AppConfig:
             capture_source = "monitor"
         config = cls(
             config_version=max(2, int(data.get("config_version", 1))),
+            ui_theme=normalize_theme_key(data.get("ui_theme", DEFAULT_THEME_KEY)),
             monitor_index=int(data.get("monitor_index", 1)),
             capture_source=capture_source,
             capture_window_title=capture_window_title,
@@ -373,6 +376,7 @@ class AppConfig:
     def to_dict(self) -> dict[str, Any]:
         return {
             "config_version": max(2, self.config_version),
+            "ui_theme": normalize_theme_key(self.ui_theme),
             "monitor_index": self.monitor_index,
             "capture_source": normalize_capture_source(self.capture_source),
             "capture_window_title": normalize_capture_metadata(self.capture_window_title),

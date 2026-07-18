@@ -400,7 +400,7 @@ class WindowsGraphicsCapture:
 
         native_capture = WindowsCapture(
             cursor_capture=False,
-            draw_border=None,
+            draw_border=False,
             window_hwnd=self.window.hwnd,
         )
 

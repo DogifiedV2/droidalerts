@@ -31,6 +31,7 @@ def main() -> int:
         failures.append("timer overlay visibility does not preserve the hidden Rainbow timer")
 
     configured = AppConfig(
+        ui_theme="midnight",
         popup_position="bottom_right",
         popup_scale=1.25,
         retention_days=7,
@@ -38,7 +39,11 @@ def main() -> int:
         alert_targets=[["Beskar", "Mythic"]],
     )
     restored = AppConfig.from_dict(configured.to_dict())
-    if restored.popup_position != "bottom_right" or restored.retention_days != 7:
+    if (
+        restored.ui_theme != "midnight"
+        or restored.popup_position != "bottom_right"
+        or restored.retention_days != 7
+    ):
         failures.append("new AppConfig fields did not round-trip")
     if restored.targets != {("Beskar", "Mythic")}:
         failures.append("fixed alert selections did not round-trip")

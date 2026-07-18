@@ -13,7 +13,7 @@ import time
 import webbrowser
 from pathlib import Path
 from queue import Empty as QueueEmpty
-from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, filedialog, messagebox
+from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, filedialog
 
 import tkinter as tk
 import cv2
@@ -112,6 +112,14 @@ from .telemetry import (
     load_or_create_anonymous_install_id,
 )
 from .timers import format_countdown, seconds_until_next
+from .ui_theme import (
+    DEFAULT_THEME_KEY,
+    apply_app_theme,
+    normalize_theme_key,
+    theme_for,
+    theme_label,
+    theme_labels,
+)
 from .watcher import run_watch
 from .window_capture import (
     WINDOW_CAPTURE_EXPLANATION,
@@ -148,10 +156,17 @@ def muted_style() -> dict[str, str]:
     return {"style": "Muted.TLabel"}
 
 
-def make_root() -> tk.Tk:
+def make_root(ui_theme: str = DEFAULT_THEME_KEY) -> tk.Tk:
     if BOOTSTRAP:
-        return ttk.Window(themename="darkly")
-    return tk.Tk()
+        root = ttk.Window(themename="darkly")
+    else:
+        root = tk.Tk()
+    apply_app_theme(
+        ttk.Style(),
+        ui_theme,
+        bootstrap=BOOTSTRAP,
+    )
+    return root
 
 
 def read_last_lines(path: Path, *, max_lines: int, chunk_bytes: int = 2_000_000) -> list[str]:
@@ -198,13 +213,23 @@ def clamp_dialog_position(
 
 
 class DroidAlertsApp:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, *, config: AppConfig | None = None) -> None:
         self.root = root
         self.root.title("Droid Alerts")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self.config = load_config()
+        self.config = config or load_config()
         self._font_families = self._resolve_font_families()
+        self.current_theme = apply_app_theme(
+            ttk.Style(),
+            self.config.ui_theme,
+            bootstrap=BOOTSTRAP,
+            font_family=self._font_families["ui"],
+        )
+        try:
+            self.root.configure(background=self.current_theme.colors["bg"])
+        except tk.TclError:
+            pass
         self.app_icon: tk.PhotoImage | None = None
         self.header_icon: tk.PhotoImage | None = None
         self._load_app_icon()
@@ -268,7 +293,9 @@ class DroidAlertsApp:
         self._last_cleanup_at = 0.0
 
         self.status_var = StringVar(value="Stopped")
-        self.detail_var = StringVar(value=f"Config: {config_dir() / 'config.json'}")
+        self.sidebar_status_var = StringVar(value="●  Stopped")
+        self.page_title_var = StringVar(value="Dashboard")
+        self.detail_var = StringVar(value="Ready")
         self.region_status_var = StringVar(value="")
         self.watcher_status_var = StringVar(value="Ready to watch")
         self.watcher_detail_var = StringVar(value="Choose the display with Fortnite, then start watching.")
@@ -310,6 +337,7 @@ class DroidAlertsApp:
         self._options_scrollregion_bounds: tuple[int, int, int, int] | None = None
         self._options_scrollregion_after_id: str | None = None
         self._macos_repaint_after_id: str | None = None
+        self.scrollable_pages: dict[object, tuple[tk.Canvas, object, int]] = {}
 
         self._build_ui()
         self.app_telemetry.start()
@@ -378,40 +406,63 @@ class DroidAlertsApp:
             print(f"[GUI] Failed to load app icon: {exc}")
 
     def _build_ui(self) -> None:
-        try:
-            ttk.Style().configure("Muted.TLabel", foreground="#aab3c2")
-        except Exception:
-            pass
-        outer = ttk.Frame(self.root, padding=14)
+        outer = ttk.Frame(self.root, style="Page.TFrame")
         outer.pack(fill="both", expand=True)
-        outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(2, weight=1)
+        outer.columnconfigure(1, weight=1)
+        outer.rowconfigure(0, weight=1)
 
-        header = ttk.Frame(outer)
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        header.columnconfigure(2, weight=1)
+        sidebar = ttk.Frame(
+            outer,
+            width=214,
+            padding=(14, 18, 14, 16),
+            style="Sidebar.TFrame",
+        )
+        sidebar.grid(row=0, column=0, sticky="ns")
+        sidebar.grid_propagate(False)
+        sidebar.columnconfigure(0, weight=1)
+        sidebar.rowconfigure(2, weight=1)
+
+        brand = ttk.Frame(sidebar, style="Sidebar.TFrame")
+        brand.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=4,
+            pady=(0, 26),
+        )
+        brand.columnconfigure(1, weight=1)
         if self.header_icon is not None:
-            ttk.Label(header, image=self.header_icon).grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 10))
+            ttk.Label(brand, image=self.header_icon, style="Sidebar.TLabel").grid(
+                row=0,
+                column=0,
+                rowspan=2,
+                sticky="w",
+                padx=(0, 10),
+            )
         title_column = 1 if self.header_icon is not None else 0
-        ttk.Label(header, text="DROID ALERTS", font=self._font(20, "bold")).grid(
-            row=0, column=title_column, sticky="sw"
+        ttk.Label(
+            brand,
+            text="Droid Alerts",
+            font=self._font(13, "bold"),
+            style="Sidebar.TLabel",
+        ).grid(
+            row=0,
+            column=title_column,
+            sticky="sw",
         )
-        ttk.Label(header, text=f"v{__version__}", font=self._font(9), **muted_style()).grid(
-            row=1, column=title_column, sticky="nw"
+        ttk.Label(
+            brand,
+            text=f"v{__version__}",
+            style="SidebarMuted.TLabel",
+        ).grid(
+            row=1,
+            column=title_column,
+            sticky="nw",
         )
-        self.update_ready_button = ttk.Button(
-            header,
-            text="Update ready!",
-            command=self.show_available_update,
-            width=13,
-            **bootstyle("success"),
-        )
-        self.update_ready_button.grid(row=0, column=3, rowspan=2, sticky="e")
-        self.update_ready_button.grid_remove()
 
         def hide_native_tabs() -> None:
-            # The tab strip is replaced by the pill-button bar below; an empty
-            # element layout is the only reliable way to remove it in ttk.
+            # Navigation lives in the sidebar. An empty tab layout keeps the
+            # Notebook useful as a page stack without rendering a second nav.
             try:
                 style = ttk.Style()
                 style.layout("TNotebook.Tab", [])
@@ -420,52 +471,88 @@ class DroidAlertsApp:
                 pass
 
         hide_native_tabs()
-        tab_bar = ttk.Frame(outer)
-        tab_bar.grid(row=1, column=0, sticky="ew", pady=(0, 14))
-        self.notebook = ttk.Notebook(outer)
-        self.notebook.grid(row=2, column=0, sticky="nsew")
+        main = ttk.Frame(
+            outer,
+            padding=(26, 20, 26, 16),
+            style="Page.TFrame",
+        )
+        main.grid(row=0, column=1, sticky="nsew")
+        main.columnconfigure(0, weight=1)
+        main.rowconfigure(1, weight=1)
+
+        header = ttk.Frame(main, style="Page.TFrame")
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 18))
+        header.columnconfigure(0, weight=1)
+        ttk.Label(header, textvariable=self.page_title_var, style="PageTitle.TLabel").grid(
+            row=0,
+            column=0,
+            sticky="w",
+        )
+        self.update_ready_button = ttk.Button(
+            header,
+            text="Update ready",
+            command=self.show_available_update,
+            **bootstyle("success"),
+        )
+        self.update_ready_button.grid(row=0, column=1, sticky="e")
+        self.update_ready_button.grid_remove()
+
+        self.notebook = ttk.Notebook(main)
+        self.notebook.grid(row=1, column=0, sticky="nsew")
         self.root.after_idle(hide_native_tabs)
 
-        self.dashboard_tab = ttk.Frame(self.notebook, padding=14)
-        self.belt_tab = ttk.Frame(self.notebook, padding=14)
-        self.logs_tab = ttk.Frame(self.notebook, padding=14)
-        self.files_tab = ttk.Frame(self.notebook, padding=14)
-        self.settings_tab = ttk.Frame(self.notebook, padding=14)
+        self.dashboard_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
+        self.belt_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
+        self.logs_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
+        self.files_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
+        self.settings_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
         self.notebook.add(self.dashboard_tab, text="Dashboard")
         self.notebook.add(self.belt_tab, text="Belt Tracker")
         self.notebook.add(self.logs_tab, text="History")
         self.notebook.add(self.files_tab, text="Diagnostics")
         self.notebook.add(self.settings_tab, text="Settings")
+        self.dashboard_content = self._create_scrollable_page(self.dashboard_tab)
+        self.belt_content = self._create_scrollable_page(self.belt_tab)
 
-        self.tab_buttons: list[tuple[object, object]] = []
-        for text, tab in (
+        nav = ttk.Frame(sidebar, style="Sidebar.TFrame")
+        nav.grid(row=1, column=0, sticky="new")
+        nav.columnconfigure(0, weight=1)
+        page_items = (
             ("Dashboard", self.dashboard_tab),
             ("Belt Tracker", self.belt_tab),
             ("History", self.logs_tab),
             ("Diagnostics", self.files_tab),
             ("Settings", self.settings_tab),
-        ):
+        )
+        self.page_metadata = {tab: title for title, tab in page_items}
+        self.tab_buttons: list[tuple[object, object]] = []
+        for row, (text, tab) in enumerate(page_items):
             button = ttk.Button(
-                tab_bar,
+                nav,
                 text=text,
                 command=lambda selected=tab: self.notebook.select(selected),
-                **bootstyle("dark"),
+                style="Sidebar.TButton",
             )
-            button.pack(side="left", padx=(0, 8))
+            button.grid(row=row, column=0, sticky="ew", pady=2)
             self.tab_buttons.append((button, tab))
             if tab is self.belt_tab:
                 self.belt_tab_button = button
             elif tab is self.logs_tab:
                 self.history_tab_button = button
-        ttk.Separator(tab_bar, orient="vertical").pack(side="left", fill="y", padx=(8, 16), pady=3)
-        self.header_status_label = ttk.Label(
-            tab_bar,
-            textvariable=self.status_var,
-            font=self._font(11, "bold"),
-            padding=(16, 6),
-            **bootstyle("danger-inverse"),
+
+        status = ttk.Frame(sidebar, style="Sidebar.TFrame")
+        status.grid(row=3, column=0, sticky="sew", padx=5)
+        ttk.Label(status, text="APP STATUS", style="SidebarMuted.TLabel").grid(
+            row=0,
+            column=0,
+            sticky="w",
         )
-        self.header_status_label.pack(side="left")
+        self.header_status_label = ttk.Label(
+            status,
+            textvariable=self.sidebar_status_var,
+            style="SidebarStatus.TLabel",
+        )
+        self.header_status_label.grid(row=1, column=0, sticky="w", pady=(3, 0))
         self._refresh_header_status()
         self.notebook.bind("<<NotebookTabChanged>>", self._highlight_active_tab, add="+")
         self.notebook.bind("<<NotebookTabChanged>>", self._on_belt_tab_opened, add="+")
@@ -476,109 +563,274 @@ class DroidAlertsApp:
         self._build_logs_tab()
         self._build_files_tab()
         self._build_settings_tab()
+        self.root.bind_all("<MouseWheel>", self._on_page_mousewheel, add="+")
+        self.root.bind_all("<Button-4>", self._on_page_mousewheel, add="+")
+        self.root.bind_all("<Button-5>", self._on_page_mousewheel, add="+")
         self._wire_macos_repaint_workaround()
 
-        footer = ttk.Frame(outer, padding=(4, 8, 4, 0))
-        footer.grid(row=3, column=0, sticky="ew")
-        footer.columnconfigure(0, weight=1)
-        ttk.Label(footer, textvariable=self.detail_var, anchor="w", **muted_style()).grid(
-            row=0, column=0, sticky="ew"
+        feedback = ttk.Frame(
+            main,
+            padding=(2, 10, 2, 0),
+            style="Page.TFrame",
         )
+        feedback.grid(row=2, column=0, sticky="ew")
+        feedback.columnconfigure(0, weight=1)
+        ttk.Label(
+            feedback,
+            textvariable=self.detail_var,
+            anchor="w",
+            style="Muted.TLabel",
+        ).grid(
+            row=0,
+            column=0,
+            sticky="ew",
+        )
+
+    def _create_scrollable_page(self, tab):
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(
+            tab,
+            background=self.current_theme.colors["bg"],
+            borderwidth=0,
+            highlightthickness=0,
+            yscrollincrement=24,
+        )
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        scrollbar.grid_remove()
+        canvas.configure(yscrollcommand=scrollbar.set)
+        content = ttk.Frame(
+            canvas,
+            padding=(2, 2, 10, 10),
+            style="Page.TFrame",
+        )
+        window = canvas.create_window((0, 0), anchor="nw", window=content)
+
+        def update_scrollregion(_event=None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            if content.winfo_reqheight() > canvas.winfo_height() + 1:
+                scrollbar.grid()
+            else:
+                scrollbar.grid_remove()
+                canvas.yview_moveto(0)
+
+        def resize_content(event) -> None:
+            canvas.itemconfigure(window, width=max(1, event.width))
+            canvas.after_idle(update_scrollregion)
+
+        content.bind("<Configure>", update_scrollregion, add="+")
+        canvas.bind("<Configure>", resize_content, add="+")
+        self.scrollable_pages[tab] = (canvas, scrollbar, window)
+        return content
+
+    def _on_page_mousewheel(self, event):
+        try:
+            selected = self.root.nametowidget(self.notebook.select())
+            canvas, _scrollbar, _window = self.scrollable_pages[selected]
+        except Exception:
+            return None
+        x, y = self.root.winfo_pointerxy()
+        if not (
+            canvas.winfo_rootx() <= x < canvas.winfo_rootx() + canvas.winfo_width()
+            and canvas.winfo_rooty() <= y < canvas.winfo_rooty() + canvas.winfo_height()
+        ):
+            return None
+        top, bottom = canvas.yview()
+        if top <= 0.0 and bottom >= 1.0:
+            return None
+        if getattr(event, "num", None) == 4:
+            delta = -1
+        elif getattr(event, "num", None) == 5:
+            delta = 1
+        else:
+            raw_delta = int(getattr(event, "delta", 0))
+            delta = -1 if raw_delta > 0 else 1
+        canvas.yview_scroll(delta * 3, "units")
+        return "break"
 
     def _labeled_section(self, parent, text: str):
-        # Accent rail instead of a border box. Drawn with a ttk Separator:
-        # plain frames with a bg color never paint on macOS Tk (Aqua), only
-        # theme-engine elements render reliably.
-        outer = ttk.Frame(parent)
-        outer.columnconfigure(1, weight=1)
+        outer = ttk.Frame(parent, padding=(18, 15), style="Card.TFrame")
+        outer.columnconfigure(0, weight=1)
         outer.rowconfigure(1, weight=1)
-        ttk.Separator(outer, orient="vertical", **bootstyle("info")).grid(
-            row=0, column=0, rowspan=2, sticky="ns", padx=(0, 14)
-        )
-        ttk.Label(outer, text=text.upper(), font=self._font(11, "bold"), **bootstyle("info")).grid(
-            row=0, column=1, sticky="w"
-        )
-        inner = ttk.Frame(outer, padding=(0, 8, 0, 0))
-        inner.grid(row=1, column=1, sticky="nsew")
+        ttk.Label(
+            outer,
+            text=text.strip().title(),
+            style="SectionTitle.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        inner = ttk.Frame(outer, padding=(0, 11, 0, 0))
+        inner.grid(row=1, column=0, sticky="nsew")
         return outer, inner
 
-    def _link_label(self, parent, text: str, command) -> "ttk.Label":
-        label = ttk.Label(parent, text=text, cursor="hand2", **bootstyle("info"))
-        label.bind("<Button-1>", lambda _event: command())
-        return label
+    def _link_label(self, parent, text: str, command):
+        return ttk.Button(
+            parent,
+            text=text,
+            command=command,
+            cursor="hand2",
+            style="Link.TButton",
+        )
+
+    def on_theme_selected(self, _event=None) -> None:
+        selected = normalize_theme_key(self._value("ui_theme"))
+        self._apply_theme(selected, announce=True)
+        self._schedule_auto_save(delay_ms=80)
+
+    def _apply_theme(self, value: str, *, announce: bool) -> None:
+        self.current_theme = apply_app_theme(
+            ttk.Style(),
+            value,
+            bootstrap=BOOTSTRAP,
+            font_family=self._font_families["ui"],
+        )
+        self.config.ui_theme = self.current_theme.key
+        self._set_var("ui_theme", self.current_theme.label)
+        try:
+            self.root.configure(background=self.current_theme.colors["bg"])
+        except tk.TclError:
+            pass
+        if self.options_canvas is not None:
+            self.options_canvas.configure(background=self.current_theme.colors["bg"])
+        for canvas, _scrollbar, _window in self.scrollable_pages.values():
+            canvas.configure(background=self.current_theme.colors["bg"])
+        try:
+            style = ttk.Style()
+            style.layout("TNotebook.Tab", [])
+            style.configure("TNotebook", borderwidth=0, tabmargins=0)
+        except Exception:
+            pass
+        self._configure_history_tags()
+        self._highlight_active_tab()
+        self._apply_watcher_status_style(self.status_var.get())
+        if announce:
+            self.detail_var.set(f"Theme changed to {self.current_theme.label}")
+        self.root.after_idle(self._force_macos_repaint)
+
+    def _configure_history_tags(self) -> None:
+        if not hasattr(self, "logs_tree"):
+            return
+        colors = self.current_theme.colors
+        self.logs_tree.tag_configure("success", foreground=colors["success"])
+        self.logs_tree.tag_configure("failure", foreground=colors["danger"])
+        self.logs_tree.tag_configure("priority", foreground=colors["primary"])
+        self.logs_tree.tag_configure("muted", foreground=self.current_theme.muted_fg)
 
     def _build_dashboard_tab(self) -> None:
-        page = self.dashboard_tab
+        page = self.dashboard_content
         page.columnconfigure(0, weight=3)
         page.columnconfigure(1, weight=2)
         page.rowconfigure(1, weight=1)
 
         hero_outer, hero = self._labeled_section(page, "MONITORING")
-        hero_outer.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 24))
+        hero_outer.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 16))
         hero.columnconfigure(0, weight=1)
-        ttk.Label(hero, textvariable=self.watcher_status_var, font=self._font(18, "bold")).grid(
-            row=0, column=0, sticky="w"
+        status_block = ttk.Frame(hero)
+        status_block.grid(row=0, column=0, sticky="ew")
+        status_block.columnconfigure(0, weight=1)
+        ttk.Label(
+            status_block,
+            textvariable=self.watcher_status_var,
+            font=self._font(18, "bold"),
+        ).grid(
+            row=0,
+            column=0,
+            sticky="w",
         )
         watcher_detail = ttk.Label(
-            hero,
+            status_block,
             textvariable=self.watcher_detail_var,
             wraplength=650,
             justify="left",
             **muted_style(),
         )
-        watcher_detail.grid(row=1, column=0, sticky="w", pady=(3, 2))
-        self._autowrap(watcher_detail, hero)
+        watcher_detail.grid(row=1, column=0, sticky="ew", pady=(3, 0))
+        self._autowrap(watcher_detail, status_block)
 
-        controls_row = ttk.Frame(hero)
-        controls_row.grid(row=2, column=0, sticky="ew", pady=(16, 0))
-        controls_row.columnconfigure(1, weight=1)
         self.watch_button = ttk.Button(
-            controls_row,
+            hero,
             text="Start Watching",
-            width=24,
             command=self.toggle_watcher,
             **bootstyle("success"),
         )
-        self.watch_button.grid(row=0, column=0, sticky="w", ipady=4)
-        ttk.Label(controls_row, text="Game display", font=self._font(10, "bold")).grid(
-            row=0, column=2, sticky="e", padx=(24, 10)
+        self.watch_button.grid(row=0, column=1, sticky="ne", padx=(24, 0))
+
+        ttk.Separator(hero, orient="horizontal").grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(16, 14),
         )
+
+        source_panel = ttk.Frame(
+            hero,
+            padding=(14, 12),
+            style="Subtle.TFrame",
+        )
+        source_panel.grid(row=2, column=0, columnspan=2, sticky="ew")
+        ttk.Label(
+            source_panel,
+            text="Capture source",
+            style="Subtle.TLabel",
+            font=self._font(10, "bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+
+        display_group = ttk.Frame(source_panel, style="Subtle.TFrame")
+        display_group.grid(row=1, column=0, sticky="nw", pady=(10, 0))
+        ttk.Label(
+            display_group,
+            text="Game display",
+            style="SubtleMuted.TLabel",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 5))
         self.monitor_combobox = ttk.Combobox(
-            controls_row,
+            display_group,
             textvariable=self.monitor_display_var,
             state="readonly",
             width=34,
             postcommand=self.refresh_monitor_choices,
         )
-        self.monitor_combobox.grid(row=0, column=3, sticky="e")
+        self.monitor_combobox.grid(row=1, column=0, sticky="w")
         self.monitor_combobox.bind("<<ComboboxSelected>>", self.on_monitor_selected)
         ttk.Button(
-            controls_row,
-            text="Identify Displays",
+            display_group,
+            text="Identify",
             command=self.identify_displays,
-            **bootstyle("info-outline"),
-        ).grid(row=0, column=4, padx=(10, 0))
+            style="Utility.TButton",
+        ).grid(row=1, column=1, sticky="w", padx=(8, 0))
+
+        alternate_sources = ttk.Frame(source_panel, style="Subtle.TFrame")
+        alternate_sources.grid(row=1, column=1, sticky="nw", padx=(24, 0), pady=(10, 0))
+        ttk.Label(
+            alternate_sources,
+            text="Other sources",
+            style="SubtleMuted.TLabel",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 5))
         ttk.Button(
-            controls_row,
+            alternate_sources,
             text="Select Window",
             command=self.select_capture_window,
-            **bootstyle("info-outline"),
-        ).grid(row=0, column=5, padx=(10, 0))
+            style="Utility.TButton",
+        ).grid(row=1, column=0, padx=(0, 8))
         ttk.Button(
-            controls_row,
-            text="Select Capture Device",
+            alternate_sources,
+            text="Capture Device",
             command=self.select_capture_device,
-            **bootstyle("info-outline"),
-        ).grid(row=0, column=6, padx=(10, 0))
-        ttk.Label(
-            controls_row,
+            style="Utility.TButton",
+        ).grid(row=1, column=1)
+        source_summary = ttk.Label(
+            source_panel,
             textvariable=self.capture_source_var,
-            **muted_style(),
-        ).grid(row=1, column=2, columnspan=5, sticky="e", pady=(7, 0))
+            wraplength=560,
+            justify="left",
+            style="SubtleMuted.TLabel",
+        )
+        source_summary.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self._autowrap(source_summary, source_panel, pad=28)
         self.refresh_monitor_choices()
 
         alerts_panel = ttk.Frame(page)
-        alerts_panel.grid(row=1, column=0, sticky="nsew", padx=(0, 32))
+        alerts_panel.grid(row=1, column=0, sticky="nsew", padx=(0, 16))
         alerts_panel.columnconfigure(0, weight=1)
         alerts_panel.rowconfigure(1, weight=1)
         self._build_priority_alerts(alerts_panel, row=0)
@@ -589,7 +841,7 @@ class DroidAlertsApp:
         right_panel.columnconfigure(0, weight=1)
 
         glance_outer, glance = self._labeled_section(right_panel, "NEXT SPAWNS")
-        glance_outer.grid(row=0, column=0, sticky="new", pady=(0, 24))
+        glance_outer.grid(row=0, column=0, sticky="new", pady=(0, 16))
         glance.columnconfigure(0, weight=1)
         timer_labels = (("beskar", "Beskar"), ("mythic", "Mythic"), ("rainbow", "Rainbow"))
         for row, (key, label) in enumerate(timer_labels, start=1):
@@ -641,7 +893,7 @@ class DroidAlertsApp:
 
     def _build_priority_alerts(self, parent, *, row: int) -> None:
         alerts_outer, alerts = self._labeled_section(parent, "PRIORITY ALERTS")
-        alerts_outer.grid(row=row, column=0, sticky="ew", pady=(0, 24))
+        alerts_outer.grid(row=row, column=0, sticky="ew", pady=(0, 16))
         alerts.columnconfigure(0, weight=1)
         alerts.columnconfigure(1, weight=1)
         for index, combo in enumerate(ALERT_COMBOS):
@@ -703,7 +955,7 @@ class DroidAlertsApp:
 
     def _build_alert_appearance(self, parent, *, row: int) -> None:
         appearance_outer, appearance = self._labeled_section(parent, "ALERT APPEARANCE")
-        appearance_outer.grid(row=row, column=0, sticky="ew", pady=(0, 26))
+        appearance_outer.grid(row=row, column=0, sticky="ew", pady=(0, 16))
         appearance.columnconfigure(1, weight=1)
         self.setting_vars["popup_seconds"] = DoubleVar(value=8.0)
         self.setting_vars["popup_position"] = StringVar(value="Top center")
@@ -748,13 +1000,13 @@ class DroidAlertsApp:
         self.refresh_sound_choices()
 
     def _build_belt_tab(self) -> None:
-        page = self.belt_tab
+        page = self.belt_content
         page.columnconfigure(0, weight=3)
         page.columnconfigure(1, weight=2)
         page.rowconfigure(1, weight=1)
 
         tracking_outer, tracking = self._labeled_section(page, "TRACKING")
-        tracking_outer.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 24))
+        tracking_outer.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 16))
         tracking.columnconfigure(0, weight=1)
         ttk.Label(
             tracking,
@@ -765,11 +1017,12 @@ class DroidAlertsApp:
             tracking,
             text="FAQ",
             command=self.show_belt_faq,
+            style="Utility.TButton",
         ).grid(row=0, column=1, sticky="e")
         belt_detail = ttk.Label(
             tracking,
             textvariable=self.belt_detail_var,
-            wraplength=760,
+            wraplength=620,
             justify="left",
             **muted_style(),
         )
@@ -782,7 +1035,7 @@ class DroidAlertsApp:
         self.belt_watch_button = ttk.Button(
             controls,
             text="Start Tracking",
-            width=20,
+            width=18,
             command=self.toggle_belt_tracking,
             **bootstyle("success"),
         )
@@ -796,7 +1049,7 @@ class DroidAlertsApp:
         self.belt_region_button.grid(row=0, column=1, padx=(10, 0))
 
         priority_panel = ttk.Frame(page)
-        priority_panel.grid(row=1, column=0, sticky="nsew", padx=(0, 32))
+        priority_panel.grid(row=1, column=0, sticky="nsew", padx=(0, 16))
         priority_panel.columnconfigure(0, weight=1)
         priority_panel.rowconfigure(0, weight=1)
         alerts_outer, alerts = self._labeled_section(priority_panel, "PRIORITY ALERTS")
@@ -857,68 +1110,26 @@ class DroidAlertsApp:
             command=self._belt_overlay_changed,
             **bootstyle("round-toggle"),
         ).grid(row=1, column=0, sticky="w", pady=(12, 14))
-        dev_controls = ttk.Frame(view)
-        dev_controls.grid(row=2, column=0, sticky="ew", pady=(0, 14))
-        self.setting_vars["belt_dev_mode"] = BooleanVar(value=False)
-        self.belt_dev_mode_check = ttk.Checkbutton(
-            dev_controls,
-            text="Dev mode",
-            variable=self.setting_vars["belt_dev_mode"],
-            command=self._schedule_auto_save,
-            **bootstyle("round-toggle"),
-        )
-        self.belt_dev_mode_check.grid(row=0, column=0, sticky="w")
-        ttk.Button(
-            dev_controls,
-            text="Open logs",
-            command=lambda: self.open_path(belt_dev_dir()),
-            **bootstyle("info-outline"),
-        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
-
-        sample_controls = ttk.Frame(view)
-        sample_controls.grid(row=3, column=0, sticky="ew", pady=(0, 6))
-        self.setting_vars["belt_template_collection_enabled"] = BooleanVar(value=False)
-        self.belt_template_collection_check = ttk.Checkbutton(
-            sample_controls,
-            text="Save detections for review",
-            variable=self.setting_vars["belt_template_collection_enabled"],
-            command=self._belt_template_collection_changed,
-            **bootstyle("round-toggle"),
-        )
-        self.belt_template_collection_check.grid(row=0, column=0, sticky="w")
-        ttk.Button(
-            sample_controls,
-            text="Open samples",
-            command=lambda: self.open_path(belt_template_samples_dir()),
-            **bootstyle("info-outline"),
-        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
-        ttk.Label(
-            view,
-            textvariable=self.belt_samples_var,
-            wraplength=360,
-            justify="left",
-            **muted_style(),
-        ).grid(row=4, column=0, sticky="w", pady=(0, 12))
         ttk.Label(
             view,
             textvariable=self.belt_tracks_var,
             font=self._font(10, "bold"),
             **bootstyle("info"),
-        ).grid(row=5, column=0, sticky="w")
+        ).grid(row=2, column=0, sticky="w")
         ttk.Label(
             view,
             textvariable=self.belt_last_scan_var,
             wraplength=360,
             justify="left",
             **muted_style(),
-        ).grid(row=6, column=0, sticky="w", pady=(4, 0))
+        ).grid(row=3, column=0, sticky="w", pady=(4, 0))
 
     def _build_logs_tab(self) -> None:
         page = self.logs_tab
         page.rowconfigure(1, weight=1)
         page.columnconfigure(0, weight=1)
-        filters = ttk.Frame(page)
-        filters.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        filters = ttk.Frame(page, padding=(14, 12), style="Card.TFrame")
+        filters.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
         filters.columnconfigure(4, weight=1)
         self.history_filter_var = StringVar(value="All")
         self.history_search_var = StringVar(value="")
@@ -958,15 +1169,25 @@ class DroidAlertsApp:
             "status": "Status",
             "info": "Details",
         }
-        widths = {"time": 170, "type": 130, "droid": 110, "rarity": 110, "status": 110, "info": 360}
+        widths = {
+            "time": 120,
+            "type": 95,
+            "droid": 80,
+            "rarity": 80,
+            "status": 80,
+            "info": 190,
+        }
         for column in columns:
             anchor = "center" if column in {"type", "status"} else "w"
             self.logs_tree.heading(column, text=headings[column], anchor=anchor)
-            self.logs_tree.column(column, width=widths[column], anchor=anchor)
-        self.logs_tree.tag_configure("success", foreground="#5ce08a")
-        self.logs_tree.tag_configure("failure", foreground="#ff6b78")
-        self.logs_tree.tag_configure("priority", foreground="#ff65b5")
-        self.logs_tree.tag_configure("muted", foreground="#8f97a6")
+            self.logs_tree.column(
+                column,
+                width=widths[column],
+                minwidth=65,
+                anchor=anchor,
+                stretch=column == "info",
+            )
+        self._configure_history_tags()
         self.logs_tree.grid(row=1, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(page, orient="vertical", command=self.logs_tree.yview)
         scrollbar.grid(row=1, column=1, sticky="ns")
@@ -975,18 +1196,41 @@ class DroidAlertsApp:
 
         actions = ttk.Frame(page)
         actions.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        ttk.Button(actions, text="Refresh", command=self.refresh_logs).grid(row=0, column=0, padx=(0, 8))
-        ttk.Button(actions, text="Export CSV", command=self.export_history_csv).grid(row=0, column=1, padx=(0, 8))
-        ttk.Button(actions, text="Open Logs Folder", command=lambda: self.open_path(logs_dir())).grid(row=0, column=2)
+        actions.columnconfigure(0, weight=1)
+        ttk.Button(
+            actions,
+            text="Refresh",
+            command=self.refresh_logs,
+            style="Utility.TButton",
+        ).grid(
+            row=0,
+            column=1,
+            padx=(0, 8),
+        )
+        ttk.Button(
+            actions,
+            text="Export CSV",
+            command=self.export_history_csv,
+            **bootstyle("primary"),
+        ).grid(
+            row=0,
+            column=2,
+            padx=(0, 8),
+        )
+        ttk.Button(
+            actions,
+            text="Open Logs Folder",
+            command=lambda: self.open_path(logs_dir()),
+            style="Utility.TButton",
+        ).grid(row=0, column=3)
 
     def _build_files_tab(self) -> None:
         page = self.files_tab
         page.columnconfigure(0, weight=1)
         page.columnconfigure(1, weight=1)
-        page.rowconfigure(0, weight=1)
 
         setup_outer, setup = self._labeled_section(page, "CHAT REGION")
-        setup_outer.grid(row=0, column=0, sticky="nsew", padx=(0, 32))
+        setup_outer.grid(row=0, column=0, sticky="new", padx=(0, 16))
         setup.columnconfigure(0, weight=1)
         region_intro = ttk.Label(
             setup,
@@ -1001,12 +1245,20 @@ class DroidAlertsApp:
             setup, text="Show Chat Region", command=self.toggle_region_overlay, width=28, **bootstyle("info")
         )
         self.region_button.grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Button(setup, text="Move Chat Box…", command=self.open_region_positioner, width=28).grid(
-            row=2, column=0, sticky="w", pady=4
-        )
-        ttk.Button(setup, text="Auto Detect Region", command=self.auto_detect_region, width=28).grid(
-            row=3, column=0, sticky="w", pady=4
-        )
+        ttk.Button(
+            setup,
+            text="Move Chat Box…",
+            command=self.open_region_positioner,
+            width=28,
+            style="Utility.TButton",
+        ).grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Button(
+            setup,
+            text="Auto Detect Region",
+            command=self.auto_detect_region,
+            width=28,
+            style="Utility.TButton",
+        ).grid(row=3, column=0, sticky="w", pady=4)
         self.region_adjust_frame = ttk.Frame(setup)
         self.region_adjust_frame.grid(row=4, column=0, sticky="w", pady=(4, 4))
         ttk.Button(self.region_adjust_frame, text="← Left", command=lambda: self.nudge_region(-10, 0), width=9).grid(
@@ -1027,37 +1279,69 @@ class DroidAlertsApp:
         self.region_adjust_frame.grid_remove()
 
         tools_outer, tools = self._labeled_section(page, "SUPPORT & STORAGE")
-        tools_outer.grid(row=0, column=1, sticky="nsew")
+        tools_outer.grid(row=0, column=1, sticky="new")
         tools.columnconfigure(0, weight=1)
+        tools.columnconfigure(1, weight=1)
         storage_label = ttk.Label(tools, textvariable=self.storage_status_var, wraplength=420, justify="left")
         storage_label.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
         self._autowrap(storage_label, tools)
-        buttons = (
-            ("Create Support Bundle", self.create_diagnostics_bundle, "info"),
-            ("Check For Updates", lambda: self.check_updates(manual=True), "secondary"),
-            ("Open Data Folder", lambda: self.open_path(project_root() / "data"), "secondary"),
-            ("Open Alert Samples", lambda: self.open_path(alert_samples_dir()), "secondary"),
-            ("Open Debug Screenshots", lambda: self.open_path(debug_dir()), "secondary"),
-            ("Clear Debug Screenshots", self.clear_debug_data, "danger-outline"),
-            ("Clear History", self.clear_history_data, "danger-outline"),
+        ttk.Button(
+            tools,
+            text="Create Support Bundle",
+            command=self.create_diagnostics_bundle,
+            **bootstyle("info"),
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+
+        routine_actions = (
+            ("Check for Updates", lambda: self.check_updates(manual=True)),
+            ("Open Data Folder", lambda: self.open_path(project_root() / "data")),
+            ("Alert Samples", lambda: self.open_path(alert_samples_dir())),
+            ("Debug Captures", lambda: self.open_path(debug_dir())),
         )
-        for row, (label, command, style) in enumerate(buttons, start=1):
-            ttk.Button(tools, text=label, command=command, width=27, **bootstyle(style)).grid(
-                row=row, column=0, sticky="w", pady=4
+        for index, (label, command) in enumerate(routine_actions):
+            ttk.Button(
+                tools,
+                text=label,
+                command=command,
+                style="Utility.TButton",
+            ).grid(
+                row=2 + index // 2,
+                column=index % 2,
+                sticky="ew",
+                padx=(0, 8) if index % 2 == 0 else (8, 0),
+                pady=4,
             )
+
+        ttk.Separator(tools).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(16, 12))
+        ttk.Label(tools, text="Danger zone", font=self._font(10, "bold"), **bootstyle("danger")).grid(
+            row=5,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(0, 6),
+        )
+        ttk.Button(
+            tools,
+            text="Clear Debug Captures",
+            command=self.clear_debug_data,
+            **bootstyle("danger-outline"),
+        ).grid(row=6, column=0, sticky="ew", padx=(0, 8), pady=4)
+        ttk.Button(
+            tools,
+            text="Clear History",
+            command=self.clear_history_data,
+            **bootstyle("danger-outline"),
+        ).grid(row=6, column=1, sticky="ew", padx=(8, 0), pady=4)
 
     def _build_settings_tab(self) -> None:
         page = self.settings_tab
         page.columnconfigure(0, weight=1)
         page.rowconfigure(0, weight=1)
-        self.options_outer = ttk.Frame(page)
+        self.options_outer = ttk.Frame(page, style="Page.TFrame")
         self.options_outer.grid(row=0, column=0, sticky="nsew")
         self.options_outer.columnconfigure(0, weight=1)
         self.options_outer.rowconfigure(0, weight=1)
-        try:
-            canvas_background = ttk.Style().lookup("TFrame", "background") or self.root.cget("background")
-        except Exception:
-            canvas_background = self.root.cget("background")
+        canvas_background = self.current_theme.colors["bg"]
         self.options_canvas = tk.Canvas(
             self.options_outer,
             background=canvas_background,
@@ -1078,19 +1362,62 @@ class DroidAlertsApp:
 
         self.setting_vars["advanced_mode"] = BooleanVar(value=False)
         top = ttk.Frame(content)
-        top.grid(row=0, column=0, sticky="ew", pady=(0, 12))
-        top.columnconfigure(1, weight=1)
-        ttk.Label(top, text="Settings", font=self._font(18, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Checkbutton(
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        top.columnconfigure(0, weight=1)
+        ttk.Label(
+            top,
+            text="Changes save automatically.",
+            style="Muted.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        advanced_toggle = ttk.Checkbutton(
             top,
             text="Advanced settings",
             variable=self.setting_vars["advanced_mode"],
             command=self.on_advanced_toggle,
             **bootstyle("round-toggle"),
-        ).grid(row=0, column=2, sticky="e")
+        )
+        if BOOTSTRAP:
+            style = ttk.Style()
+            base_style = advanced_toggle.cget("style")
+            style.layout("Advanced.Round.Toggle", style.layout(base_style))
+            style.configure("Advanced.Round.Toggle", **style.configure(base_style))
+            style.configure(
+                "Advanced.Round.Toggle",
+                font=self._font(11, "bold"),
+                padding=(4, 6),
+            )
+            style.map("Advanced.Round.Toggle", **style.map(base_style))
+            advanced_toggle.configure(style="Advanced.Round.Toggle")
+        else:
+            advanced_toggle.configure(style="Advanced.TCheckbutton")
+        advanced_toggle.grid(row=0, column=1, sticky="e")
+
+        appearance_outer, appearance = self._labeled_section(content, "APPEARANCE")
+        appearance_outer.grid(row=1, column=0, sticky="ew", pady=(0, 16))
+        appearance.columnconfigure(1, weight=1)
+        self.setting_vars["ui_theme"] = StringVar(value=theme_label(self.config.ui_theme))
+        ttk.Label(appearance, text="Theme", font=self._font(10, "bold")).grid(
+            row=0,
+            column=0,
+            sticky="w",
+        )
+        self.theme_combobox = ttk.Combobox(
+            appearance,
+            textvariable=self.setting_vars["ui_theme"],
+            values=theme_labels(),
+            state="readonly",
+            width=24,
+        )
+        self.theme_combobox.grid(row=0, column=1, sticky="w", padx=(16, 0))
+        self.theme_combobox.bind("<<ComboboxSelected>>", self.on_theme_selected)
+        ttk.Label(
+            appearance,
+            text="Applies instantly to the app and its setup dialogs.",
+            style="Muted.TLabel",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         behavior_outer, behavior = self._labeled_section(content, "EVERYDAY BEHAVIOUR")
-        behavior_outer.grid(row=1, column=0, sticky="ew", pady=(0, 26))
+        behavior_outer.grid(row=2, column=0, sticky="ew", pady=(0, 16))
         behavior.columnconfigure(0, weight=1)
         basic_settings = (
             ("extra_checks", "Improve detection with HDR / washed-out colours", None),
@@ -1110,21 +1437,50 @@ class DroidAlertsApp:
                 **bootstyle("round-toggle"),
             ).grid(row=row, column=0, sticky="w", pady=5)
         actions = ttk.Frame(behavior)
-        actions.grid(row=0, column=1, sticky="ne", padx=(24, 0))
-        ttk.Button(actions, text="What is shared?", command=self.show_privacy_details).grid(
-            row=0, column=0, sticky="ew", pady=(0, 6)
+        actions.grid(row=0, column=1, sticky="ne", padx=(20, 0))
+        actions.columnconfigure(0, weight=1)
+        actions.columnconfigure(1, weight=1)
+        ttk.Button(
+            actions,
+            text="What is shared?",
+            command=self.show_privacy_details,
+            style="Utility.TButton",
+        ).grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=(0, 4),
+            pady=(0, 6),
         )
-        ttk.Button(actions, text="Identify This Install", command=self.show_install_identity).grid(
-            row=1, column=0, sticky="ew"
+        ttk.Button(
+            actions,
+            text="Identify This Install",
+            command=self.show_install_identity,
+            style="Utility.TButton",
+        ).grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            padx=(4, 0),
+            pady=(0, 6),
         )
-        ttk.Button(actions, text="FAQ", command=self.show_faq).grid(
-            row=2, column=0, sticky="ew", pady=(6, 0)
+        ttk.Button(
+            actions,
+            text="FAQ",
+            command=self.show_faq,
+            style="Utility.TButton",
+        ).grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            padx=(0, 4),
         )
         ttk.Button(
             actions,
             text="Discord & Support",
             command=lambda: webbrowser.open(DISCORD_COMMUNITY_URL),
-        ).grid(row=3, column=0, sticky="ew", pady=(6, 0))
+            style="Utility.TButton",
+        ).grid(row=1, column=1, sticky="ew", padx=(4, 0))
 
         self.advanced_container = ttk.Frame(content)
         self.advanced_container.grid(row=3, column=0, sticky="ew")
@@ -1137,6 +1493,8 @@ class DroidAlertsApp:
             "share_debug_detections",
             "ntfy_include_attachment",
             "phone_include_attachment",
+            "belt_dev_mode",
+            "belt_template_collection_enabled",
         )
         for key in advanced_bool_keys:
             self.setting_vars[key] = BooleanVar(value=False)
@@ -1168,7 +1526,7 @@ class DroidAlertsApp:
         self._build_alert_appearance(self.advanced_container, row=0)
 
         detector_outer, detector = self._labeled_section(self.advanced_container, "DETECTION & TIMING")
-        detector_outer.grid(row=1, column=0, sticky="ew", pady=(0, 26))
+        detector_outer.grid(row=1, column=0, sticky="ew", pady=(0, 16))
         detector.columnconfigure(1, weight=1)
         detector_fields = (
             ("Capture interval (seconds)", "capture_interval_seconds"),
@@ -1203,13 +1561,18 @@ class DroidAlertsApp:
             ).grid(
                 row=row, column=1, sticky="w", padx=(12, 24), pady=4
             )
-        data_outer, data = self._labeled_section(content, "STORAGE & DEBUG")
-        data_outer.grid(row=2, column=0, sticky="ew", pady=(0, 26))
+        data_outer, data = self._labeled_section(self.advanced_container, "STORAGE & DEBUG")
+        data_outer.grid(row=2, column=0, sticky="ew", pady=(0, 16))
         data.columnconfigure(1, weight=1)
-        ttk.Checkbutton(data, text="Save alert screenshots", variable=self.setting_vars["save_alert_samples"], **bootstyle("round-toggle")).grid(row=0, column=0, sticky="w", pady=4)
         ttk.Checkbutton(
             data,
-            text="Debug mode (Windows: numpad + snapshot; macOS: every 5 seconds)",
+            text="Save alert screenshots",
+            variable=self.setting_vars["save_alert_samples"],
+            **bootstyle("round-toggle"),
+        ).grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Checkbutton(
+            data,
+            text="Debug captures (Windows: numpad snapshot, macOS: every 5 seconds)",
             variable=self.setting_vars["save_debug_screenshots"],
             command=self.on_debug_mode_toggle,
             **bootstyle("round-toggle"),
@@ -1221,7 +1584,12 @@ class DroidAlertsApp:
             **bootstyle("round-toggle"),
         )
         self.share_debug_detections_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=4)
-        ttk.Label(data, text="Delete captures older than (days; 0 keeps all)").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Label(data, text="Delete captures after").grid(
+            row=3,
+            column=0,
+            sticky="w",
+            pady=4,
+        )
         ttk.Combobox(
             data,
             textvariable=self.setting_vars["retention_days"],
@@ -1229,7 +1597,12 @@ class DroidAlertsApp:
             state="readonly",
             width=10,
         ).grid(row=3, column=1, sticky="w", padx=(12, 0))
-        ttk.Label(data, text="Maximum runtime storage (MB; 0 unlimited)").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Label(data, text="Storage limit (MB)").grid(
+            row=4,
+            column=0,
+            sticky="w",
+            pady=4,
+        )
         ttk.Combobox(
             data,
             textvariable=self.setting_vars["max_storage_mb"],
@@ -1239,7 +1612,7 @@ class DroidAlertsApp:
         ).grid(row=4, column=1, sticky="w", padx=(12, 0))
 
         remote_outer, remote = self._labeled_section(self.advanced_container, "NOTIFICATION DETAILS")
-        remote_outer.grid(row=2, column=0, sticky="ew", pady=(0, 26))
+        remote_outer.grid(row=3, column=0, sticky="ew", pady=(0, 16))
         remote.columnconfigure(1, weight=1)
         remote_fields = (
             ("ntfy server", "ntfy_server_url"),
@@ -1254,15 +1627,71 @@ class DroidAlertsApp:
             ttk.Entry(remote, textvariable=self.setting_vars[key], width=38).grid(
                 row=row, column=1, sticky="ew", padx=(12, 18), pady=4
             )
-        ttk.Checkbutton(remote, text="Attach screenshot to ntfy", variable=self.setting_vars["ntfy_include_attachment"], **bootstyle("round-toggle")).grid(
-            row=0, column=2, sticky="w", pady=4
+        ttk.Checkbutton(
+            remote,
+            text="Attach screenshot to ntfy",
+            variable=self.setting_vars["ntfy_include_attachment"],
+            **bootstyle("round-toggle"),
+        ).grid(row=0, column=2, sticky="w", pady=4)
+        ttk.Checkbutton(
+            remote,
+            text="Attach screenshot to Pushover",
+            variable=self.setting_vars["phone_include_attachment"],
+            **bootstyle("round-toggle"),
+        ).grid(row=1, column=2, sticky="w", pady=4)
+        ttk.Button(
+            remote,
+            text="Open Config",
+            command=lambda: self.open_path(config_dir() / "config.json"),
+            style="Utility.TButton",
+        ).grid(row=5, column=2, sticky="e")
+
+        belt_outer, belt = self._labeled_section(self.advanced_container, "BELT DEVELOPER TOOLS")
+        belt_outer.grid(row=4, column=0, sticky="ew", pady=(0, 16))
+        belt.columnconfigure(0, weight=1)
+        belt_controls = ttk.Frame(belt)
+        belt_controls.grid(row=0, column=0, sticky="ew")
+        belt_controls.columnconfigure(0, weight=1)
+        belt_toggles = ttk.Frame(belt_controls)
+        belt_toggles.grid(row=0, column=0, sticky="nw")
+        belt_actions = ttk.Frame(belt_controls)
+        belt_actions.grid(row=0, column=1, sticky="ne", padx=(20, 0))
+        self.belt_dev_mode_check = ttk.Checkbutton(
+            belt_toggles,
+            text="Developer logging",
+            variable=self.setting_vars["belt_dev_mode"],
+            command=self._schedule_auto_save,
+            **bootstyle("round-toggle"),
         )
-        ttk.Checkbutton(remote, text="Attach screenshot to Pushover", variable=self.setting_vars["phone_include_attachment"], **bootstyle("round-toggle")).grid(
-            row=1, column=2, sticky="w", pady=4
+        self.belt_dev_mode_check.grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Button(
+            belt_actions,
+            text="Open Logs",
+            command=lambda: self.open_path(belt_dev_dir()),
+            style="Utility.TButton",
+            width=16,
+        ).grid(row=0, column=0, sticky="ew", pady=4)
+        self.belt_template_collection_check = ttk.Checkbutton(
+            belt_toggles,
+            text="Save detections for review",
+            variable=self.setting_vars["belt_template_collection_enabled"],
+            command=self._belt_template_collection_changed,
+            **bootstyle("round-toggle"),
         )
-        ttk.Button(remote, text="Open Config", command=lambda: self.open_path(config_dir() / "config.json")).grid(
-            row=5, column=2, sticky="e"
-        )
+        self.belt_template_collection_check.grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Button(
+            belt_actions,
+            text="Open Samples",
+            command=lambda: self.open_path(belt_template_samples_dir()),
+            style="Utility.TButton",
+            width=16,
+        ).grid(row=1, column=0, sticky="ew", pady=4)
+        ttk.Label(
+            belt,
+            textvariable=self.belt_samples_var,
+            style="Muted.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+
         self.root.bind_all("<MouseWheel>", self._on_options_mousewheel, add="+")
         self.root.bind_all("<Button-4>", self._on_options_mousewheel, add="+")
         self.root.bind_all("<Button-5>", self._on_options_mousewheel, add="+")
@@ -1273,10 +1702,10 @@ class DroidAlertsApp:
         except Exception:
             return
         for button, tab in self.tab_buttons:
-            if BOOTSTRAP:
-                button.configure(bootstyle="info" if tab is selected else "dark")
-            else:
-                button.state(["pressed"] if tab is selected else ["!pressed"])
+            button.configure(
+                style="SidebarActive.TButton" if tab is selected else "Sidebar.TButton"
+            )
+        self.page_title_var.set(self.page_metadata.get(selected, "Droid Alerts"))
 
     def _on_belt_tab_opened(self, _event=None) -> None:
         try:
@@ -1332,12 +1761,21 @@ class DroidAlertsApp:
             selected = self.root.nametowidget(self.notebook.select())
         except Exception:
             return
-        # The settings tab hosts its content in a Canvas, whose damage
-        # tracking needs an explicit nudge on top of the window-level one.
+        # Canvas-hosted pages need an explicit nudge on top of the window-level
+        # repaint or Aqua can leave their ttk children blank after a theme or
+        # page change.
         if selected is self.settings_tab and self.options_canvas is not None:
             try:
                 self.options_canvas.configure(background=self.options_canvas.cget("background"))
                 self.options_canvas.yview_scroll(0, "units")
+            except Exception:
+                pass
+            self._mark_widget_tree_damaged(selected)
+        elif selected in self.scrollable_pages:
+            canvas, _scrollbar, _window = self.scrollable_pages[selected]
+            try:
+                canvas.configure(background=canvas.cget("background"))
+                canvas.yview_scroll(0, "units")
             except Exception:
                 pass
             self._mark_widget_tree_damaged(selected)
@@ -1365,27 +1803,17 @@ class DroidAlertsApp:
         if not debug_enabled:
             self._set_var("share_debug_detections", False)
         self._apply_debug_share_visibility(debug_enabled)
-        self._apply_belt_tab_visibility(debug_enabled)
         self._schedule_auto_save()
 
-    def _apply_belt_tab_visibility(self, debug_enabled: bool) -> None:
+    def _apply_belt_tab_visibility(self, _debug_enabled: bool = True) -> None:
+        """Keep Belt Tracker discoverable; only its developer tools are gated."""
+
         if self.belt_tab_button is None:
             return
-        if debug_enabled:
-            self.notebook.add(self.belt_tab)
-            pack_options = {"side": "left", "padx": (0, 8)}
-            if self.history_tab_button is not None:
-                pack_options["before"] = self.history_tab_button
-            self.belt_tab_button.pack(**pack_options)
-        else:
-            try:
-                selected = self.root.nametowidget(self.notebook.select())
-            except Exception:
-                selected = None
-            if selected is self.belt_tab:
-                self.notebook.select(self.dashboard_tab)
-            self.notebook.hide(self.belt_tab)
-            self.belt_tab_button.pack_forget()
+        try:
+            self.belt_tab_button.grid()
+        except Exception:
+            pass
         self._highlight_active_tab()
 
     def _apply_debug_share_visibility(self, debug_enabled: bool) -> None:
@@ -1562,6 +1990,9 @@ class DroidAlertsApp:
         self._loading_settings = True
         try:
             self.config = load_config()
+            self._set_var("ui_theme", theme_label(self.config.ui_theme))
+            if self.current_theme.key != normalize_theme_key(self.config.ui_theme):
+                self._apply_theme(self.config.ui_theme, announce=False)
             selected = set(self.config.targets)
             for combo, var in self.alert_vars.items():
                 var.set(combo in selected)
@@ -1627,7 +2058,7 @@ class DroidAlertsApp:
                 self._set_var("share_debug_detections", False)
             self._set_var("advanced_mode", self.config.advanced_mode)
             self._apply_debug_share_visibility(self.config.save_debug_screenshots)
-            self._apply_belt_tab_visibility(self.config.save_debug_screenshots)
+            self._apply_belt_tab_visibility()
             self._apply_advanced_visibility(self.config.advanced_mode)
             self.refresh_sound_choices()
             self.refresh_channel_statuses()
@@ -1855,17 +2286,18 @@ class DroidAlertsApp:
 
     def select_capture_window(self) -> None:
         if sys.platform != "win32":
-            messagebox.showinfo(
+            self._show_message(
                 "Select Window",
                 "Window capture is available in the Windows app.",
             )
             return
 
         dialog = tk.Toplevel(self.root)
+        self._style_dialog_window(dialog)
         dialog.title("Select Window")
         dialog.transient(self.root)
-        dialog.minsize(680, 430)
-        dialog.geometry("760x520")
+        dialog.minsize(560, 420)
+        dialog.geometry("620x500")
 
         body = ttk.Frame(dialog, padding=20)
         body.pack(fill="both", expand=True)
@@ -1878,7 +2310,7 @@ class DroidAlertsApp:
         ttk.Label(
             body,
             text=WINDOW_CAPTURE_EXPLANATION,
-            wraplength=700,
+            wraplength=560,
             justify="left",
         ).grid(row=1, column=0, sticky="w", pady=(5, 0))
         ttk.Label(
@@ -1887,7 +2319,7 @@ class DroidAlertsApp:
                 "Keep Fortnite restored; Windows can pause capture while it is minimized. "
                 "This changes both the chat watcher and Belt Tracker. Timers still use Game display."
             ),
-            wraplength=700,
+            wraplength=560,
             justify="left",
             **muted_style(),
         ).grid(row=2, column=0, sticky="w", pady=(5, 14))
@@ -1896,7 +2328,7 @@ class DroidAlertsApp:
         ttk.Label(
             body,
             textvariable=feedback_var,
-            wraplength=700,
+            wraplength=560,
             justify="left",
             **muted_style(),
         ).grid(row=3, column=0, sticky="w", pady=(0, 8))
@@ -1914,8 +2346,8 @@ class DroidAlertsApp:
         )
         picker.heading("window", text="Window")
         picker.heading("application", text="Application")
-        picker.column("window", anchor="w", stretch=True, minwidth=360)
-        picker.column("application", anchor="w", stretch=False, width=210)
+        picker.column("window", anchor="w", stretch=True, minwidth=280)
+        picker.column("application", anchor="w", stretch=False, width=150)
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=picker.yview)
         picker.configure(yscrollcommand=scrollbar.set)
         picker.grid(row=0, column=0, sticky="nsew")
@@ -2103,13 +2535,13 @@ class DroidAlertsApp:
             buttons,
             text="Refresh",
             command=refresh_windows,
-            **bootstyle("secondary-outline"),
+            style="Utility.TButton",
         ).grid(row=0, column=0, sticky="w")
         ttk.Button(
             buttons,
             text="Use Game Display",
             command=use_game_display,
-            **bootstyle("secondary-outline"),
+            style="Utility.TButton",
         ).grid(row=0, column=1, sticky="w", padx=(8, 0))
         ttk.Button(
             buttons,
@@ -2121,7 +2553,7 @@ class DroidAlertsApp:
             buttons,
             text="Select Window",
             command=apply_window,
-            **bootstyle("success"),
+            **bootstyle("primary"),
         )
         select_button.grid(row=0, column=4)
 
@@ -2152,17 +2584,18 @@ class DroidAlertsApp:
 
     def select_capture_device(self) -> None:
         if sys.platform != "win32":
-            messagebox.showinfo(
+            self._show_message(
                 "Select Capture Device",
                 "Direct capture-device support is available in the Windows app.",
             )
             return
 
         dialog = tk.Toplevel(self.root)
+        self._style_dialog_window(dialog)
         dialog.title("Select Capture Device")
         dialog.transient(self.root)
-        dialog.minsize(680, 400)
-        dialog.geometry("760x500")
+        dialog.minsize(560, 400)
+        dialog.geometry("620x480")
 
         body = ttk.Frame(dialog, padding=20)
         body.pack(fill="both", expand=True)
@@ -2174,18 +2607,18 @@ class DroidAlertsApp:
         ttk.Label(
             body,
             text="Choose the capture card receiving your console video. This changes both watchers.",
-            wraplength=700,
+            wraplength=560,
             justify="left",
         ).grid(row=1, column=0, sticky="w", pady=(5, 0))
         ttk.Label(
             body,
             text="If a device is busy, close OBS or the capture card's preview application and refresh.",
-            wraplength=700,
+            wraplength=560,
             justify="left",
             **muted_style(),
         ).grid(row=2, column=0, sticky="w", pady=(5, 14))
         feedback_var = StringVar(value="Connect the capture card, then refresh the list.")
-        ttk.Label(body, textvariable=feedback_var, wraplength=700, **muted_style()).grid(
+        ttk.Label(body, textvariable=feedback_var, wraplength=560, **muted_style()).grid(
             row=3, column=0, sticky="w", pady=(0, 8)
         )
 
@@ -2198,8 +2631,8 @@ class DroidAlertsApp:
         )
         picker.heading("device", text="Video capture device")
         picker.heading("backend", text="Windows backend")
-        picker.column("device", anchor="w", stretch=True, minwidth=420)
-        picker.column("backend", anchor="w", stretch=False, width=180)
+        picker.column("device", anchor="w", stretch=True, minwidth=300)
+        picker.column("backend", anchor="w", stretch=False, width=150)
         picker.grid(row=4, column=0, sticky="nsew")
 
         buttons = ttk.Frame(body)
@@ -2311,13 +2744,13 @@ class DroidAlertsApp:
             close_dialog()
 
         ttk.Button(
-            buttons, text="Refresh", command=refresh_devices, **bootstyle("secondary-outline")
+            buttons, text="Refresh", command=refresh_devices, style="Utility.TButton"
         ).grid(row=0, column=0, sticky="w")
         ttk.Button(buttons, text="Cancel", command=close_dialog, **bootstyle("secondary")).grid(
             row=0, column=3, padx=(0, 8)
         )
         select_button = ttk.Button(
-            buttons, text="Use Capture Device", command=apply_device, **bootstyle("success")
+            buttons, text="Use Capture Device", command=apply_device, **bootstyle("primary")
         )
         select_button.grid(row=0, column=4)
         picker.bind("<Double-1>", lambda _event: apply_device())
@@ -2417,7 +2850,11 @@ class DroidAlertsApp:
         source = self._current_belt_source_info(open_device=True)
         display_monitor = self._current_monitor_info()
         if source is None or display_monitor is None:
-            messagebox.showerror("Belt Region", "The selected Dashboard display is not available.")
+            self._show_message(
+                "Belt Region",
+                "The selected Dashboard display is not available.",
+                tone="danger",
+            )
             return
         if not self._confirm_belt_region_guide_if_needed():
             return
@@ -2437,7 +2874,7 @@ class DroidAlertsApp:
             )
         except Exception as exc:
             self._restore_after_belt_selection()
-            messagebox.showerror("Belt Region", str(exc))
+            self._show_message("Belt Region", str(exc), tone="danger")
 
     def _confirm_belt_region_guide_if_needed(self) -> bool:
         config = getattr(self, "config", None) or load_config()
@@ -2481,7 +2918,7 @@ class DroidAlertsApp:
             )
         except Exception as exc:
             self._restore_after_belt_selection()
-            messagebox.showerror("Belt Region", str(exc))
+            self._show_message("Belt Region", str(exc), tone="danger")
 
     def _restore_after_belt_selection(self) -> None:
         previous_state = self._belt_selector_root_state
@@ -2522,6 +2959,7 @@ class DroidAlertsApp:
             return
 
         dialog = tk.Toplevel(self.root)
+        self._style_dialog_window(dialog)
         dialog.title("Priority Alerts")
         dialog.transient(self.root)
         dialog.grab_set()
@@ -2553,7 +2991,7 @@ class DroidAlertsApp:
             search_row,
             text="Clear",
             command=lambda: search_var.set(""),
-            **bootstyle("secondary-outline"),
+            style="Utility.TButton",
         ).grid(row=0, column=2, padx=(8, 0))
 
         list_frame = ttk.Frame(body)
@@ -2725,7 +3163,7 @@ class DroidAlertsApp:
         ttk.Button(actions, text="Cancel", command=dialog.destroy).pack(
             side="right", padx=(8, 0)
         )
-        ttk.Button(actions, text="Save", command=save_targets, **bootstyle("success")).pack(
+        ttk.Button(actions, text="Save", command=save_targets, **bootstyle("primary")).pack(
             side="right"
         )
         dialog.bind("<Control-s>", save_targets)
@@ -2804,10 +3242,14 @@ class DroidAlertsApp:
         try:
             monitors = list_monitors()
         except Exception as exc:
-            messagebox.showerror("Identify Displays", f"Displays could not be read:\n{exc}")
+            self._show_message(
+                "Identify Displays",
+                f"Displays could not be read:\n{exc}",
+                tone="danger",
+            )
             return
         if not monitors:
-            messagebox.showinfo("Identify Displays", "No displays were found.")
+            self._show_message("Identify Displays", "No displays were found.")
             return
         overlays: list[tk.Toplevel] = []
         for monitor in monitors:
@@ -2867,7 +3309,11 @@ class DroidAlertsApp:
             return
         source_path = Path(source)
         if source_path.suffix.lower() != ".wav":
-            messagebox.showerror("Alert Sound", "Droid Alerts currently supports WAV files.")
+            self._show_message(
+                "Alert Sound",
+                "Droid Alerts currently supports WAV files.",
+                tone="danger",
+            )
             return
         try:
             folder = user_sounds_dir()
@@ -2876,7 +3322,7 @@ class DroidAlertsApp:
             if source_path.resolve() != target.resolve():
                 shutil.copy2(source_path, target)
         except OSError as exc:
-            messagebox.showerror("Alert Sound", str(exc))
+            self._show_message("Alert Sound", str(exc), tone="danger")
             return
         self.refresh_sound_choices()
         self._set_var("sound_file", target.name)
@@ -3472,7 +3918,7 @@ class DroidAlertsApp:
             self._set_belt_header_state("Error")
             self.belt_status_var.set("Belt Tracker stopped")
             self.belt_detail_var.set(error_message)
-            messagebox.showerror("Belt Tracker", error_message)
+            self._show_message("Belt Tracker", error_message, tone="danger")
         else:
             self._set_belt_header_state("Stopped")
             self.belt_status_var.set("Ready to track")
@@ -3633,22 +4079,25 @@ class DroidAlertsApp:
         else:
             state = "Stopped"
         self.status_var.set(state)
+        if hasattr(self, "sidebar_status_var"):
+            self.sidebar_status_var.set(f"●  {state}")
         self._apply_watcher_status_style(state)
 
     def _apply_watcher_status_style(self, state: str) -> None:
-        style_name, color = {
-            "Running": ("success-inverse", "#36c96b"),
-            "Paused": ("warning-inverse", "#f0ad4e"),
-            "Warning": ("warning-inverse", "#f0ad4e"),
-            "Stopped": ("danger-inverse", "#e85d68"),
-            "Error": ("danger-inverse", "#e85d68"),
-        }.get(state, ("secondary-inverse", "#aab3c2"))
-        if BOOTSTRAP:
-            self.header_status_label.configure(bootstyle=style_name)
-            return
-        fallback_style = "WatcherStatus.TLabel"
-        ttk.Style().configure(fallback_style, foreground=color)
-        self.header_status_label.configure(style=fallback_style)
+        palette = getattr(self, "current_theme", theme_for(DEFAULT_THEME_KEY))
+        color = {
+            "Running": palette.colors["success"],
+            "Paused": palette.colors["warning"],
+            "Warning": palette.colors["warning"],
+            "Stopped": palette.colors["danger"],
+            "Error": palette.colors["danger"],
+        }.get(state, palette.sidebar_muted)
+        ttk.Style().configure(
+            "SidebarStatus.TLabel",
+            background=palette.sidebar_bg,
+            foreground=color,
+        )
+        self.header_status_label.configure(style="SidebarStatus.TLabel")
 
     @staticmethod
     def _display_timestamp(value: str) -> str:
@@ -3779,10 +4228,11 @@ class DroidAlertsApp:
         config.discord_community_prompted = True
         save_config(config)
         self.config = config
-        join = messagebox.askyesno(
+        join = self._confirm_message(
             "Join the Droid Alerts Discord?",
             "Would you like to join the Discord for update alerts, support, and game leaks?",
-            parent=self.root,
+            confirm_text="Join Discord",
+            cancel_text="Not now",
         )
         if join:
             webbrowser.open(DISCORD_COMMUNITY_URL)
@@ -3824,8 +4274,11 @@ class DroidAlertsApp:
     def save_settings(self, *, interactive: bool = True, update_detail: bool = True) -> AppConfig | None:
         previous_config = self.config
         selected = [combo for combo, var in self.alert_vars.items() if var.get()]
-        if interactive and not selected and not messagebox.askyesno(
-            "No Priority Alerts", "Continue with no priority alerts selected?"
+        if interactive and not selected and not self._confirm_message(
+            "No Priority Alerts",
+            "Continue with no priority alerts selected?",
+            confirm_text="Continue",
+            tone="warning",
         ):
             return None
 
@@ -3865,7 +4318,11 @@ class DroidAlertsApp:
             self._set_var("belt_active_scan_fps", config.belt_active_scan_fps)
         except (TypeError, ValueError, tk.TclError) as exc:
             if interactive:
-                messagebox.showerror("Settings", f"Invalid numeric setting: {exc}")
+                self._show_message(
+                    "Settings",
+                    f"Invalid numeric setting: {exc}",
+                    tone="danger",
+                )
             elif update_detail:
                 self.detail_var.set("Settings not saved: invalid numeric value")
             return None
@@ -3884,6 +4341,7 @@ class DroidAlertsApp:
         config.update_check_enabled = bool(self._value("update_check_enabled"))
         config.extra_checks = bool(self._value("extra_checks"))
         config.start_watcher_on_launch = bool(self._value("start_watcher_on_launch"))
+        config.ui_theme = normalize_theme_key(self._value("ui_theme"))
         config.belt_overlay_enabled = bool(self._value("belt_overlay_enabled"))
         config.belt_dev_mode = bool(self._value("belt_dev_mode"))
         config.belt_template_collection_enabled = bool(
@@ -3949,6 +4407,47 @@ class DroidAlertsApp:
             return var.get()
         return var
 
+    def _style_dialog_window(self, dialog: tk.Toplevel) -> None:
+        try:
+            dialog.configure(background=self.current_theme.colors["bg"])
+        except tk.TclError:
+            pass
+
+    def _show_message(
+        self,
+        title: str,
+        message: str,
+        *,
+        tone: str = "info",
+    ) -> None:
+        self._setup_dialog(
+            title,
+            intro=message,
+            ok_text="Close",
+            cancel_text="",
+            tone=tone,
+        )
+
+    def _confirm_message(
+        self,
+        title: str,
+        message: str,
+        *,
+        confirm_text: str = "Continue",
+        cancel_text: str = "Cancel",
+        tone: str = "primary",
+    ) -> bool:
+        return (
+            self._setup_dialog(
+                title,
+                intro=message,
+                ok_text=confirm_text,
+                cancel_text=cancel_text,
+                tone=tone,
+            )
+            is not None
+        )
+
     def _setup_dialog(
         self,
         title: str,
@@ -3963,6 +4462,7 @@ class DroidAlertsApp:
         ok_text: str = "Continue",
         cancel_text: str = "Cancel",
         modal: bool = True,
+        tone: str = "primary",
     ) -> dict[str, str] | None:
         """Styled dialog for setup flows.
 
@@ -3971,6 +4471,7 @@ class DroidAlertsApp:
         entered field values ({} when there are no fields) or None on cancel.
         """
         dialog = tk.Toplevel(self.root)
+        self._style_dialog_window(dialog)
         dialog.title(title)
         dialog.transient(self.root)
         dialog.resizable(False, False)
@@ -3982,7 +4483,12 @@ class DroidAlertsApp:
         wrap = 460
         row = 0
 
-        ttk.Label(body, text=title, font=self._font(14, "bold")).grid(
+        ttk.Label(
+            body,
+            text=title,
+            font=self._font(14, "bold"),
+            **bootstyle(tone),
+        ).grid(
             row=row, column=0, sticky="w", pady=(0, 10)
         )
         row += 1
@@ -4085,7 +4591,8 @@ class DroidAlertsApp:
                 buttons, text=cancel_text, command=lambda: finish(None), **bootstyle("secondary")
             ).grid(row=0, column=0, padx=(0, 8))
             button_column = 1
-        ttk.Button(buttons, text=ok_text, command=accept, **bootstyle("success")).grid(
+        action_style = tone if tone in {"danger", "warning"} else "primary"
+        ttk.Button(buttons, text=ok_text, command=accept, **bootstyle(action_style)).grid(
             row=0, column=button_column
         )
         dialog.bind("<Return>", lambda _event: accept())
@@ -4548,7 +5055,7 @@ class DroidAlertsApp:
             self.watcher_status_var.set("Monitoring stopped unexpectedly")
             self.watcher_detail_var.set(str(exc))
             self.detail_var.set(f"Watcher stopped: {exc}")
-            messagebox.showerror("Watcher", str(exc))
+            self._show_message("Watcher", str(exc), tone="danger")
         self._watch_stop_reason = ""
         self._maybe_close_device_capture_session()
 
@@ -4695,6 +5202,7 @@ class DroidAlertsApp:
         if row is None:
             return
         dialog = tk.Toplevel(self.root)
+        self._style_dialog_window(dialog)
         dialog.title("History Event Details")
         dialog.transient(self.root)
         dialog.geometry("720x520")
@@ -4707,7 +5215,20 @@ class DroidAlertsApp:
             text=f"{self._log_row_type(row).title()} · {row.get('rarity', '')} {row.get('droid', '')}",
             font=self._font(14, "bold"),
         ).grid(row=0, column=0, sticky="w", pady=(0, 10))
-        text = tk.Text(body, wrap="word", bg="#111827", fg="#e9eef6", insertbackground="white")
+        colors = self.current_theme.colors
+        text = tk.Text(
+            body,
+            wrap="word",
+            bg=colors["inputbg"],
+            fg=colors["inputfg"],
+            insertbackground=colors["primary"],
+            selectbackground=colors["selectbg"],
+            selectforeground=colors["selectfg"],
+            relief="flat",
+            borderwidth=0,
+            padx=12,
+            pady=10,
+        )
         text.grid(row=1, column=0, sticky="nsew")
         text.insert("1.0", json.dumps(row, indent=2, ensure_ascii=False))
         text.configure(state="disabled")
@@ -4731,7 +5252,10 @@ class DroidAlertsApp:
 
     def export_history_csv(self) -> None:
         if not self.history_rows_by_item:
-            messagebox.showinfo("Export History", "There are no visible history rows to export.")
+            self._show_message(
+                "Export History",
+                "There are no visible history rows to export.",
+            )
             return
         target = filedialog.asksaveasfilename(
             parent=self.root,
@@ -4750,7 +5274,7 @@ class DroidAlertsApp:
                 for row in self.history_rows_by_item.values():
                     writer.writerow({key: json.dumps(value) if isinstance(value, (dict, list)) else value for key, value in row.items()})
         except OSError as exc:
-            messagebox.showerror("Export History", str(exc))
+            self._show_message("Export History", str(exc), tone="danger")
             return
         self.detail_var.set(f"History exported to {target}")
 
@@ -4803,7 +5327,7 @@ class DroidAlertsApp:
             else:
                 subprocess.Popen(["xdg-open", str(path)])
         except Exception as exc:
-            messagebox.showerror("Open", str(exc))
+            self._show_message("Open", str(exc), tone="danger")
 
     def open_region_positioner(self) -> None:
         if self.region_positioner is not None:
@@ -4819,12 +5343,13 @@ class DroidAlertsApp:
             try:
                 self.toggle_region_overlay()
             except Exception as exc:
-                messagebox.showerror("Move Chat Box", str(exc))
+                self._show_message("Move Chat Box", str(exc), tone="danger")
                 return
         if self.region_box is None:
             return
 
         dialog = tk.Toplevel(self.root)
+        self._style_dialog_window(dialog)
         self.region_positioner = dialog
         dialog.title("Move Chat Box")
         dialog.resizable(False, False)
@@ -4891,7 +5416,13 @@ class DroidAlertsApp:
             try:
                 path = create_support_bundle(config)
             except Exception as exc:
-                self._post_to_ui(lambda exc=exc: messagebox.showerror("Support Bundle", str(exc)))
+                self._post_to_ui(
+                    lambda exc=exc: self._show_message(
+                        "Support Bundle",
+                        str(exc),
+                        tone="danger",
+                    )
+                )
                 return
             self._post_to_ui(lambda path=path: self._support_bundle_ready(path))
 
@@ -4900,18 +5431,32 @@ class DroidAlertsApp:
     def _support_bundle_ready(self, path: Path) -> None:
         self.detail_var.set(f"Support bundle created: {path.name}")
         self._refresh_storage_status(cleanup=False)
-        if messagebox.askyesno("Support Bundle", f"Created a redacted support bundle:\n\n{path}\n\nOpen its folder?"):
+        if self._confirm_message(
+            "Support Bundle",
+            f"Created a redacted support bundle:\n\n{path}\n\nOpen its folder?",
+            confirm_text="Open Folder",
+        ):
             self.open_path(path.parent)
 
     def clear_debug_data(self) -> None:
-        if not messagebox.askyesno("Clear Debug Screenshots", "Delete all locally saved debug screenshots?"):
+        if not self._confirm_message(
+            "Clear Debug Captures",
+            "Delete all locally saved debug screenshots?",
+            confirm_text="Delete Captures",
+            tone="danger",
+        ):
             return
         result = clear_debug_captures()
         self.detail_var.set(f"Deleted {result.deleted_files} debug file(s), freeing {format_bytes(result.freed_bytes)}")
         self._refresh_storage_status(cleanup=False)
 
     def clear_history_data(self) -> None:
-        if not messagebox.askyesno("Clear History", "Delete all event history? This cannot be undone."):
+        if not self._confirm_message(
+            "Clear History",
+            "Delete all event history? This cannot be undone.",
+            confirm_text="Clear History",
+            tone="danger",
+        ):
             return
         result = clear_history()
         self._log_file_signature = None
@@ -5025,6 +5570,7 @@ class DroidAlertsApp:
             temp_path.unlink(missing_ok=True)
 
         dialog = tk.Toplevel(self.root)
+        self._style_dialog_window(dialog)
         dialog.title("Chat Region Preview")
         dialog.transient(self.root)
         body = ttk.Frame(dialog, padding=16)
@@ -5241,7 +5787,7 @@ class DroidAlertsApp:
         self.update_check_running = False
         if exc is not None:
             if manual:
-                messagebox.showerror("Updates", str(exc))
+                self._show_message("Updates", str(exc), tone="danger")
             return
         if not release:
             if manual:
@@ -5381,6 +5927,7 @@ def run_gui() -> None:
     # DPI awareness must be set before the first window exists, or Windows
     # bitmap-scales the UI and fixed sizes stop matching font metrics.
     set_dpi_awareness()
-    root = make_root()
-    DroidAlertsApp(root)
+    config = load_config()
+    root = make_root(config.ui_theme)
+    DroidAlertsApp(root, config=config)
     root.mainloop()
