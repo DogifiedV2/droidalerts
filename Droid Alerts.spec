@@ -24,6 +24,8 @@ a = Analysis(
         "ttkbootstrap",
         "windows_capture",
         "windows_capture.windows_capture",
+        "cv2_enumerate_cameras.windows_backend",
+        "cv2_enumerate_cameras._windows_backend",
     ],
     hookspath=[],
     hooksconfig={},

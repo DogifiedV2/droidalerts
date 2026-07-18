@@ -27,17 +27,17 @@ screenshots with the developer** in Advanced settings.
 2. Unzip it anywhere you like. Your Desktop is fine.
 3. Open the `Droid Alerts` folder and double-click `Droid Alerts.exe`.
 
-That's it. Choose the display with Fortnite or click **Select Window** and pick
-Fortnite, click **Start Watching**, go play, and it will ping you when something
-good spawns. Window capture keeps reading Fortnite when another window covers
-it; keep Fortnite restored because Windows may pause capture while it is
-minimized. Use the **Test Alert** button any time to hear and see what an alert
-looks like.
+That's it. Choose the display with Fortnite, click **Select Window**, or use
+**Select Capture Device** for a console connected through a USB capture card.
+Then click **Start Watching**, go play, and it will ping you when something good
+spawns. Window capture keeps reading Fortnite when another window covers it;
+keep Fortnite restored because Windows may pause capture while it is minimized.
+Use the **Test Alert** button any time to hear and see what an alert looks like.
 
-The Dashboard shows the selected monitor or window used by both watchers,
-priority-alert choices, alert-channel controls, current timers, and session
-counts. **Show Chat Region** and **Move Chat Box** are under Diagnostics; moving
-the box never resizes it. Alert
+The Dashboard shows the selected monitor, window, or capture device used by
+both watchers, priority-alert choices, alert-channel controls, current timers,
+and session counts. **Show Chat Region** and **Move Chat Box** are under
+Diagnostics; moving the box never resizes it. Alert
 appearance plus less common detection, debug, notification-detail, and storage
 controls stay behind the **Advanced settings** toggle in Settings.
 
@@ -47,8 +47,8 @@ The **Belt Tracker** tab watches the moving blueprint belt and can alert from a
 different minimum rarity tier for each droid. It can run at the same time as
 chat alerts.
 
-1. Choose the Fortnite display or window once on the Dashboard. Both watchers
-   use that capture source.
+1. Choose the Fortnite display, window, or capture device once on the Dashboard.
+   Both watchers use that capture source.
 2. Enable **Debug mode**, then open Belt Tracker and click **Select Belt Region**.
 3. Use the recommended and only officially supported setup shown in the guide:
    stand at the start of the belt and match the cyan example box with two
@@ -184,6 +184,9 @@ settings.
 
 - **No alerts coming through?** Make sure the game is on the monitor Droid
   Alerts is watching and the chat box is visible.
+- **Capture card unavailable?** Close OBS or the card's preview application if
+  it has exclusive control, reconnect the card, then refresh **Select Capture
+  Device**.
 - **Test alert works but nothing in-game?** Give it a moment. It checks the
   chat several times a second, but spawns are random.
 - Anything beyond that, and for power-user features (command line, custom

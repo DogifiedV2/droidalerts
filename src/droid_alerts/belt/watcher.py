@@ -59,6 +59,12 @@ def run_belt_watcher(
     window_title: str = "",
     window_process: str = "",
     window_class: str = "",
+    device_name: str = "",
+    device_path: str = "",
+    device_vid: int | None = None,
+    device_pid: int | None = None,
+    device_backend: int = 0,
+    shared_device_spec=None,
     dev_mode: bool = False,
     collect_template_samples: bool = False,
     idle_scan_fps: int = DEFAULT_IDLE_SCAN_FPS,
@@ -80,14 +86,20 @@ def run_belt_watcher(
         active_scan_fps,
     )
 
-    capture_source = (
-        "window" if str(capture_source).strip().lower() == "window" else "monitor"
-    )
+    capture_source = str(capture_source).strip().lower()
+    if capture_source not in {"monitor", "window", "device"}:
+        capture_source = "monitor"
 
     def open_capture():
         if capture_source == "monitor":
             return create_capture(monitor_index=monitor_index, prefer_dxcam=False)
-        return create_capture(
+        if capture_source == "device" and shared_device_spec is not None:
+            from ..device_capture import SharedDeviceCaptureClient
+
+            capture = SharedDeviceCaptureClient(shared_device_spec)
+            capture.screen_size()
+            return capture
+        kwargs = dict(
             monitor_index=monitor_index,
             prefer_dxcam=False,
             capture_source=capture_source,
@@ -95,6 +107,26 @@ def run_belt_watcher(
             window_process=window_process,
             window_class=window_class,
         )
+        if capture_source == "device":
+            kwargs.update(
+                device_name=device_name,
+                device_path=device_path,
+                device_vid=device_vid,
+                device_pid=device_pid,
+                device_backend=device_backend,
+            )
+        capture = create_capture(**kwargs)
+        if capture_source != "device":
+            return capture
+        try:
+            capture.screen_size()
+        except Exception:
+            try:
+                capture.close()
+            except Exception:
+                pass
+            raise
+        return capture
 
     # DXcam caches one camera per display. Monitor capture deliberately uses
     # an independent MSS backend, while a Dashboard window selection routes
@@ -106,13 +138,13 @@ def run_belt_watcher(
             capture = open_capture()
         except Exception as exc:
             dev_logger.log("capture_start_failed", error=str(exc))
-            if capture_source != "window":
+            if capture_source not in {"window", "device"}:
                 emit("error", message=f"Screen capture could not start: {exc}")
                 emit("stopped")
                 return
             emit(
                 "capture_error",
-                message=f"Fortnite is unavailable; retrying automatically: {exc}",
+                message=f"Capture source is unavailable; retrying automatically: {exc}",
             )
             stop_event.wait(1.0)
     if capture is None:
@@ -212,10 +244,10 @@ def run_belt_watcher(
                     frame = capture.grab(region)
                 except Exception as exc:
                     dev_logger.log("capture_error", frame=frame_number, error=str(exc))
-                    if capture_source == "window":
+                    if capture_source in {"window", "device"}:
                         emit(
                             "capture_error",
-                            message=f"Fortnite capture was lost; retrying automatically: {exc}",
+                            message=f"Capture source was lost; retrying automatically: {exc}",
                         )
                         try:
                             capture.close()

@@ -297,14 +297,31 @@ def create_capture(
     window_title: str = "",
     window_process: str = "",
     window_class: str = "",
+    device_name: str = "",
+    device_path: str = "",
+    device_vid: int | None = None,
+    device_pid: int | None = None,
+    device_backend: int = 0,
 ) -> CaptureBackend:
-    if str(capture_source).strip().lower() == "window":
+    source = str(capture_source).strip().lower()
+    if source == "window":
         from .window_capture import WindowsGraphicsCapture
 
         return WindowsGraphicsCapture(
             title=window_title,
             process_name=window_process,
             class_name=window_class,
+            monitor_index=monitor_index,
+        )
+    if source == "device":
+        from .device_capture import DeviceCaptureSession
+
+        return DeviceCaptureSession(
+            name=device_name,
+            path=device_path,
+            vid=device_vid,
+            pid=device_pid,
+            preferred_backend=device_backend,
             monitor_index=monitor_index,
         )
     if prefer_dxcam:

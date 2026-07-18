@@ -21,6 +21,12 @@ def run_belt_worker_process(
     window_title: str = "",
     window_process: str = "",
     window_class: str = "",
+    device_name: str = "",
+    device_path: str = "",
+    device_vid: int | None = None,
+    device_pid: int | None = None,
+    device_backend: int = 0,
+    shared_device_spec: Any | None = None,
 ) -> None:
     """Run Belt Tracker outside the GUI process.
 
@@ -39,6 +45,12 @@ def run_belt_worker_process(
             window_title=window_title,
             window_process=window_process,
             window_class=window_class,
+            device_name=device_name,
+            device_path=device_path,
+            device_vid=device_vid,
+            device_pid=device_pid,
+            device_backend=device_backend,
+            shared_device_spec=shared_device_spec,
             dev_mode=dev_mode,
             collect_template_samples=collect_template_samples,
             idle_scan_fps=idle_scan_fps,

@@ -18,26 +18,39 @@ class RegionSelector:
         on_selected: Callable[[PixelBox], None],
         *,
         on_cancelled: Callable[[], None] | None = None,
+        capture=None,
+        display_monitor: MonitorDescriptor | MonitorInfo | None = None,
     ) -> None:
         self.root, self.monitor = root, monitor
         self.on_selected, self.on_cancelled = on_selected, on_cancelled
         self._finished = False
         # Chat monitoring may own DXcam's singleton for this display. An
         # independent MSS capture avoids releasing that camera underneath it.
-        capture = create_capture(monitor.index, prefer_dxcam=False)
+        display_monitor = display_monitor or monitor
+        capture = capture or create_capture(monitor.index, prefer_dxcam=False)
         try:
             frame = capture.grab(PixelBox(0, 0, monitor.width, monitor.height))
         finally:
             capture.close()
+        scale = min(
+            display_monitor.width / max(1, monitor.width),
+            display_monitor.height / max(1, monitor.height),
+        )
+        display_width = max(1, round(monitor.width * scale))
+        display_height = max(1, round(monitor.height * scale))
+        if (display_width, display_height) != (monitor.width, monitor.height):
+            frame = cv2.resize(frame, (display_width, display_height), interpolation=cv2.INTER_AREA)
+        self._source_scale_x = monitor.width / display_width
+        self._source_scale_y = monitor.height / display_height
         self.window = tk.Toplevel(root)
         self.window.overrideredirect(True)
         self.window.attributes("-topmost", True)
         self.window.geometry(
             format_tk_geometry(
-                width=monitor.width,
-                height=monitor.height,
-                x=monitor.left,
-                y=monitor.top,
+                width=display_width,
+                height=display_height,
+                x=display_monitor.left + max(0, (display_monitor.width - display_width) // 2),
+                y=display_monitor.top + max(0, (display_monitor.height - display_height) // 2),
             )
         )
         self.canvas = tk.Canvas(self.window, highlightthickness=0, cursor="crosshair")
@@ -122,7 +135,15 @@ class RegionSelector:
     def _save(self, _event=None) -> str:
         if self.current is None or self.current[2] < 100 or self.current[3] < 50:
             return "break"
-        box = PixelBox(*self.current)
+        left, top, width, height = self.current
+        source_scale_x = getattr(self, "_source_scale_x", 1.0)
+        source_scale_y = getattr(self, "_source_scale_y", 1.0)
+        box = PixelBox(
+            round(left * source_scale_x),
+            round(top * source_scale_y),
+            max(1, round(width * source_scale_x)),
+            max(1, round(height * source_scale_y)),
+        )
         self._finished = True
         self.window.destroy()
         self.on_selected(box)

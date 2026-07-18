@@ -7,6 +7,7 @@ import csv
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -15,6 +16,7 @@ from queue import Empty as QueueEmpty
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, filedialog, messagebox
 
 import tkinter as tk
+import cv2
 
 try:
     import ttkbootstrap as ttk
@@ -66,6 +68,13 @@ from .config import (
     user_sounds_dir,
 )
 from .diagnostics import create_support_bundle
+from .device_capture import (
+    CaptureDeviceDescriptor,
+    DeviceCaptureSession,
+    device_capture_key,
+    list_capture_devices,
+    session_from_config,
+)
 from .logging_io import alert_samples_dir, append_event, debug_dir, logs_dir, timestamp
 from .maintenance import (
     cleanup_runtime_data,
@@ -207,6 +216,7 @@ class DroidAlertsApp:
         self.belt_stop_event = None
         self.belt_status_queue = None
         self.belt_telemetry: AnonymousBeltTelemetryClient | None = None
+        self.device_capture_session: DeviceCaptureSession | None = None
         self.app_telemetry = AnonymousAppTelemetryClient(self.config)
         self._belt_poll_after_id: str | None = None
         self._belt_worker_ready = False
@@ -224,6 +234,7 @@ class DroidAlertsApp:
         # tracking. This keeps normal chat-only launches unobstructed.
         self._belt_overlay_requested = False
         self._belt_visible_tracks: list[dict[str, object]] = []
+        self._belt_overlay_scale: tuple[float, float] = (1.0, 1.0)
         self.region_overlay: tk.Toplevel | None = None
         self.region_overlay_windows: list[tk.Toplevel] = []
         self.region_positioner: tk.Toplevel | None = None
@@ -553,11 +564,17 @@ class DroidAlertsApp:
             command=self.select_capture_window,
             **bootstyle("info-outline"),
         ).grid(row=0, column=5, padx=(10, 0))
+        ttk.Button(
+            controls_row,
+            text="Select Capture Device",
+            command=self.select_capture_device,
+            **bootstyle("info-outline"),
+        ).grid(row=0, column=6, padx=(10, 0))
         ttk.Label(
             controls_row,
             textvariable=self.capture_source_var,
             **muted_style(),
-        ).grid(row=1, column=2, columnspan=4, sticky="e", pady=(7, 0))
+        ).grid(row=1, column=2, columnspan=5, sticky="e", pady=(7, 0))
         self.refresh_monitor_choices()
 
         alerts_panel = ttk.Frame(page)
@@ -1632,12 +1649,16 @@ class DroidAlertsApp:
                 or "Selected window"
             )
             return f"Window: {selected}"
+        if config.capture_source == "device":
+            return f"Capture device: {config.capture_device_name or 'Selected device'}"
         return self.monitor_display_var.get() or f"Monitor {config.monitor_index}"
 
     def _watcher_ready_text(self) -> str:
         if self.config.capture_source == "window":
             return f"{self._capture_target_label()} is selected. Start watching when Fortnite is open."
-        return "Choose the display with Fortnite, or select its window, then start watching."
+        if self.config.capture_source == "device":
+            return f"{self._capture_target_label()} is selected. Start watching when the console is visible."
+        return "Choose the display with Fortnite, or select its window or capture device, then start watching."
 
     def _refresh_capture_source_text(self) -> None:
         if not hasattr(self, "capture_source_var"):
@@ -1649,16 +1670,86 @@ class DroidAlertsApp:
         self.config.capture_window_title = ""
         self.config.capture_window_process = ""
         self.config.capture_window_class = ""
+        self.config.capture_device_name = ""
+        self.config.capture_device_path = ""
+        self.config.capture_device_vid = None
+        self.config.capture_device_pid = None
+        self.config.capture_device_backend = 0
         self._refresh_capture_source_text()
 
-    def _create_chat_capture(self, config: AppConfig | None = None):
-        config = config or self.config
+    @staticmethod
+    def _device_selector(config: AppConfig) -> dict[str, object]:
+        return {
+            "name": config.capture_device_name,
+            "path": config.capture_device_path,
+            "vid": config.capture_device_vid,
+            "pid": config.capture_device_pid,
+            "preferred_backend": config.capture_device_backend,
+            "monitor_index": config.monitor_index,
+        }
+
+    def _ensure_device_capture_session(self, config: AppConfig) -> DeviceCaptureSession:
+        session = getattr(self, "device_capture_session", None)
+        selector = self._device_selector(config)
+        if session is not None and session.matches(**selector):
+            return session
+        if session is not None:
+            session.close()
+        session = session_from_config(
+            config,
+            context=multiprocessing.get_context("spawn"),
+        )
+        self.device_capture_session = session
+        try:
+            session.screen_size()
+        except Exception:
+            self.device_capture_session = None
+            session.close()
+            raise
+        return session
+
+    def _maybe_close_device_capture_session(self, *, force: bool = False) -> None:
+        session = getattr(self, "device_capture_session", None)
+        if session is None:
+            return
+        if not force and self.config.capture_source == "device" and (
+            self.is_watching() or self.is_belt_tracking()
+        ):
+            return
+        self.device_capture_session = None
+        session.close()
+
+    def _create_runtime_capture(self, config: AppConfig):
+        if config.capture_source == "device":
+            session = getattr(self, "device_capture_session", None)
+            if session is None or not session.matches(**self._device_selector(config)):
+                raise RuntimeError("The selected capture device session is not running.")
+            return session.client()
         return create_capture(
             monitor_index=config.monitor_index,
             capture_source=config.capture_source,
             window_title=config.capture_window_title,
             window_process=config.capture_window_process,
             window_class=config.capture_window_class,
+        )
+
+    def _create_chat_capture(self, config: AppConfig | None = None):
+        config = config or self.config
+        if config.capture_source == "device":
+            session = getattr(self, "device_capture_session", None)
+            if session is not None and session.matches(**self._device_selector(config)):
+                return session.client()
+        return create_capture(
+            monitor_index=config.monitor_index,
+            capture_source=config.capture_source,
+            window_title=config.capture_window_title,
+            window_process=config.capture_window_process,
+            window_class=config.capture_window_class,
+            device_name=config.capture_device_name,
+            device_path=config.capture_device_path,
+            device_vid=config.capture_device_vid,
+            device_pid=config.capture_device_pid,
+            device_backend=config.capture_device_backend,
         )
 
     @staticmethod
@@ -1672,6 +1763,13 @@ class DroidAlertsApp:
                 title=config.capture_window_title,
                 process_name=config.capture_window_process,
                 class_name=config.capture_window_class,
+            )
+        if config.capture_source == "device":
+            return device_capture_key(
+                name=config.capture_device_name,
+                path=config.capture_device_path,
+                vid=config.capture_device_vid,
+                pid=config.capture_device_pid,
             )
         return getattr(self._current_monitor_info(), "key", None)
 
@@ -1971,6 +2069,11 @@ class DroidAlertsApp:
             self.config.capture_window_title = window.title
             self.config.capture_window_process = window.process_name
             self.config.capture_window_class = window.class_name
+            self.config.capture_device_name = ""
+            self.config.capture_device_path = ""
+            self.config.capture_device_vid = None
+            self.config.capture_device_pid = None
+            self.config.capture_device_backend = 0
             saved = self.save_settings(interactive=False, update_detail=False)
             if saved is None:
                 feedback_var.set("Fix the invalid setting shown in the main window, then try again.")
@@ -2047,6 +2150,184 @@ class DroidAlertsApp:
         picker.focus_set()
         dialog.wait_window()
 
+    def select_capture_device(self) -> None:
+        if sys.platform != "win32":
+            messagebox.showinfo(
+                "Select Capture Device",
+                "Direct capture-device support is available in the Windows app.",
+            )
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Select Capture Device")
+        dialog.transient(self.root)
+        dialog.minsize(680, 400)
+        dialog.geometry("760x500")
+
+        body = ttk.Frame(dialog, padding=20)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(4, weight=1)
+        ttk.Label(body, text="Select Capture Device", font=self._font(14, "bold")).grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(
+            body,
+            text="Choose the capture card receiving your console video. This changes both watchers.",
+            wraplength=700,
+            justify="left",
+        ).grid(row=1, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(
+            body,
+            text="If a device is busy, close OBS or the capture card's preview application and refresh.",
+            wraplength=700,
+            justify="left",
+            **muted_style(),
+        ).grid(row=2, column=0, sticky="w", pady=(5, 14))
+        feedback_var = StringVar(value="Connect the capture card, then refresh the list.")
+        ttk.Label(body, textvariable=feedback_var, wraplength=700, **muted_style()).grid(
+            row=3, column=0, sticky="w", pady=(0, 8)
+        )
+
+        picker = ttk.Treeview(
+            body,
+            columns=("device", "backend"),
+            show="headings",
+            selectmode="browse",
+            height=11,
+        )
+        picker.heading("device", text="Video capture device")
+        picker.heading("backend", text="Windows backend")
+        picker.column("device", anchor="w", stretch=True, minwidth=420)
+        picker.column("backend", anchor="w", stretch=False, width=180)
+        picker.grid(row=4, column=0, sticky="nsew")
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=5, column=0, sticky="ew", pady=(16, 0))
+        buttons.columnconfigure(2, weight=1)
+        devices_by_item: dict[str, CaptureDeviceDescriptor] = {}
+        select_button = None
+
+        def selected_device() -> CaptureDeviceDescriptor | None:
+            selection = picker.selection()
+            return devices_by_item.get(selection[0]) if selection else None
+
+        def refresh_devices() -> None:
+            nonlocal devices_by_item
+            for item in picker.get_children():
+                picker.delete(item)
+            devices_by_item = {}
+            try:
+                devices = list_capture_devices()
+            except Exception as exc:
+                feedback_var.set(f"Capture devices could not be listed: {exc}")
+                if select_button is not None:
+                    select_button.configure(state="disabled")
+                return
+            current_item = ""
+            for index, device in enumerate(devices):
+                item = f"device-{index}"
+                devices_by_item[item] = device
+                picker.insert("", "end", iid=item, values=(device.name, device.backend_name))
+                if self.config.capture_source == "device" and (
+                    (self.config.capture_device_path and device.path == self.config.capture_device_path)
+                    or (
+                        not self.config.capture_device_path
+                        and device.name.casefold() == self.config.capture_device_name.casefold()
+                    )
+                ):
+                    current_item = item
+            if not devices_by_item:
+                feedback_var.set("No video capture devices were found.")
+                if select_button is not None:
+                    select_button.configure(state="disabled")
+                return
+            preferred = current_item or next(iter(devices_by_item))
+            picker.selection_set(preferred)
+            picker.focus(preferred)
+            feedback_var.set(
+                f"{len(devices_by_item)} video device{'s' if len(devices_by_item) != 1 else ''} found."
+            )
+            if select_button is not None:
+                select_button.configure(state="normal")
+
+        def close_dialog() -> None:
+            try:
+                dialog.grab_release()
+            except tk.TclError:
+                pass
+            dialog.destroy()
+
+        def apply_device() -> None:
+            device = selected_device()
+            if device is None:
+                feedback_var.set("Select a capture device first.")
+                return
+            feedback_var.set(f'Checking video from "{device.name}"…')
+            dialog.update_idletasks()
+            candidate = AppConfig.from_dict(self.config.to_dict())
+            candidate.capture_source = "device"
+            candidate.capture_window_title = ""
+            candidate.capture_window_process = ""
+            candidate.capture_window_class = ""
+            candidate.capture_device_name = device.name
+            candidate.capture_device_path = device.path
+            candidate.capture_device_vid = device.vid
+            candidate.capture_device_pid = device.pid
+            candidate.capture_device_backend = device.backend
+
+            test_session = None
+            try:
+                test_session = session_from_config(
+                    candidate,
+                    context=multiprocessing.get_context("spawn"),
+                )
+                width, height = test_session.screen_size()
+            except Exception as exc:
+                feedback_var.set(str(exc))
+                return
+            finally:
+                if test_session is not None:
+                    test_session.close()
+
+            if self.is_watching():
+                try:
+                    self._ensure_device_capture_session(candidate)
+                except Exception as exc:
+                    feedback_var.set(str(exc))
+                    return
+            if self.is_belt_tracking():
+                self._belt_restart_after_stop = True
+                self.stop_belt_tracking(reason="monitor-change")
+            self.config = candidate
+            saved = self.save_settings(interactive=False, update_detail=False)
+            if saved is None:
+                feedback_var.set("Fix the invalid setting shown in the main window, then try again.")
+                return
+            self._load_belt_region()
+            self._refresh_capture_source_text()
+            self.watcher_detail_var.set(self._watcher_ready_text())
+            self.detail_var.set(f'Capture device set to "{device.name}" ({width} × {height})')
+            close_dialog()
+
+        ttk.Button(
+            buttons, text="Refresh", command=refresh_devices, **bootstyle("secondary-outline")
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Button(buttons, text="Cancel", command=close_dialog, **bootstyle("secondary")).grid(
+            row=0, column=3, padx=(0, 8)
+        )
+        select_button = ttk.Button(
+            buttons, text="Use Capture Device", command=apply_device, **bootstyle("success")
+        )
+        select_button.grid(row=0, column=4)
+        picker.bind("<Double-1>", lambda _event: apply_device())
+        dialog.bind("<Return>", lambda _event: apply_device())
+        dialog.bind("<Escape>", lambda _event: close_dialog())
+        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+        refresh_devices()
+        dialog.grab_set()
+        picker.focus_set()
+
     def _current_monitor_info(self) -> MonitorInfo | None:
         index = max(1, int(self._value("monitor_index")))
         try:
@@ -2066,12 +2347,40 @@ class DroidAlertsApp:
         )
 
     def _load_belt_region(self) -> None:
-        monitor = self._current_monitor_info()
+        monitor = self._current_belt_source_info()
         self.belt_overlay.close()
         relative = load_belt_region(monitor) if monitor is not None else None
         self.belt_region = relative.to_pixels(monitor) if relative is not None and monitor is not None else None
         self._refresh_belt_region_text()
         self._configure_belt_overlay()
+
+    def _current_belt_source_info(self, *, open_device: bool = False) -> MonitorInfo | None:
+        monitor = self._current_monitor_info()
+        if monitor is None or self.config.capture_source != "device":
+            return monitor
+        session = getattr(self, "device_capture_session", None)
+        capture = None
+        try:
+            if session is not None and session.matches(**self._device_selector(self.config)):
+                capture = session.client()
+            elif open_device:
+                capture = self._create_chat_capture(self.config)
+            if capture is not None:
+                width, height = capture.screen_size()
+            else:
+                width, height = 1920, 1080
+        finally:
+            if capture is not None:
+                capture.close()
+        return MonitorInfo(
+            left=monitor.left,
+            top=monitor.top,
+            width=width,
+            height=height,
+            index=monitor.index,
+            key=self._current_capture_key() or "device:unknown",
+            name=self.config.capture_device_name or "Capture device",
+        )
 
     def _refresh_belt_region_text(self) -> None:
         if self.belt_region is None:
@@ -2105,8 +2414,9 @@ class DroidAlertsApp:
         if self.is_belt_tracking():
             self.belt_detail_var.set("Stop Belt Tracker before changing its region.")
             return
-        monitor = self._current_monitor_info()
-        if monitor is None:
+        source = self._current_belt_source_info(open_device=True)
+        display_monitor = self._current_monitor_info()
+        if source is None or display_monitor is None:
             messagebox.showerror("Belt Region", "The selected Dashboard display is not available.")
             return
         if not self._confirm_belt_region_guide_if_needed():
@@ -2119,7 +2429,12 @@ class DroidAlertsApp:
             self.root.update_idletasks()
             # Windows needs a compositor cycle after iconify() or the capture
             # can still contain the main Droid Alerts window.
-            self.root.after(300, lambda monitor=monitor: self._open_belt_region_selector(monitor))
+            self.root.after(
+                300,
+                lambda source=source, display_monitor=display_monitor: self._open_belt_region_selector(
+                    source, display_monitor
+                ),
+            )
         except Exception as exc:
             self._restore_after_belt_selection()
             messagebox.showerror("Belt Region", str(exc))
@@ -2149,13 +2464,20 @@ class DroidAlertsApp:
         self.config = config
         return True
 
-    def _open_belt_region_selector(self, monitor: MonitorInfo) -> None:
+    def _open_belt_region_selector(
+        self,
+        monitor: MonitorInfo,
+        display_monitor: MonitorInfo | None = None,
+    ) -> None:
         try:
+            capture = self._create_chat_capture() if self.config.capture_source == "device" else None
             self.belt_selector = BeltRegionSelector(
                 self.root,
                 monitor,
                 lambda box, monitor=monitor: self._belt_region_selected(box, monitor),
                 on_cancelled=self._belt_region_cancelled,
+                capture=capture,
+                display_monitor=display_monitor,
             )
         except Exception as exc:
             self._restore_after_belt_selection()
@@ -2440,11 +2762,43 @@ class DroidAlertsApp:
         if monitor is None:
             return
         try:
-            self.belt_overlay.configure(monitor, self.belt_region)
-            self.belt_overlay.update_tracks(self._belt_visible_tracks)
+            region = self.belt_region
+            self._belt_overlay_scale = (1.0, 1.0)
+            if self.config.capture_source == "device":
+                source = self._current_belt_source_info()
+                if source is not None:
+                    scale_x = monitor.width / max(1, source.width)
+                    scale_y = monitor.height / max(1, source.height)
+                    self._belt_overlay_scale = (scale_x, scale_y)
+                    region = PixelBox(
+                        round(region.left * scale_x),
+                        round(region.top * scale_y),
+                        max(1, round(region.width * scale_x)),
+                        max(1, round(region.height * scale_y)),
+                    )
+            self.belt_overlay.configure(monitor, region)
+            self.belt_overlay.update_tracks(self._scaled_belt_overlay_tracks())
         except Exception as exc:
             self.belt_overlay.close()
             self.belt_detail_var.set(f"Belt overlay could not open: {exc}")
+
+    def _scaled_belt_overlay_tracks(self) -> list[dict[str, object]]:
+        scale_x, scale_y = self._belt_overlay_scale
+        if (scale_x, scale_y) == (1.0, 1.0):
+            return self._belt_visible_tracks
+        result: list[dict[str, object]] = []
+        for track in self._belt_visible_tracks:
+            item = dict(track)
+            box = tuple(int(value) for value in track.get("box", (0, 0, 0, 0)))
+            if len(box) == 4:
+                item["box"] = (
+                    round(box[0] * scale_x),
+                    round(box[1] * scale_y),
+                    max(1, round(box[2] * scale_x)),
+                    max(1, round(box[3] * scale_y)),
+                )
+            result.append(item)
+        return result
 
     def identify_displays(self) -> None:
         try:
@@ -2685,8 +3039,21 @@ class DroidAlertsApp:
             return
         if not self._confirm_belt_region_guide_if_needed():
             return
-        relative = load_belt_region(monitor)
-        self.belt_region = relative.to_pixels(monitor) if relative is not None else None
+        if self.config.capture_source == "device":
+            try:
+                self._ensure_device_capture_session(self.config)
+            except Exception as exc:
+                self._set_belt_header_state("Error")
+                self.belt_status_var.set("Capture device unavailable")
+                self.belt_detail_var.set(str(exc))
+                return
+        belt_source = self._current_belt_source_info()
+        relative = load_belt_region(belt_source) if belt_source is not None else None
+        self.belt_region = (
+            relative.to_pixels(belt_source)
+            if relative is not None and belt_source is not None
+            else None
+        )
         self._refresh_belt_region_text()
         if self.belt_region is None:
             self.belt_status_var.set("Select the belt region first")
@@ -2702,6 +3069,16 @@ class DroidAlertsApp:
         )
         save_config(config)
         self.config = config
+
+        device_spec = None
+        if config.capture_source == "device":
+            try:
+                device_spec = self._ensure_device_capture_session(config).spec
+            except Exception as exc:
+                self._set_belt_header_state("Error")
+                self.belt_status_var.set("Capture device unavailable")
+                self.belt_detail_var.set(str(exc))
+                return
 
         context = multiprocessing.get_context("spawn")
         self.belt_stop_event = context.Event()
@@ -2728,6 +3105,12 @@ class DroidAlertsApp:
                 config.capture_window_title,
                 config.capture_window_process,
                 config.capture_window_class,
+                config.capture_device_name,
+                config.capture_device_path,
+                config.capture_device_vid,
+                config.capture_device_pid,
+                config.capture_device_backend,
+                device_spec,
             ),
             name="DroidAlertsBeltTracker",
             daemon=True,
@@ -2822,7 +3205,7 @@ class DroidAlertsApp:
                 count = len(self._belt_visible_tracks)
                 self.belt_tracks_var.set(f"{count} active track{'s' if count != 1 else ''}")
                 if bool(self._value("belt_overlay_enabled")):
-                    self.belt_overlay.update_tracks(self._belt_visible_tracks)
+                    self.belt_overlay.update_tracks(self._scaled_belt_overlay_tracks())
         elif event_type == "track_event":
             record = event.get("record")
             if isinstance(record, dict):
@@ -2862,15 +3245,15 @@ class DroidAlertsApp:
             self.belt_status_var.set("Belt Tracker warning")
             self.belt_detail_var.set(message)
         elif event_type == "capture_error":
-            message = str(event.get("message") or "Fortnite capture is unavailable.")
+            message = str(event.get("message") or "The capture source is unavailable.")
             self._set_belt_header_state("Warning")
-            self.belt_status_var.set("Waiting for Fortnite")
+            self.belt_status_var.set("Waiting for capture source")
             self.belt_detail_var.set(message)
         elif event_type == "capture_reconnected":
             self._belt_error_message = ""
             self._set_belt_header_state("Running")
             self.belt_status_var.set("Tracking blueprint belt")
-            self.belt_detail_var.set("Fortnite reconnected automatically.")
+            self.belt_detail_var.set("Capture source reconnected automatically.")
         elif event_type == "dev_log":
             path = str(event.get("path") or "belt_dev")
             self.detail_var.set(f"Belt dev log: data/{path}")
@@ -3071,6 +3454,8 @@ class DroidAlertsApp:
         error_message = str(exc) if exc is not None else self._belt_error_message
         self._belt_error_message = ""
         if restart:
+            if self.config.capture_source != "device":
+                self._maybe_close_device_capture_session()
             self._load_belt_region()
             if self.belt_region is not None:
                 self._set_belt_header_state("Running")
@@ -3098,6 +3483,7 @@ class DroidAlertsApp:
             )
         if not self._shutting_down:
             self._configure_belt_overlay()
+        self._maybe_close_device_capture_session()
         self.detail_var.set("Belt Tracker stopped")
 
     def stop_belt_tracking(self, *, reason: str = "manual") -> None:
@@ -3169,16 +3555,19 @@ class DroidAlertsApp:
             source = event.get("region_source", "automatic")
             capture_source = str(event.get("capture_source") or "monitor")
             capture_label = str(event.get("capture_label") or "").strip()
-            target_label = (
-                f"Window: {capture_label or 'Selected window'}"
-                if capture_source == "window"
-                else self.monitor_display_var.get()
-            )
+            if capture_source == "window":
+                target_label = f"Window: {capture_label or 'Selected window'}"
+            elif capture_source == "device":
+                target_label = f"Capture device: {capture_label or 'Selected device'}"
+            else:
+                target_label = self.monitor_display_var.get()
             self.watcher_status_var.set("Watching for priority spawns")
             self.watcher_detail_var.set(
                 f"{target_label} · {width} × {height} · Region: {source}"
             )
             self._set_watcher_state("Running")
+            if capture_source != "device":
+                self._maybe_close_device_capture_session()
         elif event_type == "scan":
             stamp = str(event.get("scanned_at") or "")
             self.last_scan_var.set(f"Last successful scan: {self._display_timestamp(stamp)}")
@@ -3445,6 +3834,11 @@ class DroidAlertsApp:
         config.capture_window_title = previous_config.capture_window_title
         config.capture_window_process = previous_config.capture_window_process
         config.capture_window_class = previous_config.capture_window_class
+        config.capture_device_name = previous_config.capture_device_name
+        config.capture_device_path = previous_config.capture_device_path
+        config.capture_device_vid = previous_config.capture_device_vid
+        config.capture_device_pid = previous_config.capture_device_pid
+        config.capture_device_backend = previous_config.capture_device_backend
         try:
             config.monitor_index = max(1, int(self._value("monitor_index")))
             config.capture_interval_seconds = max(0.05, float(self._value("capture_interval_seconds")))
@@ -4100,6 +4494,15 @@ class DroidAlertsApp:
         config = self.save_settings()
         if config is None:
             return
+        if config.capture_source == "device":
+            try:
+                self._ensure_device_capture_session(config)
+            except Exception as exc:
+                self._set_watcher_state("Error")
+                self.watcher_status_var.set("Capture device unavailable")
+                self.watcher_detail_var.set(str(exc))
+                self.detail_var.set(str(exc))
+                return
         self.stop_event = threading.Event()
         self._watch_stop_reason = ""
         self._watch_segment_started = time.monotonic()
@@ -4120,6 +4523,7 @@ class DroidAlertsApp:
                 stop_event=stop_event,
                 popup_parent=self.root,
                 status_callback=self._queue_watcher_status,
+                capture_factory=self._create_runtime_capture,
             )
             self._post_to_ui(lambda thread=thread: self._watcher_finished(None, thread))
         except Exception as exc:
@@ -4146,6 +4550,7 @@ class DroidAlertsApp:
             self.detail_var.set(f"Watcher stopped: {exc}")
             messagebox.showerror("Watcher", str(exc))
         self._watch_stop_reason = ""
+        self._maybe_close_device_capture_session()
 
     def stop_watcher(self, *, reason: str = "manual") -> None:
         if self.stop_event is not None:
@@ -4560,6 +4965,10 @@ class DroidAlertsApp:
                 max_failures=self.config.validation_failures_before_calibration_prompt,
                 monitor_key=getattr(capture_area, "key", None),
             ).resolve()
+            if self.config.capture_source == "device":
+                self._show_device_chat_region_preview(capture, box, source, screen_w, screen_h)
+                self.set_region_controls_visible(True)
+                return
             left_offset = int(getattr(capture_area, "left", 0))
             top_offset = int(getattr(capture_area, "top", 0))
             self.region_box = box
@@ -4577,6 +4986,70 @@ class DroidAlertsApp:
             self.set_region_controls_visible(True)
         finally:
             capture.close()
+
+    def _show_device_chat_region_preview(
+        self,
+        capture,
+        box: PixelBox,
+        source: str,
+        screen_w: int,
+        screen_h: int,
+    ) -> None:
+        frame = capture.grab(PixelBox(0, 0, screen_w, screen_h))
+        cv2.rectangle(
+            frame,
+            (box.left, box.top),
+            (max(box.left, box.right - 1), max(box.top, box.bottom - 1)),
+            (0, 0, 255),
+            max(2, round(screen_h / 540)),
+        )
+        scale = min(1.0, 1100 / max(1, screen_w), 650 / max(1, screen_h))
+        if scale < 1.0:
+            frame = cv2.resize(
+                frame,
+                (max(1, round(screen_w * scale)), max(1, round(screen_h * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+        encoded_ok, encoded = cv2.imencode(".png", frame)
+        if not encoded_ok:
+            raise RuntimeError("Could not prepare the capture-device preview.")
+        temp = tempfile.NamedTemporaryFile(
+            prefix="droid_alerts_device_region_", suffix=".png", delete=False
+        )
+        temp_path = Path(temp.name)
+        try:
+            temp.write(encoded.tobytes())
+            temp.close()
+            preview = tk.PhotoImage(file=str(temp_path))
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Chat Region Preview")
+        dialog.transient(self.root)
+        body = ttk.Frame(dialog, padding=16)
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body,
+            text=f"Capture device · {screen_w} × {screen_h} · Region: {source}",
+            font=self._font(11, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
+        image_label = ttk.Label(body, image=preview)
+        image_label.image = preview
+        image_label.pack()
+        ttk.Label(
+            body,
+            text="The red box is the area scanned for chat alerts.",
+            **muted_style(),
+        ).pack(anchor="w", pady=(10, 0))
+        ttk.Button(body, text="Close", command=dialog.destroy, **bootstyle("secondary")).pack(
+            anchor="e", pady=(12, 0)
+        )
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        self.region_box = box
+        self.region_source = source
+        self.region_screen_size = (screen_w, screen_h)
+        self.region_monitor_key = self._current_capture_key()
 
     def close_region_overlay(self) -> None:
         if self.region_positioner is not None:
@@ -4851,6 +5324,7 @@ class DroidAlertsApp:
             self._belt_stop_reason = "update"
             self.belt_stop_event.set()
         self._terminate_belt_process()
+        self._maybe_close_device_capture_session(force=True)
         self.belt_overlay.close()
         self.hide_droid_timers()
         self.destroy_region_overlay_windows()
@@ -4896,6 +5370,7 @@ class DroidAlertsApp:
             self._belt_stop_reason = "close"
             self.belt_stop_event.set()
         self._terminate_belt_process()
+        self._maybe_close_device_capture_session(force=True)
         self.belt_overlay.close()
         self.hide_droid_timers()
         self.destroy_region_overlay_windows()

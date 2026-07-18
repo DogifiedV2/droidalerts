@@ -77,7 +77,8 @@ CAPTURE_METADATA_MAX_LENGTH = 512
 
 
 def normalize_capture_source(value: Any) -> str:
-    return "window" if str(value or "").strip().lower() == "window" else "monitor"
+    source = str(value or "").strip().lower()
+    return source if source in {"monitor", "window", "device"} else "monitor"
 
 
 def normalize_capture_metadata(value: Any) -> str:
@@ -117,6 +118,11 @@ class AppConfig:
     capture_window_title: str = ""
     capture_window_process: str = ""
     capture_window_class: str = ""
+    capture_device_name: str = ""
+    capture_device_path: str = ""
+    capture_device_vid: int | None = None
+    capture_device_pid: int | None = None
+    capture_device_backend: int = 0
     capture_interval_seconds: float = 0.25
     dedupe_seconds: float = 12.0
     alert_cooldown_seconds: float = 10.0
@@ -219,8 +225,26 @@ class AppConfig:
             data.get("capture_window_process", "")
         )
         capture_window_class = normalize_capture_metadata(data.get("capture_window_class", ""))
+        capture_device_name = normalize_capture_metadata(data.get("capture_device_name", ""))
+        capture_device_path = normalize_capture_metadata(data.get("capture_device_path", ""))
+        try:
+            capture_device_vid = int(data["capture_device_vid"])
+        except (KeyError, TypeError, ValueError):
+            capture_device_vid = None
+        try:
+            capture_device_pid = int(data["capture_device_pid"])
+        except (KeyError, TypeError, ValueError):
+            capture_device_pid = None
+        try:
+            capture_device_backend = int(data.get("capture_device_backend", 0))
+        except (TypeError, ValueError):
+            capture_device_backend = 0
         if capture_source == "window" and not any(
             (capture_window_title, capture_window_process, capture_window_class)
+        ):
+            capture_source = "monitor"
+        if capture_source == "device" and not any(
+            (capture_device_path, capture_device_name)
         ):
             capture_source = "monitor"
         config = cls(
@@ -230,6 +254,11 @@ class AppConfig:
             capture_window_title=capture_window_title,
             capture_window_process=capture_window_process,
             capture_window_class=capture_window_class,
+            capture_device_name=capture_device_name,
+            capture_device_path=capture_device_path,
+            capture_device_vid=capture_device_vid,
+            capture_device_pid=capture_device_pid,
+            capture_device_backend=capture_device_backend,
             capture_interval_seconds=float(data.get("capture_interval_seconds", 0.25)),
             dedupe_seconds=float(data.get("dedupe_seconds", 12.0)),
             alert_cooldown_seconds=float(data.get("alert_cooldown_seconds", 10.0)),
@@ -349,6 +378,11 @@ class AppConfig:
             "capture_window_title": normalize_capture_metadata(self.capture_window_title),
             "capture_window_process": normalize_capture_metadata(self.capture_window_process),
             "capture_window_class": normalize_capture_metadata(self.capture_window_class),
+            "capture_device_name": normalize_capture_metadata(self.capture_device_name),
+            "capture_device_path": normalize_capture_metadata(self.capture_device_path),
+            "capture_device_vid": self.capture_device_vid,
+            "capture_device_pid": self.capture_device_pid,
+            "capture_device_backend": int(self.capture_device_backend),
             "capture_interval_seconds": self.capture_interval_seconds,
             "dedupe_seconds": self.dedupe_seconds,
             "alert_cooldown_seconds": self.alert_cooldown_seconds,

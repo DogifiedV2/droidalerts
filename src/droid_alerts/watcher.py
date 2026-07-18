@@ -42,6 +42,11 @@ def _capture_target_signature(config: AppConfig) -> tuple[object, ...]:
         config.capture_window_title,
         config.capture_window_process,
         config.capture_window_class,
+        config.capture_device_name,
+        config.capture_device_path,
+        config.capture_device_vid,
+        config.capture_device_pid,
+        config.capture_device_backend,
     )
 
 
@@ -52,6 +57,11 @@ def _create_configured_capture(config: AppConfig):
         window_title=config.capture_window_title,
         window_process=config.capture_window_process,
         window_class=config.capture_window_class,
+        device_name=config.capture_device_name,
+        device_path=config.capture_device_path,
+        device_vid=config.capture_device_vid,
+        device_pid=config.capture_device_pid,
+        device_backend=config.capture_device_backend,
     )
 
 
@@ -79,6 +89,8 @@ def _capture_label(config: AppConfig) -> str:
             or config.capture_window_process
             or "Selected window"
         )
+    if config.capture_source == "device":
+        return config.capture_device_name or "Capture device"
     return f"Monitor {config.monitor_index}"
 
 
@@ -113,6 +125,7 @@ def run_watch(
     stop_event=None,
     popup_parent=None,
     status_callback: Callable[[dict[str, object]], None] | None = None,
+    capture_factory: Callable[[AppConfig], object] | None = None,
 ) -> None:
     def emit(event_type: str, **data: object) -> None:
         if status_callback is None:
@@ -124,14 +137,29 @@ def run_watch(
 
     set_dpi_awareness()
     config = config or load_config()
+
+    def open_capture(target_config: AppConfig):
+        if capture_factory is None:
+            return _open_configured_capture(target_config)
+        capture = capture_factory(target_config)
+        try:
+            size = capture.screen_size()
+        except Exception:
+            try:
+                capture.close()
+            except Exception:
+                pass
+            raise
+        return capture, size
+
     while True:
         try:
-            capture, (screen_w, screen_h) = _open_configured_capture(config)
+            capture, (screen_w, screen_h) = open_capture(config)
             break
         except Exception as exc:
-            if config.capture_source != "window":
+            if config.capture_source not in {"window", "device"}:
                 raise
-            print(f"[CAPTURE] Waiting for selected window: {exc}")
+            print(f"[CAPTURE] Waiting for selected source: {exc}")
             emit("capture_error", message=str(exc))
             if _wait_or_stop(stop_event, 1.0):
                 emit("watcher_stopped")
@@ -291,7 +319,7 @@ def run_watch(
         nonlocal box
         nonlocal region_source
 
-        replacement, replacement_size = _open_configured_capture(target_config)
+        replacement, replacement_size = open_capture(target_config)
         replacement_width, replacement_height = replacement_size
         try:
             replacement_resolver = RegionResolver(
@@ -430,7 +458,7 @@ def run_watch(
                 emit("capture_error", message=str(exc))
                 recovery_delay = (
                     1.0
-                    if active_capture_config.capture_source == "window"
+                    if active_capture_config.capture_source in {"window", "device"}
                     else config.capture_interval_seconds
                 )
                 if _wait_or_stop(stop_event, recovery_delay):
@@ -439,7 +467,7 @@ def run_watch(
                     try:
                         switch_capture(active_capture_config)
                     except Exception as recovery_exc:
-                        print(f"[CAPTURE] Window reconnect failed: {recovery_exc}")
+                        print(f"[CAPTURE] Source reconnect failed: {recovery_exc}")
                     else:
                         emit(
                             "config_reloaded",

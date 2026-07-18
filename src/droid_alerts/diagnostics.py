@@ -34,6 +34,8 @@ def create_support_bundle(config: AppConfig) -> Path:
         "capture_window_title",
         "capture_window_process",
         "capture_window_class",
+        "capture_device_name",
+        "capture_device_path",
     ):
         if config_data.get(key):
             config_data[key] = "<redacted>"
