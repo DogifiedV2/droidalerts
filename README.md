@@ -137,7 +137,7 @@ If there is no release zip yet, use the source version instead:
 
 ## Rebirth Alert
 
-The Dashboard's **Priority Alerts** section includes an **Enable Rebirth Alert**
+The Dashboard's **Priority Alerts** section includes a **Rebirth Alert**
 toggle. It watches for the notification on the right side of the game when a
 rebirth droid is available. Turn it on, then start the normal Dashboard watcher.
 It uses the selected capture source and the existing popup, sound, Discord,

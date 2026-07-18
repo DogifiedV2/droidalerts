@@ -1107,7 +1107,7 @@ class DroidAlertsApp:
         self.setting_vars["rebirth_alert_enabled"] = BooleanVar(value=False)
         self.rebirth_alert_check = ttk.Checkbutton(
             alerts,
-            text="Enable Rebirth Alert",
+            text="Rebirth Alert",
             variable=self.setting_vars["rebirth_alert_enabled"],
             **bootstyle("round-toggle"),
         )
