@@ -183,8 +183,9 @@ def format_monitor_label(
 ) -> str:
     """Build a concise, game-style display label for a monitor picker."""
     label = f"Monitor {monitor.index}: {monitor.width} × {monitor.height}"
-    if monitor.name:
-        label += f" — {monitor.name}"
+    monitor_name = monitor.name.strip()
+    if monitor_name.casefold() not in {"", "generic pnp monitor"}:
+        label += f" — {monitor_name}"
 
     position = ""
     if monitor.is_primary:

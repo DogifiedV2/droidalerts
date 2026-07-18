@@ -55,7 +55,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(ROOT / "assets" / "signals_icon.png"),
+    icon=str(ROOT / "assets" / "signals_icon.ico"),
     version=str(ROOT / "version_info.txt"),
 )
 coll = COLLECT(

@@ -18,10 +18,10 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts import alerts, config as config_module
 from droid_alerts import gui, maintenance, region, row_finder, telemetry, watcher
-from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox
+from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox, format_monitor_label
 from droid_alerts.classifier import Detection
 from droid_alerts.config import AppConfig, Thresholds
-from droid_alerts.gui import DroidAlertsApp
+from droid_alerts.gui import DroidAlertsApp, fit_window_size
 from droid_alerts.notifications import phone_alerts_configured
 from droid_alerts.pipeline import Pipeline
 
@@ -239,6 +239,57 @@ class RuntimeResilienceTests(unittest.TestCase):
 
 
 class GuiRegressionTests(unittest.TestCase):
+    def test_preferred_window_size_is_capped_to_the_usable_screen(self):
+        self.assertEqual(
+            (1400, 1040),
+            fit_window_size(
+                1400,
+                1040,
+                3440,
+                1440,
+                horizontal_margin=80,
+                vertical_margin=140,
+            ),
+        )
+        self.assertEqual(
+            (1286, 628),
+            fit_window_size(
+                1400,
+                1040,
+                1366,
+                768,
+                horizontal_margin=80,
+                vertical_margin=140,
+            ),
+        )
+
+    def test_generic_monitor_name_is_omitted_from_picker_label(self):
+        monitor = MonitorDescriptor(
+            1,
+            0,
+            0,
+            1920,
+            1080,
+            is_primary=True,
+            name="Generic PnP Monitor",
+        )
+
+        self.assertEqual("Monitor 1: 1920 × 1080 (Primary)", format_monitor_label(monitor))
+
+    def test_empty_history_does_not_replace_detail_status(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.logs_tree = FakeTree()
+        app.history_rows_by_item = {}
+        app.history_summary_var = FakeVar()
+        app.detail_var = FakeVar("Settings loaded")
+        app._log_file_signature = None
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(gui, "logs_dir", return_value=Path(directory)):
+                app.refresh_logs()
+
+        self.assertEqual("No history yet", app.history_summary_var.get())
+        self.assertEqual("Settings loaded", app.detail_var.get())
+
     def test_history_skips_valid_json_values_that_are_not_objects(self):
         app = DroidAlertsApp.__new__(DroidAlertsApp)
         app.logs_tree = FakeTree()

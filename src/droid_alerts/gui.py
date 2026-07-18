@@ -141,6 +141,10 @@ ALERT_COMBOS: tuple[tuple[str, str], ...] = (
 UPDATE_POLL_INTERVAL_MS = 15 * 60 * 1000
 DISCORD_COMMUNITY_URL = "https://discord.gg/ZmFPjS4784"
 IDENTIFY_INSTALL_URL = "https://gonk.tools/identify"
+DEFAULT_WINDOW_WIDTH = 1400
+DEFAULT_WINDOW_HEIGHT = 1040
+PRIORITY_DIALOG_WIDTH = 760
+PRIORITY_DIALOG_HEIGHT = 820
 BELT_REGION_INSTRUCTIONS = (
     "Officially supported setup: stand at the start of the belt and match the guide with two "
     "complete blueprints visible. Price labels may be inside the box; they are ignored. Other "
@@ -154,6 +158,21 @@ def bootstyle(value: str) -> dict[str, str]:
 
 def muted_style() -> dict[str, str]:
     return {"style": "Muted.TLabel"}
+
+
+def fit_window_size(
+    width: int,
+    height: int,
+    screen_width: int,
+    screen_height: int,
+    *,
+    horizontal_margin: int,
+    vertical_margin: int,
+) -> tuple[int, int]:
+    """Fit a preferred window size inside the usable display area."""
+    usable_width = max(1, int(screen_width) - horizontal_margin)
+    usable_height = max(1, int(screen_height) - vertical_margin)
+    return min(int(width), usable_width), min(int(height), usable_height)
 
 
 def make_root(ui_theme: str = DEFAULT_THEME_KEY) -> tk.Tk:
@@ -361,10 +380,14 @@ class DroidAlertsApp:
         self.root.update_idletasks()
         required_width = self.root.winfo_reqwidth() + 20
         required_height = self.root.winfo_reqheight() + 20
-        usable_width = max(720, self.root.winfo_screenwidth() - 80)
-        usable_height = max(560, self.root.winfo_screenheight() - 140)
-        width = min(max(1120, required_width), usable_width)
-        height = min(max(760, required_height), usable_height)
+        width, height = fit_window_size(
+            max(DEFAULT_WINDOW_WIDTH, required_width),
+            max(DEFAULT_WINDOW_HEIGHT, required_height),
+            self.root.winfo_screenwidth(),
+            self.root.winfo_screenheight(),
+            horizontal_margin=80,
+            vertical_margin=140,
+        )
         self.root.geometry(f"{width}x{height}")
         self.root.minsize(min(940, width), min(650, height))
 
@@ -394,16 +417,25 @@ class DroidAlertsApp:
 
     def _load_app_icon(self) -> None:
         path = popup_icon_path(self.config)
-        if not path.exists():
-            return
-        try:
-            self.app_icon = tk.PhotoImage(file=str(path))
-            self.root.iconphoto(True, self.app_icon)
-            max_dim = max(self.app_icon.width(), self.app_icon.height())
-            factor = max(1, (max_dim + 47) // 48)
-            self.header_icon = self.app_icon.subsample(factor, factor)
-        except Exception as exc:
-            print(f"[GUI] Failed to load app icon: {exc}")
+        if path.exists():
+            try:
+                self.app_icon = tk.PhotoImage(file=str(path))
+                self.root.iconphoto(True, self.app_icon)
+                max_dim = max(self.app_icon.width(), self.app_icon.height())
+                factor = max(1, (max_dim + 47) // 48)
+                self.header_icon = self.app_icon.subsample(factor, factor)
+            except Exception as exc:
+                print(f"[GUI] Failed to load app icon: {exc}")
+
+        # Tk's PNG iconphoto is sufficient for the in-app brand image, but
+        # Windows title bars and taskbar grouping require a native ICO.
+        if sys.platform == "win32":
+            icon_path = assets_dir() / "signals_icon.ico"
+            if icon_path.exists():
+                try:
+                    self.root.iconbitmap(str(icon_path), default=str(icon_path))
+                except tk.TclError as exc:
+                    print(f"[GUI] Failed to load Windows app icon: {exc}")
 
     def _build_ui(self) -> None:
         outer = ttk.Frame(self.root, style="Page.TFrame")
@@ -2967,8 +2999,6 @@ class DroidAlertsApp:
         dialog.title("Priority Alerts")
         dialog.transient(self.root)
         dialog.grab_set()
-        dialog.minsize(580, 500)
-        dialog.geometry("700x650")
 
         body = ttk.Frame(dialog, padding=20)
         body.pack(fill="both", expand=True)
@@ -3174,6 +3204,17 @@ class DroidAlertsApp:
         dialog.bind("<Command-s>", save_targets)
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
         refresh_picker()
+        dialog.update_idletasks()
+        dialog_width, dialog_height = fit_window_size(
+            max(PRIORITY_DIALOG_WIDTH, dialog.winfo_reqwidth() + 20),
+            max(PRIORITY_DIALOG_HEIGHT, dialog.winfo_reqheight() + 20),
+            dialog.winfo_screenwidth(),
+            dialog.winfo_screenheight(),
+            horizontal_margin=80,
+            vertical_margin=120,
+        )
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        dialog.minsize(min(620, dialog_width), min(700, dialog_height))
         search_entry.focus_set()
 
     def _belt_overlay_changed(self) -> None:
@@ -5092,8 +5133,6 @@ class DroidAlertsApp:
             self.history_rows_by_item.clear()
             self._log_file_signature = None
             self.history_summary_var.set("No history yet")
-            if update_detail:
-                self.detail_var.set("History is empty; detections and delivery results will appear here")
             return
         try:
             stat = path.stat()

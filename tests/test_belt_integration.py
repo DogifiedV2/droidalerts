@@ -172,7 +172,7 @@ class BeltConfigAndRegionTests(unittest.TestCase):
         self.assertTrue(belt_family_meets_minimum("Beskar", "Gold"))
         self.assertTrue(belt_family_meets_minimum("Rainbow", "Diamond"))
         self.assertFalse(belt_family_meets_minimum("Gold", "Diamond"))
-        self.assertFalse(belt_family_meets_minimum("", "Default"))
+        self.assertTrue(belt_family_meets_minimum("", "Default"))
         self.assertFalse(belt_family_meets_minimum("", "Gold"))
 
     def test_target_normalization_keeps_only_real_droids_and_tiers(self):

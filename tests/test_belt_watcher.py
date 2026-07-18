@@ -527,7 +527,7 @@ class WatcherTests(unittest.TestCase):
 
         cases = (
             ({}, "Default", False),
-            ({"R2": "Default"}, "", False),
+            ({"R2": "Default"}, "", True),
             ({"R2": "Gold"}, "Default", False),
             ({"R2": "Gold"}, "Gold", True),
             ({"R2": "Diamond"}, "Rainbow", True),

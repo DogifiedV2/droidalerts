@@ -42,9 +42,9 @@ def belt_target_names(target_tiers: Mapping[str, str]) -> tuple[str, ...]:
 def belt_family_meets_minimum(family: object, minimum_family: object) -> bool:
     """Whether a detected family satisfies a configured minimum belt tier.
 
-    A missing family never fires a family-dependent alert. The identity can
-    still appear in the overlay/history as unknown, but guessing Default here
-    would turn an uncertain Gold/Beskar read into a false alert decision.
+    Default+ includes every belt tier, so a confirmed droid identity can alert
+    before its visual family is available. Higher minimums still require a
+    recognized family rather than guessing from an uncertain observation.
     """
 
     minimum = _FAMILY_BY_CASEFOLD.get(str(minimum_family or "").strip().casefold())
@@ -52,7 +52,7 @@ def belt_family_meets_minimum(family: object, minimum_family: object) -> bool:
         return False
     detected = _FAMILY_BY_CASEFOLD.get(str(family or "").strip().casefold())
     if detected is None:
-        return False
+        return minimum == BELT_FAMILY_ORDER[0]
     return BELT_FAMILY_RANK[detected] >= BELT_FAMILY_RANK[minimum]
 
 
