@@ -663,13 +663,13 @@ class DroidAlertsApp:
         inner.grid(row=1, column=0, sticky="nsew")
         return outer, inner
 
-    def _link_label(self, parent, text: str, command):
+    def _link_label(self, parent, text: str, command, *, style: str = "Link.TButton"):
         return ttk.Button(
             parent,
             text=text,
             command=command,
             cursor="hand2",
-            style="Link.TButton",
+            style=style,
         )
 
     def on_theme_selected(self, _event=None) -> None:
@@ -751,6 +751,7 @@ class DroidAlertsApp:
             hero,
             text="Start Watching",
             command=self.toggle_watcher,
+            padding=(18, 11),
             **bootstyle("success"),
         )
         self.watch_button.grid(row=0, column=1, sticky="ne", padx=(24, 0))
@@ -946,11 +947,14 @@ class DroidAlertsApp:
                 row=row, column=1, sticky="w", padx=(10, 16)
             )
             if setup is not None:
-                self._link_label(channels, "Set up", setup).grid(
+                self._link_label(channels, "Set up", setup, style="Utility.TButton").grid(
                     row=row, column=2, sticky="e", padx=(0, 16)
                 )
             self._link_label(
-                channels, "Test", lambda selected=channel: self.send_channel_test(selected)
+                channels,
+                "Test",
+                lambda selected=channel: self.send_channel_test(selected),
+                style="Utility.TButton",
             ).grid(row=row, column=3, sticky="e")
 
     def _build_alert_appearance(self, parent, *, row: int) -> None:
