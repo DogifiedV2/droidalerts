@@ -248,6 +248,42 @@ class TemplateCardRecognizerTests(unittest.TestCase):
                     6,
                 )
 
+    def test_geometry_score_prefers_template_separation_over_raw_similarity(self):
+        recognizer = TemplateCardRecognizer(
+            synthetic_index(),
+            config=TemplateRecognitionConfig(minimum_identity_margin=0.01),
+        )
+        frame = np.full((HEIGHT, 500, 3), (110, 95, 80), dtype=np.uint8)
+        r2_index = DROID_NAMES.index("R2")
+        frame[:, 120 : 120 + CARD_WIDTH] = card(r2_index + 1)
+        result = recognizer._analyze_aligned(frame)
+        candidate = next(item for item in result.candidates if item.accepted)
+        weakly_separated = replace(
+            candidate,
+            identity_margin=0.07,
+            family_margin=0.01,
+            family_best_similarity=0.99,
+            raw_best_similarity=0.98,
+        )
+        strongly_separated = replace(
+            candidate,
+            identity_margin=0.15,
+            family_margin=0.18,
+            family_best_similarity=0.90,
+            raw_best_similarity=0.92,
+        )
+        weak_result = replace(result, candidates=(weakly_separated,))
+        strong_result = replace(result, candidates=(strongly_separated,))
+        weak_attempt = (0.65, 0.45, 40, 0.15, weak_result)
+        strong_attempt = (0.58, 0.50, 60, 0.21, strong_result)
+
+        selected = max(
+            (weak_attempt, strong_attempt),
+            key=TemplateCardRecognizer._geometry_score,
+        )
+
+        self.assertIs(strong_attempt, selected)
+
     def test_marginal_beskar_match_stays_unknown(self):
         index = synthetic_index()
         histograms = np.zeros_like(index.family_histograms)

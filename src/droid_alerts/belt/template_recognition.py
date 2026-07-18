@@ -515,15 +515,23 @@ class TemplateCardRecognizer:
     @staticmethod
     def _geometry_score(
         attempt: tuple[float, float, int, float, CardFrameResult],
-    ) -> tuple[int, float, float, int, float]:
+    ) -> tuple[int, float, float, float, int, float]:
         _requested_ratio, _vertical_anchor, _crop_top, _top_ratio, result = attempt
         ratio = result.diagnostics["frame_shape"][0]
         accepted = [candidate for candidate in result.candidates if candidate.accepted]
         rejected_count = len(result.candidates) - len(accepted)
         return (
             len(accepted),
+            # Prefer the crop that separates both identity and family from
+            # their runners-up. Raw similarity alone is scale-sensitive and
+            # can favor an oversized crop that still resembles the card but
+            # loses the details needed to distinguish nearby templates.
+            sum(
+                candidate.identity_margin + candidate.family_margin
+                for candidate in accepted
+            ),
             sum(candidate.family_best_similarity for candidate in accepted),
-            sum(candidate.ocr_confidence for candidate in accepted),
+            sum(candidate.raw_best_similarity for candidate in accepted),
             -rejected_count,
             ratio,
         )
