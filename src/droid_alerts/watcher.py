@@ -9,7 +9,7 @@ from pathlib import Path
 import cv2
 
 from .alerts import AlertPolicy, row_hash
-from .capture import create_capture, set_dpi_awareness
+from .capture import PixelBox, create_capture, set_dpi_awareness
 from .classifier import Detection
 from .config import (
     CALIBRATION_FILE,
@@ -35,6 +35,8 @@ from .popup import popup_icon_path, show_popup
 from .region import RegionResolver
 from .rebirth import (
     RebirthAlertDetector,
+    RebirthAlertTracker,
+    RebirthHudDetector,
     RebirthMatch,
     RebirthPresenceGate,
     rebirth_region,
@@ -273,11 +275,14 @@ def run_watch(
         **_capture_status(active_capture_config),
     )
     last_scan_status_at = 0.0
-    rebirth_detector: RebirthAlertDetector | None = None
-    rebirth_detector_failed = False
-    rebirth_gate = RebirthPresenceGate()
-    next_rebirth_scan_at = 0.0
-    last_rebirth_alert_at = float("-inf")
+    rebirth_available_detector: RebirthAlertDetector | None = None
+    rebirth_available_detector_failed = False
+    rebirth_available_gate = RebirthPresenceGate()
+    next_rebirth_available_scan_at = 0.0
+    last_rebirth_available_alert_at = float("-inf")
+    rebirth_ready_detector: RebirthHudDetector | None = None
+    rebirth_ready_tracker = RebirthAlertTracker()
+    next_rebirth_ready_scan_at = 0.0
 
     def deliver(target, args: tuple, kwargs: dict, event: dict[str, object]) -> None:
         result = None
@@ -303,11 +308,13 @@ def run_watch(
             "alerted": True,
             "is_priority": True,
             "score": event.get("score"),
+            "source": event.get("source", ""),
+            "rebirth_level": event.get("rebirth_level"),
         }
         _append_event_safely(delivery_event, emit=emit)
         emit("delivery", result=delivery_event)
 
-    def fire_rebirth_alert(
+    def fire_rebirth_available_alert(
         match: RebirthMatch,
         rebirth_band,
         rebirth_box,
@@ -360,7 +367,7 @@ def run_watch(
         )
         if config.save_alert_samples or needs_attachment:
             try:
-                sample_path = _save_rebirth_sample(rebirth_band, local_box)
+                sample_path = _save_rebirth_available_sample(rebirth_band, local_box)
             except Exception as exc:
                 print(f"[SAMPLE] Failed to save Rebirth Alert screenshot: {exc}")
             else:
@@ -418,6 +425,81 @@ def run_watch(
                             sample_path if config.phone_include_attachment else None
                         ),
                     },
+                    event,
+                ),
+                daemon=True,
+            ).start()
+
+    def fire_rebirth_ready_alert(level: int, ready_score: float) -> None:
+        detection = Detection(
+            droid="Rebirth",
+            rarity="Ready",
+            row_box=(0, 0, 0, 0),
+            droid_score=1.0,
+            rarity_score=ready_score,
+            rarity_margin=1.0,
+            score=ready_score,
+            source="rebirth-ready",
+        )
+        event: dict[str, object] = {
+            "ts": timestamp(),
+            "event_type": "alert",
+            "source": "rebirth_ready",
+            "droid": "Rebirth",
+            "rarity": "Ready",
+            "rebirth_level": level,
+            "detail": f"Rebirth {level} is ready",
+            "alerted": True,
+            "is_priority": True,
+            "score": round(ready_score, 4),
+            "screen_width": screen_w,
+            "screen_height": screen_h,
+            "monitor_index": active_capture_config.monitor_index,
+            "capture_source": active_capture_config.capture_source,
+        }
+        _append_event_safely(event, emit=emit)
+        emit("alert", event=event)
+        print(f"[ALERT] {event['ts']} Rebirth Ready level={level} score={ready_score:.2f}")
+        try:
+            policy.notify(detection)
+        except Exception as exc:
+            print(f"[SOUND] Failed to play Rebirth alert: {exc}")
+            emit("sound_error", message=str(exc))
+        if config.popup_enabled:
+            show_popup(
+                detection,
+                config.popup_seconds,
+                icon_path=popup_icon_path(config),
+                parent=popup_parent,
+                monitor=getattr(capture, "monitor", None),
+                position=config.popup_position,
+                scale=config.popup_scale,
+                opacity=config.popup_opacity,
+            )
+        if webhook_url:
+            threading.Thread(
+                target=deliver,
+                args=(send_discord_alert, (webhook_url, detection), {}, event),
+                daemon=True,
+            ).start()
+        if config.ntfy_enabled and ntfy_configured(config):
+            threading.Thread(
+                target=deliver,
+                args=(
+                    send_ntfy_alert,
+                    (config, detection),
+                    {"attachment_path": None},
+                    event,
+                ),
+                daemon=True,
+            ).start()
+        if phone_credentials:
+            threading.Thread(
+                target=deliver,
+                args=(
+                    send_phone_alert,
+                    (phone_credentials, detection),
+                    {"sound": config.phone_sound, "attachment_path": None},
                     event,
                 ),
                 daemon=True,
@@ -504,7 +586,7 @@ def run_watch(
                     pipeline.detector.extra_checks = config.extra_checks
                     log_dedupe_seconds = max(12.0, config.dedupe_seconds)
                     if not config.rebirth_alert_enabled:
-                        rebirth_gate.reset()
+                        rebirth_available_gate.reset()
                     webhook_url = None
                     if config.discord_enabled:
                         try:
@@ -618,20 +700,20 @@ def run_watch(
 
             result = pipeline.detect(band, screen_height=screen_h, screen_width=screen_w, keep_normalized=True)
             scan_now = time.monotonic()
-            if config.rebirth_alert_enabled and scan_now >= next_rebirth_scan_at:
-                next_rebirth_scan_at = scan_now + REBIRTH_SCAN_INTERVAL_SECONDS
-                if rebirth_detector is None and not rebirth_detector_failed:
+            if config.rebirth_alert_enabled and scan_now >= next_rebirth_available_scan_at:
+                next_rebirth_available_scan_at = scan_now + REBIRTH_SCAN_INTERVAL_SECONDS
+                if rebirth_available_detector is None and not rebirth_available_detector_failed:
                     try:
-                        rebirth_detector = RebirthAlertDetector()
+                        rebirth_available_detector = RebirthAlertDetector()
                     except Exception as exc:
-                        rebirth_detector_failed = True
+                        rebirth_available_detector_failed = True
                         print(f"[REBIRTH] Detector unavailable: {exc}")
                         emit("rebirth_error", message=str(exc))
-                if rebirth_detector is not None:
+                if rebirth_available_detector is not None:
                     rebirth_box = rebirth_region(box, screen_w, screen_h)
                     try:
                         rebirth_band = capture.grab(rebirth_box)
-                        rebirth_match = rebirth_detector.detect(
+                        rebirth_match = rebirth_available_detector.detect(
                             rebirth_band,
                             screen_width=screen_w,
                             screen_height=screen_h,
@@ -640,7 +722,7 @@ def run_watch(
                         print(f"[REBIRTH] Scan failed: {exc}")
                         emit("rebirth_error", message=str(exc))
                     else:
-                        confirmed = rebirth_gate.update(rebirth_match.matched)
+                        confirmed = rebirth_available_gate.update(rebirth_match.matched)
                         emit(
                             "rebirth_scan",
                             matched=rebirth_match.matched,
@@ -648,9 +730,9 @@ def run_watch(
                             scanned_at=timestamp(),
                         )
                         cooldown = max(12.0, config.dedupe_seconds, config.alert_cooldown_seconds)
-                        if confirmed and scan_now - last_rebirth_alert_at >= cooldown:
-                            last_rebirth_alert_at = scan_now
-                            fire_rebirth_alert(rebirth_match, rebirth_band, rebirth_box)
+                        if confirmed and scan_now - last_rebirth_available_alert_at >= cooldown:
+                            last_rebirth_available_alert_at = scan_now
+                            fire_rebirth_available_alert(rebirth_match, rebirth_band, rebirth_box)
             status_now = time.monotonic()
             if status_now - last_scan_status_at >= 1.0:
                 last_scan_status_at = status_now
@@ -661,6 +743,35 @@ def run_watch(
                     detections=len(result.detections),
                     scale=round(result.scale, 4),
                 )
+
+            if config.rebirth_ready_alert_enabled and status_now >= next_rebirth_ready_scan_at:
+                next_rebirth_ready_scan_at = status_now + config.rebirth_scan_interval_seconds
+                try:
+                    if rebirth_ready_detector is None:
+                        rebirth_ready_detector = RebirthHudDetector()
+                    bottom_top = max(0, int(round(screen_h * 0.62)))
+                    bottom = capture.grab(
+                        PixelBox(0, bottom_top, screen_w, screen_h - bottom_top)
+                    )
+                    observation = rebirth_ready_detector.detect(
+                        bottom,
+                        screen_height=screen_h,
+                    )
+                    alert_level = rebirth_ready_tracker.observe(observation)
+                    emit(
+                        "rebirth_scan",
+                        ready=observation.ready,
+                        ready_score=round(observation.ready_score, 4),
+                        rebirth_level=observation.level,
+                        level_score=round(observation.level_score, 4),
+                    )
+                    if alert_level is not None:
+                        fire_rebirth_ready_alert(alert_level, observation.ready_score)
+                except Exception as exc:
+                    # This optional low-frequency detector must never stop the
+                    # normal priority-spawn watcher.
+                    print(f"[REBIRTH] Scan failed: {exc}")
+                    emit("rebirth_error", message=str(exc))
 
             # Region-health tracking: alert-free stretches are normal (spawns
             # are random), so only frames with phrase-like rows that still
@@ -901,7 +1012,7 @@ def _save_sample(normalized_band, detection, label: str) -> tuple[Path, Path]:
     return raw_path, det_path
 
 
-def _save_rebirth_sample(
+def _save_rebirth_available_sample(
     rebirth_band,
     match_box: tuple[int, int, int, int],
 ) -> Path:

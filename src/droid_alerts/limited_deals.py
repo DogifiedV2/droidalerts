@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import ssl
 import threading
 import urllib.error
 import urllib.request
@@ -11,9 +10,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urljoin
 
-import certifi
-
 from . import __version__
+from .network import certifi_ssl_context
 
 
 LIMITED_DEAL_FAMILY_ORDER = (
@@ -282,11 +280,10 @@ def fetch_current_limited_deal(endpoint_url: str) -> LimitedDeal:
         headers={"Accept": "application/json", "User-Agent": USER_AGENT},
         method="GET",
     )
-    tls_context = ssl.create_default_context(cafile=certifi.where())
     with urllib.request.urlopen(
         request,
         timeout=REQUEST_TIMEOUT_SECONDS,
-        context=tls_context,
+        context=certifi_ssl_context(),
     ) as response:
         payload = json.loads(response.read().decode("utf-8") or "{}")
     if not isinstance(payload, Mapping) or set(payload) != {"deal"}:
@@ -319,11 +316,10 @@ def fetch_limited_deal_portrait(
         headers={"Accept": "image/png", "User-Agent": USER_AGENT},
         method="GET",
     )
-    tls_context = ssl.create_default_context(cafile=certifi.where())
     with urllib.request.urlopen(
         request,
         timeout=REQUEST_TIMEOUT_SECONDS,
-        context=tls_context,
+        context=certifi_ssl_context(),
     ) as response:
         image = response.read(2_000_001)
     if len(image) > 2_000_000 or not image.startswith(b"\x89PNG\r\n\x1a\n"):

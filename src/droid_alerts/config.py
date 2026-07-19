@@ -130,6 +130,8 @@ class AppConfig:
     capture_device_pid: int | None = None
     capture_device_backend: int = 0
     capture_interval_seconds: float = 0.25
+    rebirth_ready_alert_enabled: bool = False
+    rebirth_scan_interval_seconds: float = 5.0
     dedupe_seconds: float = 12.0
     alert_cooldown_seconds: float = 10.0
     sound_enabled: bool = True
@@ -280,6 +282,13 @@ class AppConfig:
             capture_device_pid=capture_device_pid,
             capture_device_backend=capture_device_backend,
             capture_interval_seconds=float(data.get("capture_interval_seconds", 0.25)),
+            rebirth_ready_alert_enabled=bool(
+                data.get("rebirth_ready_alert_enabled", False)
+            ),
+            rebirth_scan_interval_seconds=min(
+                30.0,
+                max(2.0, float(data.get("rebirth_scan_interval_seconds", 5.0))),
+            ),
             dedupe_seconds=float(data.get("dedupe_seconds", 12.0)),
             alert_cooldown_seconds=float(data.get("alert_cooldown_seconds", 10.0)),
             sound_enabled=bool(data.get("sound_enabled", True)),
@@ -418,6 +427,8 @@ class AppConfig:
             "capture_device_pid": self.capture_device_pid,
             "capture_device_backend": int(self.capture_device_backend),
             "capture_interval_seconds": self.capture_interval_seconds,
+            "rebirth_ready_alert_enabled": self.rebirth_ready_alert_enabled,
+            "rebirth_scan_interval_seconds": self.rebirth_scan_interval_seconds,
             "dedupe_seconds": self.dedupe_seconds,
             "alert_cooldown_seconds": self.alert_cooldown_seconds,
             "sound_enabled": self.sound_enabled,

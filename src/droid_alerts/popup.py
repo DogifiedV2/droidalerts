@@ -179,17 +179,29 @@ def _is_belt_detection(detection: Detection) -> bool:
     return detection.source == "belt-tracker" or detection.rarity == "Belt"
 
 
+def _is_rebirth_available_detection(detection: Detection) -> bool:
+    return detection.source == "rebirth-alert"
+
+
+def _is_rebirth_ready_detection(detection: Detection) -> bool:
+    return detection.source == "rebirth-ready"
+
+
+def _is_rebirth_detection(detection: Detection) -> bool:
+    return _is_rebirth_available_detection(detection) or _is_rebirth_ready_detection(detection)
+
+
 def _uses_attribute_rarity(detection: Detection) -> bool:
     return _is_belt_detection(detection) or detection.source == "limited-deal"
 
 
-def _is_rebirth_detection(detection: Detection) -> bool:
-    return detection.source == "rebirth-alert"
-
-
 def _title_segments(detection: Detection) -> list[tuple[str, str]]:
     if _is_rebirth_detection(detection):
-        return [("REBIRTH DROID AVAILABLE", DROID_TEXT_COLORS["Rebirth"])]
+        return (
+            [("REBIRTH DROID AVAILABLE", DROID_TEXT_COLORS["Rebirth"])]
+            if _is_rebirth_available_detection(detection)
+            else [("REBIRTH READY", "#20f070")]
+        )
     attributes = (
         detection.rarity.split()
         if _uses_attribute_rarity(detection) and detection.rarity != "Belt"
@@ -389,16 +401,19 @@ def show_popup(
         # explicit post-creation configure always wins.
         canvas.configure(bg=canvas_bg, highlightthickness=0)
 
-        accent_key = (
-            "Rebirth"
-            if _is_rebirth_detection(detection)
-            else (
-                detection.rarity.split(" ", 1)[0]
-                if _uses_attribute_rarity(detection)
-                else detection.droid
+        if _is_rebirth_ready_detection(detection):
+            accent, accent_dim = "#20f070", "#126b3c"
+        else:
+            accent_key = (
+                "Rebirth"
+                if _is_rebirth_available_detection(detection)
+                else (
+                    detection.rarity.split(" ", 1)[0]
+                    if _uses_attribute_rarity(detection)
+                    else detection.droid
+                )
             )
-        )
-        accent, accent_dim = DROID_ACCENTS.get(accent_key, ("#ff0055", "#5a0f2c"))
+            accent, accent_dim = DROID_ACCENTS.get(accent_key, ("#ff0055", "#5a0f2c"))
 
         # Card: soft outer ring + accent border + dark rounded body.
         _rounded_rect(canvas, 0, 0, panel_width - 1, panel_height - 1, 20, fill=accent_dim, outline="")
@@ -434,7 +449,11 @@ def show_popup(
         )
 
         caption = (
-            "REBIRTH ALERT"
+            (
+                "REBIRTH ALERT"
+                if _is_rebirth_available_detection(detection)
+                else "REBIRTH READY"
+            )
             if _is_rebirth_detection(detection)
             else (
                 "LIMITED DEAL"

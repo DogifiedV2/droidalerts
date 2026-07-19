@@ -3,8 +3,8 @@
 # Windows version metadata for the PyInstaller executable.
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 3, 6, 0),
-    prodvers=(1, 3, 6, 0),
+    filevers=(1, 3, 7, 0),
+    prodvers=(1, 3, 7, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -19,12 +19,12 @@ VSVersionInfo(
         '040904B0',
         [StringStruct('CompanyName', 'DogifiedV2'),
         StringStruct('FileDescription', 'Droid Tycoon alert detector'),
-        StringStruct('FileVersion', '1.3.6.0'),
+        StringStruct('FileVersion', '1.3.7.0'),
         StringStruct('InternalName', 'Droid Alerts'),
         StringStruct('LegalCopyright', 'Copyright 2026 DogifiedV2'),
         StringStruct('OriginalFilename', 'Droid Alerts.exe'),
         StringStruct('ProductName', 'Droid Alerts'),
-        StringStruct('ProductVersion', '1.3.6.0')])
+        StringStruct('ProductVersion', '1.3.7.0')])
       ]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])
   ]

@@ -15,6 +15,7 @@ from pathlib import Path
 from . import __version__
 from .classifier import Detection
 from .config import AppConfig, config_dir
+from .network import certifi_ssl_context
 
 
 APP_NAME = "Droid Alerts"
@@ -41,13 +42,25 @@ def _is_limited_deal_detection(detection: Detection) -> bool:
     return detection.source == "limited-deal"
 
 
-def _is_rebirth_detection(detection: Detection) -> bool:
+def _is_rebirth_available_detection(detection: Detection) -> bool:
     return detection.source == "rebirth-alert"
+
+
+def _is_rebirth_ready_detection(detection: Detection) -> bool:
+    return detection.source == "rebirth-ready"
+
+
+def _is_rebirth_detection(detection: Detection) -> bool:
+    return _is_rebirth_available_detection(detection) or _is_rebirth_ready_detection(detection)
 
 
 def event_text(detection: Detection) -> str:
     if _is_rebirth_detection(detection):
-        return "A rebirth droid is available"
+        return (
+            "A rebirth droid is available"
+            if _is_rebirth_available_detection(detection)
+            else "Rebirth Ready"
+        )
     if _is_limited_deal_detection(detection):
         return f"Limited Deal: {detection.rarity} {detection.droid}"
     if _is_belt_detection(detection):
@@ -58,7 +71,11 @@ def event_text(detection: Detection) -> str:
 
 def alert_title(detection: Detection) -> str:
     if _is_rebirth_detection(detection):
-        return "Droid Alerts Rebirth Alert"
+        return (
+            "Droid Alerts Rebirth Alert"
+            if _is_rebirth_available_detection(detection)
+            else "Droid Alerts Rebirth Ready"
+        )
     if _is_limited_deal_detection(detection):
         return "Droid Alerts Limited Deal"
     if _is_belt_detection(detection):
@@ -113,7 +130,7 @@ def discord_webhook_configured(config: AppConfig) -> bool:
 
 def discord_color(detection: Detection) -> int:
     if _is_rebirth_detection(detection):
-        return 0xFFB11B
+        return 0xFFB11B if _is_rebirth_available_detection(detection) else 0x20F070
     if _is_limited_deal_detection(detection):
         family = detection.rarity.split(" ", 1)[0]
         return {
@@ -153,7 +170,11 @@ def post_discord(webhook_url: str, detection: Detection) -> None:
             "embeds": [
                 {
                     "title": (
-                        "Rebirth Alert"
+                        (
+                            "Rebirth Alert"
+                            if _is_rebirth_available_detection(detection)
+                            else "Rebirth Ready"
+                        )
                         if _is_rebirth_detection(detection)
                         else (
                             "Limited Deal Alert"
@@ -178,7 +199,11 @@ def post_discord(webhook_url: str, detection: Detection) -> None:
         headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=8) as response:
+    with urllib.request.urlopen(
+        request,
+        timeout=8,
+        context=certifi_ssl_context(),
+    ) as response:
         if response.status not in (200, 204):
             print(f"[DISCORD] Unexpected response: HTTP {response.status}")
         else:
@@ -296,7 +321,11 @@ def post_ntfy_message(
         headers=headers,
         method=method,
     )
-    with urllib.request.urlopen(request, timeout=8) as response:
+    with urllib.request.urlopen(
+        request,
+        timeout=8,
+        context=certifi_ssl_context(),
+    ) as response:
         if response.status not in (200, 201):
             print(f"[NTFY] Unexpected response: HTTP {response.status}")
         else:
@@ -450,7 +479,11 @@ def post_phone_message(
         headers=headers,
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=8) as response:
+    with urllib.request.urlopen(
+        request,
+        timeout=8,
+        context=certifi_ssl_context(),
+    ) as response:
         body = response.read().decode("utf-8", errors="replace")
         try:
             payload = json.loads(body)
@@ -531,7 +564,11 @@ def latest_release_info(repo: str) -> dict[str, str] | None:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=6) as response:
+        with urllib.request.urlopen(
+            request,
+            timeout=6,
+            context=certifi_ssl_context(),
+        ) as response:
             payload = json.loads(response.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:

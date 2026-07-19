@@ -1105,6 +1105,18 @@ class DroidAlertsApp:
                 variable=var,
                 **bootstyle("round-toggle"),
             ).grid(row=index // 2, column=index % 2, sticky="w", pady=5)
+        self.setting_vars["rebirth_ready_alert_enabled"] = BooleanVar(value=False)
+        ttk.Checkbutton(
+            alerts,
+            text="Rebirth Ready",
+            variable=self.setting_vars["rebirth_ready_alert_enabled"],
+            **bootstyle("round-toggle"),
+        ).grid(
+            row=len(ALERT_COMBOS) // 2,
+            column=1,
+            sticky="w",
+            pady=5,
+        )
 
         rebirth_index = len(ALERT_COMBOS)
         self.setting_vars["rebirth_alert_enabled"] = BooleanVar(value=False)
@@ -1850,6 +1862,7 @@ class DroidAlertsApp:
             self.setting_vars[key] = BooleanVar(value=False)
         numeric_defaults = {
             "capture_interval_seconds": (DoubleVar, 0.25),
+            "rebirth_scan_interval_seconds": (DoubleVar, 5.0),
             "dedupe_seconds": (DoubleVar, 12.0),
             "alert_cooldown_seconds": (DoubleVar, 10.0),
             "validation_failures_before_calibration_prompt": (IntVar, 30),
@@ -1880,6 +1893,7 @@ class DroidAlertsApp:
         detector.columnconfigure(1, weight=1)
         detector_fields = (
             ("Capture interval (seconds)", "capture_interval_seconds"),
+            ("Rebirth scan interval (seconds)", "rebirth_scan_interval_seconds"),
             ("Duplicate window (seconds)", "dedupe_seconds"),
             ("Alert cooldown (seconds)", "alert_cooldown_seconds"),
             ("Calibration warning frames", "validation_failures_before_calibration_prompt"),
@@ -1890,6 +1904,7 @@ class DroidAlertsApp:
         )
         detector_ranges = {
             "capture_interval_seconds": (0.05, 5.0, 0.05),
+            "rebirth_scan_interval_seconds": (2.0, 30.0, 1.0),
             "dedupe_seconds": (0.0, 300.0, 1.0),
             "alert_cooldown_seconds": (0.0, 300.0, 1.0),
             "validation_failures_before_calibration_prompt": (1, 1000, 1),
@@ -2365,6 +2380,7 @@ class DroidAlertsApp:
             for key in (
                 "popup_enabled",
                 "sound_enabled",
+                "rebirth_ready_alert_enabled",
                 "droid_timers_enabled",
                 "save_alert_samples",
                 "ntfy_enabled",
@@ -2394,6 +2410,10 @@ class DroidAlertsApp:
             self._set_var("monitor_index", self.config.monitor_index)
             self.refresh_monitor_choices()
             self._set_var("capture_interval_seconds", self.config.capture_interval_seconds)
+            self._set_var(
+                "rebirth_scan_interval_seconds",
+                self.config.rebirth_scan_interval_seconds,
+            )
             self._set_var("dedupe_seconds", self.config.dedupe_seconds)
             self._set_var("alert_cooldown_seconds", self.config.alert_cooldown_seconds)
             self._set_var(
@@ -5015,18 +5035,19 @@ class DroidAlertsApp:
         elif event_type in {"detection", "alert"}:
             row = event.get("event")
             if isinstance(row, dict):
-                self.session_detection_count += 1
+                source_name = str(row.get("source") or "")
+                if source_name not in {"rebirth-alert", "rebirth_ready"}:
+                    self.session_detection_count += 1
                 if event_type == "alert":
                     self.session_alert_count += 1
                     detected_at = self._display_timestamp(str(row.get("ts", "")))
-                    if str(row.get("source") or "") == "rebirth-alert":
-                        self.last_alert_var.set(
-                            f"Last alert: Rebirth droid available · {detected_at}"
-                        )
+                    if source_name == "rebirth-alert":
+                        label = "Rebirth droid available"
+                    elif source_name == "rebirth_ready":
+                        label = "Rebirth Ready"
                     else:
-                        self.last_alert_var.set(
-                            f"Last alert: {row.get('rarity', '')} {row.get('droid', '')} · {detected_at}"
-                        )
+                        label = f"{row.get('rarity', '')} {row.get('droid', '')}".strip()
+                    self.last_alert_var.set(f"Last alert: {label} · {detected_at}")
         elif event_type == "delivery":
             result = event.get("result")
             if isinstance(result, dict):
@@ -5043,7 +5064,9 @@ class DroidAlertsApp:
         elif event_type == "rebirth_error":
             message = str(event.get("message") or "Unknown Rebirth detector error")
             self._set_watcher_state("Warning")
-            self.watcher_detail_var.set(f"Rebirth detection unavailable: {message}")
+            self.watcher_detail_var.set(
+                f"Rebirth detection failed; normal spawn watching continues: {message}"
+            )
         elif event_type == "sound_error":
             message = str(event.get("message") or "Unknown sound error")
             self.channel_status_vars["Sound"].set(f"Failed · {message[:70]}")
@@ -5339,11 +5362,17 @@ class DroidAlertsApp:
             for combo, var in self.limited_deal_priority_vars.items()
             if var.get()
         ]
-        if interactive and not selected and not self._confirm_message(
-            "No Priority Alerts",
-            "Continue with no priority alerts selected?",
-            confirm_text="Continue",
-            tone="warning",
+        if (
+            interactive
+            and not selected
+            and not bool(self._value("rebirth_ready_alert_enabled"))
+            and not bool(self._value("rebirth_alert_enabled"))
+            and not self._confirm_message(
+                "No Priority Alerts",
+                "Continue with no priority alerts selected?",
+                confirm_text="Continue",
+                tone="warning",
+            )
         ):
             return None
 
@@ -5360,6 +5389,10 @@ class DroidAlertsApp:
         try:
             config.monitor_index = max(1, int(self._value("monitor_index")))
             config.capture_interval_seconds = max(0.05, float(self._value("capture_interval_seconds")))
+            config.rebirth_scan_interval_seconds = min(
+                30.0,
+                max(2.0, float(self._value("rebirth_scan_interval_seconds"))),
+            )
             config.dedupe_seconds = max(0.0, float(self._value("dedupe_seconds")))
             config.alert_cooldown_seconds = max(0.0, float(self._value("alert_cooldown_seconds")))
             config.validation_failures_before_calibration_prompt = max(
@@ -5394,6 +5427,9 @@ class DroidAlertsApp:
 
         config.sound_enabled = bool(self._value("sound_enabled"))
         config.popup_enabled = bool(self._value("popup_enabled"))
+        config.rebirth_ready_alert_enabled = bool(
+            self._value("rebirth_ready_alert_enabled")
+        )
         config.droid_timers_enabled = bool(self._value("droid_timers_enabled"))
         config.save_alert_samples = bool(self._value("save_alert_samples"))
         config.save_debug_screenshots = bool(self._value("save_debug_screenshots"))

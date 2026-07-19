@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import __version__
 from .config import data_dir, project_root
+from .network import certifi_ssl_context
 
 USER_AGENT = f"DroidAlerts/{__version__}"
 
@@ -65,7 +66,11 @@ def download_and_install_update(
 
     report(f"Downloading {tag}...")
     request = urllib.request.Request(zip_url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=60) as response, zip_path.open("wb") as fh:
+    with urllib.request.urlopen(
+        request,
+        timeout=60,
+        context=certifi_ssl_context(),
+    ) as response, zip_path.open("wb") as fh:
         shutil.copyfileobj(response, fh)
 
     report("Unpacking...")

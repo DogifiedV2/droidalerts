@@ -14,6 +14,7 @@ from . import __version__
 from .belt.names import DROID_NAMES as BELT_DROID_NAMES
 from .belt.targets import belt_target_names
 from .config import AppConfig, config_dir
+from .network import certifi_ssl_context
 
 INSTALL_ID_FILE = "anonymous_install_id.txt"
 BELT_PENDING_COUNTS_FILE = "anonymous_belt_counts.json"
@@ -155,7 +156,11 @@ class AnonymousAppTelemetryClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(
+            request,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            context=certifi_ssl_context(),
+        ) as response:
             return json.loads(response.read().decode("utf-8") or "{}")
 
     def _apply_server_interval(self, value: object) -> None:
@@ -370,7 +375,11 @@ class AnonymousTelemetryClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(
+            request,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            context=certifi_ssl_context(),
+        ) as response:
             return json.loads(response.read().decode("utf-8") or "{}")
 
     def _apply_server_interval(self, value: object) -> None:
@@ -656,7 +665,11 @@ class AnonymousBeltTelemetryClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(
+            request,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            context=certifi_ssl_context(),
+        ) as response:
             return json.loads(response.read().decode("utf-8") or "{}")
 
 

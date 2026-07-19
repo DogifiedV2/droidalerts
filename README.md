@@ -43,6 +43,21 @@ Diagnostics; moving the box never resizes it. Alert
 appearance plus less common detection, debug, notification-detail, and storage
 controls stay behind the **Advanced settings** toggle in Settings.
 
+### Rebirth Ready alerts
+
+Enable **Rebirth Ready** under Dashboard → Priority Alerts to receive one alert
+when the large green `READY!` HUD message appears. Droid Alerts checks the lower
+part of the selected Fortnite display, window, or capture device every five
+seconds and confirms the same reading twice before alerting. It also reads the
+small Rebirth level beside the green circular-arrow icon, so a persistent
+`READY!` message only alerts once for that level. The next level is eligible for
+a new alert, and the last alerted level is remembered after restarting the app.
+
+The alert uses the normal Popup, Sound, Discord, ntfy, and Pushover channels and
+appears in History as **Rebirth Ready**. The scan interval can be changed from
+2–30 seconds under Settings → Advanced settings → Detection & Timing; five
+seconds is recommended.
+
 The fixed sidebar keeps Dashboard, Belt Tracker, Limited Deals, History,
 Diagnostics, and Settings available in one place. Settings also includes three live themes:
 **Default**, **Midnight**, and **Daylight**. Theme changes
