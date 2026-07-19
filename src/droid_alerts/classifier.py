@@ -342,7 +342,12 @@ def droid_word_color_mask(row: np.ndarray, droid: str) -> np.ndarray:
     family's text colour. The component limits were measured across the 149
     valid rows in the 2026-07-10 1.1.5 debug batch.
     """
-    win = row[:, 20 : min(row.shape[1], 270)]
+    # The newer Galactic HUD style is substantially wider than the original
+    # Diamond/Rainbow/Beskar words (the supplied Epic capture reaches x=327).
+    # Keep the proven legacy window for every other family, but leave enough
+    # room to match the complete literal "Galactic Droid" word.
+    x_end = 360 if droid == "Galactic" else 270
+    win = row[:, 20 : min(row.shape[1], x_end)]
     if win.size == 0:
         return np.zeros((0, 0), dtype=np.uint8)
     hsv = cv2.cvtColor(win, cv2.COLOR_BGR2HSV)
@@ -368,14 +373,25 @@ def droid_word_color_mask(row: np.ndarray, droid: str) -> np.ndarray:
     output = np.zeros_like(raw, dtype=np.uint8)
     for label in range(1, label_count):
         _x, y, component_w, component_h, area = (int(value) for value in stats[label])
+        # Bold Galactic glyphs can touch after capture scaling, joining an
+        # entire word into one component. The old 40px cap erased those words
+        # before literal template matching. Galactic still requires both its
+        # narrow purple range and a word-shape match, so retaining the joined
+        # component does not weaken the other droid classifiers.
+        maximum_width = 240 if droid == "Galactic" else 40
+        maximum_area = 8000 if droid == "Galactic" else 2600
+        inside_row = (
+            y >= 0 and y + component_h <= raw.shape[0]
+            if droid == "Galactic"
+            else y > 1 and y + component_h < raw.shape[0] - 1
+        )
         if (
             area >= 6
             and component_w >= 2
-            and 3 <= component_h <= 30
-            and component_w <= 40
-            and area <= 2600
-            and y > 1
-            and y + component_h < raw.shape[0] - 1
+            and 3 <= component_h <= 38
+            and component_w <= maximum_width
+            and area <= maximum_area
+            and inside_row
         ):
             output[labels == label] = 255
     return output
@@ -391,10 +407,30 @@ def droid_word_shape_score(
         return 0.0
     best = 0.0
     for template in templates_by_droid.get(droid, []):
-        if template.image.shape[0] > mask.shape[0] or template.image.shape[1] > mask.shape[1]:
-            continue
-        result = cv2.matchTemplate(mask, template.image, cv2.TM_CCOEFF_NORMED)
-        best = max(best, float(result.max()))
+        # Fortnite now renders Galactic chat text at multiple horizontal/UI
+        # sizes that are not fully predicted by the screen-resolution scale.
+        # Multi-scale matching is restricted to the Galactic literal-word
+        # path; legacy family behavior and thresholds remain unchanged.
+        scale_factors = (
+            (0.70, 0.80, 0.90, 1.0, 1.10, 1.20, 1.35, 1.50, 1.70)
+            if droid == "Galactic"
+            else (1.0,)
+        )
+        for scale_factor in scale_factors:
+            if scale_factor == 1.0:
+                candidate = template.image
+            else:
+                candidate = cv2.resize(
+                    template.image,
+                    None,
+                    fx=scale_factor,
+                    fy=scale_factor,
+                    interpolation=cv2.INTER_NEAREST,
+                )
+            if candidate.shape[0] > mask.shape[0] or candidate.shape[1] > mask.shape[1]:
+                continue
+            result = cv2.matchTemplate(mask, candidate, cv2.TM_CCOEFF_NORMED)
+            best = max(best, float(result.max()))
     return best
 
 
@@ -421,6 +457,32 @@ def classify_galactic_droid_word(
     if shape < shape_threshold:
         return None
     return "Galactic", min(0.99, max(shape, purple / 900.0))
+
+
+def classify_beskar_droid_word(
+    row: np.ndarray,
+    templates_by_droid: dict[str, list[DroidWordTemplate]],
+    *,
+    shape_threshold: float = 0.50,
+    minimum_gray_pixels: int = 550,
+) -> tuple[str, float] | None:
+    """Recover scaled Beskar words when the gray pixel count is just low.
+
+    The generic word classifier deliberately requires 700 gray pixels. The
+    supplied Epic capture measures below that after screen normalization, but
+    still has a strong literal Beskar template match. Requiring both signals
+    preserves the existing gray custom-name false-positive protection.
+    """
+
+    if not templates_by_droid.get("Beskar"):
+        return None
+    gray = droid_word_text_profile(row)["gray"]
+    if gray < minimum_gray_pixels:
+        return None
+    shape = droid_word_shape_score(row, "Beskar", templates_by_droid)
+    if shape < shape_threshold:
+        return None
+    return "Beskar", min(0.99, max(shape, gray / 900.0))
 
 
 def classify_droid_word(row: np.ndarray) -> tuple[str, float] | None:
@@ -885,7 +947,58 @@ def classify_rarity_roi(
 ) -> tuple[str, float, float, str]:
     templates = templates_by_droid.get(droid, [])
     if not templates:
-        return classify_rarity_color(image, y, droid, row_height=row_height)
+        verdict = classify_rarity_color(image, y, droid, row_height=row_height)
+        if droid == "Galactic" and verdict[0] not in {"Unknown", "Common"}:
+            # Galactic currently has no family-specific rarity ROI templates,
+            # so its normal verdict comes directly from raw color totals. A
+            # large cyan/blue prop behind a real white "(Common)" word can
+            # therefore clear the Rare floor even though almost none of those
+            # pixels have text-like edges. Prefer a strong Common text verdict
+            # over that unsupported colored-background verdict. Real Galactic
+            # Rare/Epic/Legendary/Mythic rows retain strong text-colored pixels
+            # for their own rarity and do not enter this branch.
+            text_rarity, text_score, text_margin, text_source = classify_rarity_text_color(
+                image,
+                y,
+                droid,
+                row_height=row_height,
+            )
+            text_counts = rarity_text_color_counts(image, y, droid, row_height=row_height)
+            colored_word_supported = (
+                text_counts[verdict[0]] >= RARITY_COLOR_THRESHOLDS[verdict[0]]
+            )
+            if (
+                text_rarity == "Common"
+                and text_score >= 0.86
+                and text_margin >= 0.30
+                and not colored_word_supported
+            ):
+                return (
+                    "Common",
+                    text_score,
+                    text_margin,
+                    f"galactic-text-over-background:{text_source}",
+                )
+        if verdict[0] != "Unknown" or droid != "Galactic":
+            return verdict
+
+        # The compact Galactic Rare capture retains a clear cyan rarity word
+        # but lands just below the global 650px Rare floor after resampling.
+        # Rescue only when Rare is the dominant saturated color and nearby
+        # Common pixels do not outnumber it by more than 25%; that excludes
+        # white spawn text and adjacent Common rows from becoming Rare.
+        counts = rarity_color_counts(image, y, droid, row_height=row_height)
+        rare_count = counts["Rare"]
+        other_colored = max(counts[name] for name in ("Epic", "Legendary", "Mythic"))
+        if (
+            rare_count >= int(RARITY_COLOR_THRESHOLDS["Rare"] * 0.80)
+            and rare_count >= other_colored * 1.5
+            and counts["Common"] <= rare_count * 1.25
+        ):
+            score = min(0.99, rare_count / RARITY_COLOR_THRESHOLDS["Rare"])
+            margin = min(0.99, (rare_count - other_colored) / RARITY_COLOR_THRESHOLDS["Rare"])
+            return "Rare", float(score), float(margin), f"galactic-weak-color:Rare:{rare_count}"
+        return verdict
 
     best_by_rarity: dict[str, tuple[float, str]] = {}
     for dy in range(-6, 7):
@@ -1272,9 +1385,12 @@ class DroidVisualDetector:
             # Word-text verdict first: background-proof and unambiguous when
             # it fires. Legacy icon-window path (plus icon-structure gate)
             # only for rows without strong word evidence.
-            word_verdict = galactic_word_verdict or classify_galactic_droid_word(
-                row, self.droid_word_templates
-            ) or classify_droid_word(row)
+            word_verdict = (
+                galactic_word_verdict
+                or classify_galactic_droid_word(row, self.droid_word_templates)
+                or classify_droid_word(row)
+                or classify_beskar_droid_word(row, self.droid_word_templates)
+            )
             if word_verdict is not None:
                 droid, droid_score = word_verdict
                 if droid_score < self.droid_threshold:

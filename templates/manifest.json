@@ -503,6 +503,13 @@
       "file": "rarity_rois/Rainbow__Mythic__RM_img6608.png",
       "source": "IMG_6608.png",
       "row_y": 157
+    },
+    {
+      "kind": "rarity_roi",
+      "file": "rarity_rois/Beskar__Epic__BE_user_20260719.png",
+      "source": "tests/galactic_fixtures/mixed_beskar_epic_galactic_mythic_scale_083.png",
+      "row_y": 58,
+      "scale": 0.83
     }
   ]
 }

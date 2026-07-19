@@ -21,7 +21,7 @@ from droid_alerts import gui, maintenance, region, row_finder, telemetry, watche
 from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox, format_monitor_label
 from droid_alerts.classifier import Detection
 from droid_alerts.config import AppConfig, Thresholds
-from droid_alerts.gui import DroidAlertsApp, fit_window_size
+from droid_alerts.gui import DroidAlertsApp, centered_window_geometry, fit_window_size
 from droid_alerts.notifications import phone_alerts_configured
 from droid_alerts.pipeline import Pipeline
 
@@ -314,6 +314,30 @@ class GuiRegressionTests(unittest.TestCase):
                 768,
                 horizontal_margin=80,
                 vertical_margin=140,
+            ),
+        )
+
+    def test_dialog_geometry_is_centered_over_the_tool_on_any_monitor(self):
+        self.assertEqual(
+            "760x860+455+140",
+            centered_window_geometry(
+                760,
+                860,
+                parent_x=100,
+                parent_y=50,
+                parent_width=1470,
+                parent_height=1040,
+            ),
+        )
+        self.assertEqual(
+            "720x420+-1610+-720",
+            centered_window_geometry(
+                720,
+                420,
+                parent_x=-1920,
+                parent_y=-1080,
+                parent_width=1340,
+                parent_height=1140,
             ),
         )
 

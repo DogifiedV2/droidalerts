@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 
@@ -78,6 +79,62 @@ class ChatTelemetryTests(unittest.TestCase):
         self.assertNotIn("priorityAlerts", payloads[1])
         self.assertEqual(["rainbowmythic"], payloads[2]["priorityAlerts"])
         self.assertEqual([], payloads[3]["priorityAlerts"])
+
+    def test_galactic_debug_detection_upload_contains_both_pngs_and_matching_keys(self):
+        config = AppConfig(
+            share_debug_detections=True,
+            debug_detection_upload_url="https://example.test/debug-detections",
+        )
+        client = AnonymousTelemetryClient(config)
+        client._post_json = Mock(return_value={"ok": True})
+        detection = SimpleNamespace(
+            droid="Galactic",
+            rarity="Legendary",
+            score=0.99,
+            rarity_score=0.98,
+            droid_score=0.97,
+            rarity_margin=0.42,
+            source="test",
+        )
+        event = {
+            "ts": "20260719_233201_904",
+            "frame": 285,
+            "row_hash": "abc123",
+            "screen_width": 3440,
+            "screen_height": 1440,
+            "monitor_index": 1,
+            "capture_region": {
+                "source": "manual",
+                "left": 0,
+                "top": 616,
+                "width": 1135,
+                "height": 230,
+            },
+            "scale": 1.0,
+            "scale_method": "screen",
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            roi = Path(directory) / "shared_alert_roi_test.png"
+            candidate = Path(directory) / "shared_alert_roi_test_candidate_check.png"
+            png = b"\x89PNG\r\n\x1a\nfixture"
+            roi.write_bytes(png)
+            candidate.write_bytes(png)
+            with patch("droid_alerts.telemetry.load_or_create_anonymous_install_id", return_value=INSTALL_ID):
+                client._send_debug_detection(
+                    config.debug_detection_upload_url,
+                    detection,
+                    event,
+                    [str(roi), str(candidate)],
+                )
+
+        endpoint, payload = client._post_json.call_args.args
+        self.assertEqual(config.debug_detection_upload_url, endpoint)
+        self.assertEqual("galacticlegendary", payload["detection"]["key"])
+        self.assertEqual("galacticlegendary", payload["storage"]["detectionKey"])
+        self.assertEqual("Galactic", payload["detection"]["droid"])
+        self.assertEqual("Legendary", payload["detection"]["rarity"])
+        self.assertEqual(["roi", "candidate_check"], [item["name"] for item in payload["screenshots"]])
 
 
 class BeltTelemetryTests(unittest.TestCase):

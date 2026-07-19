@@ -170,7 +170,8 @@ DEFAULT_WINDOW_WIDTH = 1470
 DEFAULT_WINDOW_HEIGHT = 1040
 SIDEBAR_WIDTH = 232
 PRIORITY_DIALOG_WIDTH = 760
-PRIORITY_DIALOG_HEIGHT = 820
+PRIORITY_DIALOG_HEIGHT = 860
+LIMITED_DEAL_DIALOG_HEIGHT = 820
 REBIRTH_ALERT_TOOLTIP = (
     "Receive a notification when a droid you need for rebirth spawns"
 )
@@ -267,6 +268,22 @@ def fit_window_size(
     usable_width = max(1, int(screen_width) - horizontal_margin)
     usable_height = max(1, int(screen_height) - vertical_margin)
     return min(int(width), usable_width), min(int(height), usable_height)
+
+
+def centered_window_geometry(
+    width: int,
+    height: int,
+    *,
+    parent_x: int,
+    parent_y: int,
+    parent_width: int,
+    parent_height: int,
+) -> str:
+    """Tk geometry centered over the owning tool, including other monitors."""
+
+    x = int(parent_x) + (int(parent_width) - int(width)) // 2
+    y = int(parent_y) + (int(parent_height) - int(height)) // 2
+    return format_tk_geometry(width=int(width), height=int(height), x=x, y=y)
 
 
 def make_root(ui_theme: str = DEFAULT_THEME_KEY) -> tk.Tk:
@@ -1190,10 +1207,10 @@ class DroidAlertsApp:
 
     def choose_priority_alerts(self) -> None:
         dialog = tk.Toplevel(self.root)
+        dialog.withdraw()
         self._style_dialog_window(dialog)
         dialog.title("Priority Alerts")
         dialog.transient(self.root)
-        dialog.grab_set()
 
         body = ttk.Frame(dialog, padding=20)
         body.pack(fill="both", expand=True)
@@ -1322,14 +1339,26 @@ class DroidAlertsApp:
         dialog.update_idletasks()
         dialog_width, dialog_height = fit_window_size(
             max(720, dialog.winfo_reqwidth() + 20),
-            max(360, dialog.winfo_reqheight() + 20),
+            max(420, dialog.winfo_reqheight() + 40),
             dialog.winfo_screenwidth(),
             dialog.winfo_screenheight(),
             horizontal_margin=80,
             vertical_margin=120,
         )
-        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        dialog.geometry(
+            centered_window_geometry(
+                dialog_width,
+                dialog_height,
+                parent_x=self.root.winfo_rootx(),
+                parent_y=self.root.winfo_rooty(),
+                parent_width=self.root.winfo_width(),
+                parent_height=self.root.winfo_height(),
+            )
+        )
         dialog.minsize(min(680, dialog_width), min(340, dialog_height))
+        dialog.deiconify()
+        dialog.lift()
+        dialog.grab_set()
 
     def _build_alert_channels(self, parent, *, row: int) -> None:
         channels_outer, channels = self._labeled_section(parent, "ALERT CHANNELS")
@@ -3644,10 +3673,10 @@ class DroidAlertsApp:
             return
 
         dialog = tk.Toplevel(self.root)
+        dialog.withdraw()
         self._style_dialog_window(dialog)
         dialog.title("Priority Alerts")
         dialog.transient(self.root)
-        dialog.grab_set()
 
         body = ttk.Frame(dialog, padding=20)
         body.pack(fill="both", expand=True)
@@ -3862,8 +3891,20 @@ class DroidAlertsApp:
             horizontal_margin=80,
             vertical_margin=120,
         )
-        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        dialog.geometry(
+            centered_window_geometry(
+                dialog_width,
+                dialog_height,
+                parent_x=self.root.winfo_rootx(),
+                parent_y=self.root.winfo_rooty(),
+                parent_width=self.root.winfo_width(),
+                parent_height=self.root.winfo_height(),
+            )
+        )
         dialog.minsize(min(620, dialog_width), min(700, dialog_height))
+        dialog.deiconify()
+        dialog.lift()
+        dialog.grab_set()
         search_entry.focus_set()
 
     def choose_limited_deal_targets(self) -> None:
@@ -4125,7 +4166,7 @@ class DroidAlertsApp:
         dialog.update_idletasks()
         dialog_width, dialog_height = fit_window_size(
             max(PRIORITY_DIALOG_WIDTH, dialog.winfo_reqwidth() + 20),
-            max(PRIORITY_DIALOG_HEIGHT, dialog.winfo_reqheight() + 20),
+            max(LIMITED_DEAL_DIALOG_HEIGHT, dialog.winfo_reqheight() + 20),
             dialog.winfo_screenwidth(),
             dialog.winfo_screenheight(),
             horizontal_margin=80,
