@@ -176,14 +176,12 @@ REBIRTH_ALERT_TOOLTIP = (
     "Receive a notification when a droid you need for rebirth spawns"
 )
 WHATS_NEW_ITEMS = (
-    "Limited Deals Tab",
-    "Belt Tracker Tab",
-    "Rebirth Priority Alert",
-    "Capture Card Display",
-    "GUI Rework",
-    "Themes in settings",
-    "Tracker: Added new settings for faster tracking",
-    "Added a wiki: has all galactic info!",
+    "Added Galactic detection.",
+    "Reworked the Priority Alerts tab; you can select every Galactic rarity.",
+    "Added Rebirth Ready detection. You can AFK and come back when you can rebirth.",
+    "Added the Galactic timer.",
+    "PSA: Galactic detection is in beta. Please enable Debug captures and "
+    "Share alert debug screenshots with the developer to help improve it.",
 )
 BELT_REGION_INSTRUCTIONS = (
     "Officially supported setup: stand at the start of the belt and match the guide with two "
