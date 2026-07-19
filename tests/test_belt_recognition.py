@@ -149,6 +149,7 @@ class CardRecognitionTests(unittest.TestCase):
         self.assertEqual("Default", exact_card_family("DEFAULT RARE"))
         self.assertEqual("Beskar", exact_card_family("BESKARC"))
         self.assertEqual("Rainbow", exact_card_family("rainbow"))
+        self.assertEqual("Galactic", exact_card_family("GALACTIC MYTHIC"))
         self.assertIsNone(exact_card_family("COMMON"))
         self.assertIsNone(exact_card_family("BESKXR"))
 

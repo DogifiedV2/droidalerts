@@ -121,7 +121,7 @@ def discord_color(detection: Detection) -> int:
             "Diamond": 0x3FD9FF,
             "Rainbow": 0xFF33CC,
             "Beskar": 0xC9CDD9,
-            "Galactic": 0x7D8CFF,
+            "Galactic": 0x9200E0,
         }.get(family, 0x9B59B6)
     if _is_belt_detection(detection):
         family = detection.rarity.split(" ", 1)[0]
@@ -130,9 +130,12 @@ def discord_color(detection: Detection) -> int:
             "Diamond": 0x3FD9FF,
             "Beskar": 0xC9CDD9,
             "Rainbow": 0xFF33CC,
+            "Galactic": 0x9200E0,
         }.get(family, 0x9B59B6)
     if detection.droid == "Rainbow":
         return 0xFF33CC
+    if detection.droid == "Galactic":
+        return 0x9200E0
     if detection.rarity == "Mythic":
         return 0xFF3366
     if detection.rarity == "Legendary":

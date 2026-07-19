@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 
-DROID_TYPES = ("Diamond", "Rainbow", "Beskar")
+DROID_TYPES = ("Diamond", "Rainbow", "Beskar", "Galactic")
 RARITIES = ("Common", "Rare", "Epic", "Legendary", "Mythic")
 PRIORITY_ALERTS = {
     ("Rainbow", "Epic"),
@@ -25,6 +25,9 @@ PRIORITY_ALERTS = {
     ("Beskar", "Mythic"),
     ("Diamond", "Mythic"),
     ("Rainbow", "Mythic"),
+    ("Galactic", "Epic"),
+    ("Galactic", "Legendary"),
+    ("Galactic", "Mythic"),
 }
 
 RARITY_COLOR_THRESHOLDS = {
@@ -39,6 +42,7 @@ RARITY_COLOR_X_START = {
     "Beskar": 215,
     "Diamond": 230,
     "Rainbow": 230,
+    "Galactic": 230,
 }
 
 

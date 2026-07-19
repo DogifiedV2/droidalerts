@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from .names import DROID_NAMES
 
 
-BELT_FAMILY_ORDER = ("Default", "Gold", "Diamond", "Rainbow", "Beskar")
+BELT_FAMILY_ORDER = ("Default", "Gold", "Diamond", "Rainbow", "Beskar", "Galactic")
 BELT_FAMILY_RANK = {family: index for index, family in enumerate(BELT_FAMILY_ORDER)}
 BELT_TARGET_LABELS = {
     family: f"{family}+" if family != BELT_FAMILY_ORDER[-1] else family

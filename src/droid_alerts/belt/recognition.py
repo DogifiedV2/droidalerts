@@ -13,7 +13,7 @@ from .ocr import DroidObservation, OcrEngine, TextObservation
 
 
 UNKNOWN = "UNKNOWN"
-CARD_FAMILIES = ("Default", "Gold", "Diamond", "Beskar", "Rainbow")
+CARD_FAMILIES = ("Default", "Gold", "Diamond", "Beskar", "Rainbow", "Galactic")
 
 _CANONICAL_BY_COMPACT = {compact(name): name for name in DROID_NAMES}
 _FAMILY_BY_COMPACT = {compact(family): family for family in CARD_FAMILIES}

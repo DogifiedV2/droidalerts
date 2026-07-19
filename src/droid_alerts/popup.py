@@ -23,6 +23,7 @@ except Exception:  # pragma: no cover - tkinter availability is platform depende
 DROID_TEXT_COLORS = {
     "Diamond": "#3fd9ff",
     "Beskar": "#e8eaf0",
+    "Galactic": "#9200e0",
     "Rebirth": "#ffb11b",
 }
 RAINBOW_LETTERS = ["#ff5252", "#ff9f2e", "#ffe14d", "#5ce06b", "#42c9ff", "#b06bff", "#ff6bd6"]
@@ -32,7 +33,7 @@ DROID_ACCENTS = {
     "Diamond": ("#3fd9ff", "#155a6e"),
     "Rainbow": ("#c05cff", "#4d2470"),
     "Beskar": ("#c9cdd9", "#4d5160"),
-    "Galactic": ("#7d8cff", "#30396e"),
+    "Galactic": ("#9200e0", "#3d005e"),
     "Rebirth": ("#ffb11b", "#6b4210"),
 }
 RARITY_COLORS = {
@@ -41,6 +42,7 @@ RARITY_COLORS = {
     "Diamond": "#3fd9ff",
     "Beskar": "#e8eaf0",
     "Rainbow": "#ff65d8",
+    "Galactic": "#9200e0",
     "Belt": "#65f3ff",
     "Common": "#e8e8e8",
     "Rare": "#3fd9ff",

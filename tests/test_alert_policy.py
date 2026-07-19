@@ -10,6 +10,7 @@ from droid_alerts.alerts import AlertPolicy
 from droid_alerts.classifier import Detection
 from droid_alerts.config import AppConfig
 from droid_alerts.gui import ALERT_COMBOS
+from droid_alerts.notifications import discord_color
 
 
 def _detection(droid: str = "Diamond", rarity: str = "Mythic") -> Detection:
@@ -65,6 +66,27 @@ def main() -> int:
     enabled_config = AppConfig(alert_targets=[["Rainbow", "Legendary"]])
     if not AlertPolicy(enabled_config).should_alert(rainbow_legendary, "rainbow-legendary-row"):
         failures.append("enabled Rainbow Legendary target should fire")
+
+    galactic_combos = {
+        ("Galactic", "Epic"),
+        ("Galactic", "Legendary"),
+        ("Galactic", "Mythic"),
+    }
+    if not galactic_combos.issubset(set(ALERT_COMBOS)):
+        failures.append("all Galactic priority toggles should be available")
+    if galactic_combos & default_config.targets:
+        failures.append("Galactic priority alerts should be disabled by default")
+    for droid, rarity in galactic_combos:
+        detection = _detection(droid, rarity)
+        if not detection.should_alert:
+            failures.append(f"{droid} {rarity} should be an alertable priority combo")
+        galactic_config = AppConfig(alert_targets=[[droid, rarity]])
+        if not AlertPolicy(galactic_config).should_alert(
+            detection, f"{droid.lower()}-{rarity.lower()}-row"
+        ):
+            failures.append(f"enabled {droid} {rarity} target should fire")
+        if discord_color(detection) != 0x9200E0:
+            failures.append(f"{droid} {rarity} should use the Galactic alert color")
 
     non_priority = _detection("Diamond", "Legendary")
     if non_priority.should_alert:

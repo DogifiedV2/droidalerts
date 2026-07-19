@@ -153,6 +153,9 @@ ALERT_COMBOS: tuple[tuple[str, str], ...] = (
     ("Diamond", "Mythic"),
     ("Rainbow", "Mythic"),
     ("Beskar", "Mythic"),
+    ("Galactic", "Epic"),
+    ("Galactic", "Legendary"),
+    ("Galactic", "Mythic"),
 )
 UPDATE_POLL_INTERVAL_MS = 15 * 60 * 1000
 DISCORD_COMMUNITY_URL = "https://discord.gg/ZmFPjS4784"

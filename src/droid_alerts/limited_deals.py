@@ -40,6 +40,8 @@ LIMITED_DEAL_PRIORITY_COMBOS = (
     ("Rainbow", "Legendary"),
     ("Beskar", "Epic"),
     ("Beskar", "Legendary"),
+    ("Galactic", "Epic"),
+    ("Galactic", "Legendary"),
     ("Default", "Mythic"),
     ("Gold", "Mythic"),
     ("Diamond", "Mythic"),

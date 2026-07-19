@@ -165,11 +165,13 @@ class BeltConfigAndRegionTests(unittest.TestCase):
 
     def test_belt_family_threshold_uses_requested_progression(self):
         self.assertEqual(
-            ("Default", "Gold", "Diamond", "Rainbow", "Beskar"),
+            ("Default", "Gold", "Diamond", "Rainbow", "Beskar", "Galactic"),
             BELT_FAMILY_ORDER,
         )
         self.assertTrue(belt_family_meets_minimum("Gold", "Gold"))
         self.assertTrue(belt_family_meets_minimum("Beskar", "Gold"))
+        self.assertTrue(belt_family_meets_minimum("Galactic", "Beskar"))
+        self.assertFalse(belt_family_meets_minimum("Beskar", "Galactic"))
         self.assertTrue(belt_family_meets_minimum("Rainbow", "Diamond"))
         self.assertFalse(belt_family_meets_minimum("Gold", "Diamond"))
         self.assertTrue(belt_family_meets_minimum("", "Default"))
@@ -177,13 +179,13 @@ class BeltConfigAndRegionTests(unittest.TestCase):
 
     def test_target_normalization_keeps_only_real_droids_and_tiers(self):
         self.assertEqual(
-            {"CYCLENS": "Gold", "IG": "Default"},
+            {"R2": "Galactic", "CYCLENS": "Gold", "IG": "Default"},
             normalize_belt_target_tiers(
                 {
                     "ig": "default",
                     " cyclens ": "GOLD",
                     "unknown": "Beskar",
-                    "R2": "Ultra",
+                    "R2": "galactic",
                 }
             ),
         )
@@ -673,6 +675,23 @@ class BeltAlertDeliveryTests(unittest.TestCase):
                 [("BAL-CORE", "#ffffff")],
             ],
             _title_lines(detection),
+        )
+
+    def test_galactic_belt_title_uses_the_announced_color(self):
+        detection = Detection(
+            droid="BAL-CORE",
+            rarity="Galactic Rare",
+            row_box=(0, 0, 0, 0),
+            droid_score=0.99,
+            rarity_score=0.92,
+            rarity_margin=0.92,
+            score=0.99,
+            source="belt-tracker",
+        )
+
+        self.assertEqual(
+            [("GALACTIC ", "#9200e0"), ("RARE ", "#3fd9ff"), ("BAL-CORE", "#ffffff")],
+            _title_segments(detection),
         )
 
     def test_popup_layout_keeps_card_and_icon_inside_monitor_at_every_scale(self):

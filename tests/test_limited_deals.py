@@ -116,9 +116,18 @@ class LimitedDealRuleTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            [["Rainbow", "Epic"], ["Beskar", "Mythic"]],
+            [
+                ["Rainbow", "Epic"],
+                ["Galactic", "Legendary"],
+                ["Beskar", "Mythic"],
+            ],
             normalize_limited_deal_priority_alerts(
-                [["beskar", "mythic"], ["Rainbow", "Epic"], ["Gold", "Rare"]]
+                [
+                    ["beskar", "mythic"],
+                    ["Rainbow", "Epic"],
+                    ["galactic", "legendary"],
+                    ["Gold", "Rare"],
+                ]
             ),
         )
 
@@ -138,6 +147,15 @@ class LimitedDealRuleTests(unittest.TestCase):
         self.assertEqual(
             {"Default", "Gold", "Diamond", "Rainbow", "Beskar", "Galactic"},
             mythic_mutations,
+        )
+
+    def test_priority_alerts_include_all_galactic_target_classes(self):
+        self.assertTrue(
+            {
+                ("Galactic", "Epic"),
+                ("Galactic", "Legendary"),
+                ("Galactic", "Mythic"),
+            }.issubset(set(LIMITED_DEAL_PRIORITY_COMBOS))
         )
 
     def test_config_round_trips_limited_deal_rules(self):

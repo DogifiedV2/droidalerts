@@ -14,7 +14,9 @@ Out of the box it alerts on the five spawns worth dropping everything for:
 - **Beskar Epic**
 
 **Rainbow Epic** and **Rainbow Legendary** are also available as the first two
-priority-alert toggles and are off by default.
+priority-alert toggles and are off by default. **Galactic Epic**, **Galactic
+Legendary**, and **Galactic Mythic** are prepared as off-by-default options;
+chat detection will be trained from real Galactic alerts after they release.
 
 It works on most PCs and starts with a recommended chat region. Everything it
 saves stays inside its own folder. Screenshots remain local unless you
@@ -68,14 +70,15 @@ chat alerts.
 The detector identifies cards from a compact local artwork-template index and
 does not use OCR. A dark-nameplate gate and confidence
 margin reject scenery, ambiguous lookalikes, and incomplete edge cards. The
-frame/label supplies the rarity tier (Default, Gold, Diamond, Rainbow, or
-Beskar). Common, Rare, Epic, Legendary, or Mythic is a fixed class for each
+frame/label supplies the rarity tier (Default, Gold, Diamond, Rainbow, Beskar,
+or Galactic). Common, Rare, Epic, Legendary, or Mythic is a fixed class for each
 droid and comes directly from the bundled identity table; the colored pill is
 not scanned.
 Normally a card is reported as soon as four recent scans agree. Active regions
 scan at up to 8 FPS and empty regions back off to 4 FPS. Minimum rarity tiers follow
-Default → Gold → Diamond → Rainbow → Beskar, so Gold+ includes Gold and every
-tier above it. The fixed Common–Mythic class does not affect this filter. Configured
+Default → Gold → Diamond → Rainbow → Beskar → Galactic, so Gold+ includes Gold
+and every tier above it. Galactic is selectable now; its visual templates will
+be trained from real blueprint cards after release. The fixed Common–Mythic class does not affect this filter. Configured
 droids use the same Alert Channels as Dashboard alerts. Saved Belt Tracker
 regions are separate for each display, and its events appear with other alerts
 in History.
@@ -110,7 +113,7 @@ the problem instead of silently switching detectors.
 
 The **Limited Deals** page shows the offer that is live right now and can alert
 through the same Popup, Sound, Discord, ntfy, and Pushover channels used by the
-Dashboard. Familiar priority combinations plus every Mythic mutation are
+Dashboard. Familiar priority combinations, Galactic Epic/Legendary, plus every Mythic mutation are
 available as quick toggles. For finer control, click **Modify** and choose a minimum deal tier for
 any rotating droid; higher tiers also match through Default → Gold → Diamond →
 Rainbow → Beskar → Galactic.
