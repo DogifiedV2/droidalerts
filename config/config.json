@@ -12,6 +12,8 @@
   "capture_device_pid": null,
   "capture_device_backend": 0,
   "capture_interval_seconds": 0.25,
+  "rebirth_ready_alert_enabled": false,
+  "rebirth_scan_interval_seconds": 5.0,
   "dedupe_seconds": 12.0,
   "alert_cooldown_seconds": 10.0,
   "sound_enabled": true,
@@ -25,7 +27,7 @@
   "popup_position": "top_center",
   "popup_scale": 1.0,
   "popup_opacity": 1.0,
-  "sound_file": "",
+  "sound_file": "System beeps",
   "save_alert_samples": false,
   "save_debug_screenshots": false,
   "discord_enabled": false,
@@ -40,10 +42,10 @@
   "ntfy_tags": "rotating_light",
   "ntfy_cache": "no",
   "ntfy_include_attachment": false,
-  "notification_setup_prompted": false,
-  "intro_shown": false,
+  "notification_setup_prompted": true,
+  "intro_shown": true,
   "limited_deals_intro_shown": false,
-  "last_seen_version": "",
+  "last_seen_version": "1.3.7",
   "discord_community_prompted": true,
   "phone_alerts_enabled": false,
   "phone_credentials_file": "phone_alerts.json",
@@ -106,6 +108,18 @@
     ],
     [
       "Beskar",
+      "Mythic"
+    ],
+    [
+      "Galactic",
+      "Epic"
+    ],
+    [
+      "Galactic",
+      "Legendary"
+    ],
+    [
+      "Galactic",
       "Mythic"
     ]
   ]

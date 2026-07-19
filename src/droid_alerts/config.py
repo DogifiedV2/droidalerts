@@ -78,6 +78,19 @@ REFERENCE_SCREEN_HEIGHT = 1440
 REFERENCE_SCREEN_WIDTH = 2560
 BELT_SCAN_FPS_MIN = 1
 BELT_SCAN_FPS_MAX = 20
+LEGACY_DEFAULT_ALERT_TARGETS = (
+    ("Beskar", "Epic"),
+    ("Beskar", "Legendary"),
+    ("Diamond", "Mythic"),
+    ("Rainbow", "Mythic"),
+    ("Beskar", "Mythic"),
+)
+GALACTIC_DEFAULT_ALERT_TARGETS = (
+    ("Galactic", "Epic"),
+    ("Galactic", "Legendary"),
+    ("Galactic", "Mythic"),
+)
+DEFAULT_ALERT_TARGETS = LEGACY_DEFAULT_ALERT_TARGETS + GALACTIC_DEFAULT_ALERT_TARGETS
 CAPTURE_METADATA_MAX_LENGTH = 512
 
 
@@ -209,13 +222,7 @@ class AppConfig:
     validation_failures_before_calibration_prompt: int = 30
     thresholds: Thresholds = field(default_factory=Thresholds)
     alert_targets: list[list[str]] = field(
-        default_factory=lambda: [
-            ["Beskar", "Epic"],
-            ["Beskar", "Legendary"],
-            ["Diamond", "Mythic"],
-            ["Rainbow", "Mythic"],
-            ["Beskar", "Mythic"],
-        ]
+        default_factory=lambda: [list(combo) for combo in DEFAULT_ALERT_TARGETS]
     )
 
     @classmethod
@@ -408,6 +415,8 @@ class AppConfig:
                 for pair in raw_targets
                 if isinstance(pair, (list, tuple)) and len(pair) == 2
             ]
+            if {tuple(pair) for pair in pairs} == set(LEGACY_DEFAULT_ALERT_TARGETS):
+                pairs.extend([list(combo) for combo in GALACTIC_DEFAULT_ALERT_TARGETS])
             if pairs or not raw_targets:
                 config.alert_targets = pairs
         return config

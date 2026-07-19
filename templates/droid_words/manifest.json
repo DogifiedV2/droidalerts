@@ -1,42 +1,241 @@
 {
   "kind": "droid_word",
-  "droid": "Beskar",
   "templates": [
     {
       "file": "Beskar__report_01_61a0a9f2.png",
       "submission_id": "61a0a9f2-9566-4036-b4a2-2ece3be3b903",
       "scale": 0.5192307692307692,
-      "source": "2026-07-10 1.1.5 valid debug batch"
+      "source": "2026-07-10 1.1.5 valid debug batch",
+      "droid": "Beskar"
     },
     {
       "file": "Beskar__report_02_2f0f3206.png",
       "submission_id": "2f0f3206-ae4f-4e81-8d72-ac182b168857",
       "scale": 0.6346153846153846,
-      "source": "2026-07-10 1.1.5 valid debug batch"
+      "source": "2026-07-10 1.1.5 valid debug batch",
+      "droid": "Beskar"
     },
     {
       "file": "Beskar__report_03_8cd630f2.png",
       "submission_id": "8cd630f2-64c6-471b-a254-2ef449741cd7",
       "scale": 0.75,
-      "source": "2026-07-10 1.1.5 valid debug batch"
+      "source": "2026-07-10 1.1.5 valid debug batch",
+      "droid": "Beskar"
     },
     {
       "file": "Beskar__report_04_502144ea.png",
       "submission_id": "502144ea-f69e-47e0-9d45-f0b3130d361e",
       "scale": 0.8307692307692308,
-      "source": "2026-07-10 1.1.5 valid debug batch"
+      "source": "2026-07-10 1.1.5 valid debug batch",
+      "droid": "Beskar"
     },
     {
       "file": "Beskar__report_05_30a906b6.png",
       "submission_id": "30a906b6-d446-4e05-b21a-04639340993d",
       "scale": 0.8461538461538461,
-      "source": "2026-07-10 1.1.5 valid debug batch"
+      "source": "2026-07-10 1.1.5 valid debug batch",
+      "droid": "Beskar"
     },
     {
       "file": "Beskar__report_06_fc45557b.png",
       "submission_id": "fc45557b-df7b-4791-8d53-06cdfe5bf9d4",
       "scale": 1.0,
-      "source": "2026-07-10 1.1.5 valid debug batch"
+      "source": "2026-07-10 1.1.5 valid debug batch",
+      "droid": "Beskar"
+    },
+    {
+      "droid": "Galactic",
+      "file": "Galactic__chat_01_ea121fb9.png",
+      "source": "user Galactic chat capture 2026-07-19",
+      "rarity": "Rare",
+      "row_box": [
+        0,
+        24,
+        397,
+        56
+      ],
+      "word_box": [
+        40,
+        36,
+        144,
+        49
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Galactic",
+      "file": "Galactic__chat_02_55a7c12c.png",
+      "source": "user Galactic chat capture 2026-07-19",
+      "rarity": "Common",
+      "row_box": [
+        0,
+        0,
+        560,
+        44
+      ],
+      "word_box": [
+        36,
+        16,
+        174,
+        31
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Galactic",
+      "file": "Galactic__chat_03_74a2ae41.png",
+      "source": "user Galactic chat capture 2026-07-19",
+      "rarity": "Rare",
+      "row_box": [
+        0,
+        18,
+        590,
+        62
+      ],
+      "word_box": [
+        55,
+        34,
+        193,
+        49
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Galactic",
+      "file": "Galactic__chat_04_7e2d3ffa.png",
+      "source": "user Galactic chat capture 2026-07-19",
+      "rarity": "Common",
+      "row_box": [
+        0,
+        80,
+        670,
+        124
+      ],
+      "word_box": [
+        55,
+        96,
+        193,
+        111
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Galactic",
+      "file": "Galactic__chat_05_d35d9430.png",
+      "source": "user Galactic chat capture 2026-07-19",
+      "rarity": "Epic",
+      "row_box": [
+        0,
+        22,
+        403,
+        66
+      ],
+      "word_box": [
+        31,
+        34,
+        145,
+        49
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Galactic",
+      "file": "Galactic__chat_06_d6863194.png",
+      "source": "user Galactic chat capture 2026-07-19",
+      "rarity": "Common",
+      "row_box": [
+        0,
+        23,
+        485,
+        67
+      ],
+      "word_box": [
+        34,
+        35,
+        148,
+        50
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Galactic",
+      "file": "Galactic__chat_07_05dcc1f9.png",
+      "source": "user Galactic chat capture 2026-07-19",
+      "rarity": "Common",
+      "row_box": [
+        0,
+        80,
+        650,
+        124
+      ],
+      "word_box": [
+        54,
+        91,
+        191,
+        106
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Galactic",
+      "file": "Galactic__chat_08_d0a87617.png",
+      "source": "user Galactic chat capture 2026-07-19",
+      "rarity": "Rare",
+      "row_box": [
+        0,
+        42,
+        386,
+        86
+      ],
+      "word_box": [
+        40,
+        54,
+        155,
+        68
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Galactic",
+      "file": "Galactic__chat_09_6372afd6.png",
+      "source": "user Galactic chat capture 2026-07-19",
+      "rarity": "Rare",
+      "row_box": [
+        0,
+        7,
+        510,
+        51
+      ],
+      "word_box": [
+        30,
+        18,
+        169,
+        36
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Galactic",
+      "file": "Galactic__chat_10_b535643a.png",
+      "source": "user Galactic chat capture 2026-07-19",
+      "rarity": "Common",
+      "row_box": [
+        0,
+        20,
+        537,
+        64
+      ],
+      "word_box": [
+        30,
+        31,
+        170,
+        50
+      ],
+      "normalized_row_height": 44
     }
+  ],
+  "droids": [
+    "Beskar",
+    "Galactic"
   ]
 }

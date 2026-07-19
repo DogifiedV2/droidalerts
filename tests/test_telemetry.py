@@ -46,6 +46,8 @@ class ChatTelemetryTests(unittest.TestCase):
             alert_targets=[
                 ["Rainbow", "Mythic"],
                 ["Diamond", "Mythic"],
+                ["Galactic", "Common"],
+                ["Galactic", "Epic"],
             ],
         )
         client = AnonymousTelemetryClient(config)
@@ -69,7 +71,10 @@ class ChatTelemetryTests(unittest.TestCase):
             client._send_heartbeat()
 
         payloads = [call.args[1] for call in client._post_json.call_args_list]
-        self.assertEqual(["diamondmythic", "rainbowmythic"], payloads[0]["priorityAlerts"])
+        self.assertEqual(
+            ["diamondmythic", "galacticcommon", "galacticepic", "rainbowmythic"],
+            payloads[0]["priorityAlerts"],
+        )
         self.assertNotIn("priorityAlerts", payloads[1])
         self.assertEqual(["rainbowmythic"], payloads[2]["priorityAlerts"])
         self.assertEqual([], payloads[3]["priorityAlerts"])

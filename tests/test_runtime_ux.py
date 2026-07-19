@@ -27,8 +27,11 @@ from droid_alerts.watcher import _delivery_retryable
 def main() -> int:
     failures: list[str] = []
 
-    if DISPLAY_TIMER_ORDER != ("beskar", "mythic") or "rainbow" not in TIMER_ORDER:
-        failures.append("timer overlay visibility does not preserve the hidden Rainbow timer")
+    if (
+        DISPLAY_TIMER_ORDER != ("beskar", "mythic", "galactic")
+        or "rainbow" not in TIMER_ORDER
+    ):
+        failures.append("timer overlay does not show Galactic while preserving hidden Rainbow")
 
     configured = AppConfig(
         ui_theme="midnight",
@@ -132,10 +135,20 @@ def main() -> int:
             failures.append("timer boundaries are incorrect at the hour")
         if seconds_until_next("mythic") != 3300:
             failures.append("mythic countdown is incorrect at the hour")
+        if seconds_until_next("galactic") != 2700:
+            failures.append("galactic countdown is incorrect at the hour")
     between_beskar_spawns = time.struct_time((2026, 7, 10, 12, 7, 30, 3, 191, -1))
     with patch("droid_alerts.timers.time.localtime", return_value=between_beskar_spawns):
         if seconds_until_next("beskar") != 450:
             failures.append("Beskar timer does not use 15-minute spawn intervals")
+    before_galactic = time.struct_time((2026, 7, 10, 12, 44, 30, 3, 191, -1))
+    with patch("droid_alerts.timers.time.localtime", return_value=before_galactic):
+        if seconds_until_next("galactic") != 30:
+            failures.append("Galactic timer does not count down to xx:45")
+    at_galactic = time.struct_time((2026, 7, 10, 12, 45, 0, 3, 191, -1))
+    with patch("droid_alerts.timers.time.localtime", return_value=at_galactic):
+        if seconds_until_next("galactic") != 3600:
+            failures.append("Galactic timer does not roll forward after xx:45")
 
     if not _delivery_retryable("HTTP 503") or _delivery_retryable("HTTP 401"):
         failures.append("delivery retry classification is incorrect")

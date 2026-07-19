@@ -153,10 +153,14 @@ ALERT_COMBOS: tuple[tuple[str, str], ...] = (
     ("Diamond", "Mythic"),
     ("Rainbow", "Mythic"),
     ("Beskar", "Mythic"),
+    ("Galactic", "Common"),
+    ("Galactic", "Rare"),
     ("Galactic", "Epic"),
     ("Galactic", "Legendary"),
     ("Galactic", "Mythic"),
 )
+ALERT_DROID_ORDER = ("Diamond", "Rainbow", "Beskar", "Galactic")
+ALERT_RARITY_ORDER = ("Common", "Rare", "Epic", "Legendary", "Mythic")
 UPDATE_POLL_INTERVAL_MS = 15 * 60 * 1000
 DISCORD_COMMUNITY_URL = "https://discord.gg/ZmFPjS4784"
 TRACKER_URL = "https://gonk.tools/tracker"
@@ -414,6 +418,8 @@ class DroidAlertsApp:
         self.last_scan_var = StringVar(value="No scans yet")
         self.last_alert_var = StringVar(value="No priority alerts this session")
         self.session_stats_var = StringVar(value="0 detections · 0 alerts")
+        self.priority_alerts_count_var = StringVar(value="No alert types selected")
+        self.priority_alerts_summary_var = StringVar(value="None selected")
         self.belt_status_var = StringVar(value="Ready to track")
         self.belt_detail_var = StringVar(value=BELT_REGION_INSTRUCTIONS)
         self.belt_region_var = StringVar(value="No belt region selected for this display")
@@ -440,6 +446,7 @@ class DroidAlertsApp:
             "beskar": StringVar(value="--:--"),
             "mythic": StringVar(value="--:--"),
             "rainbow": StringVar(value="--:--"),
+            "galactic": StringVar(value="--:--"),
         }
         self.setting_vars: dict[str, object] = {"monitor_index": IntVar(value=1)}
         self.alert_vars: dict[tuple[str, str], BooleanVar] = {}
@@ -1043,7 +1050,12 @@ class DroidAlertsApp:
         glance_outer, glance = self._labeled_section(right_panel, "NEXT SPAWNS")
         glance_outer.grid(row=0, column=0, sticky="new", pady=(0, 16))
         glance.columnconfigure(0, weight=1)
-        timer_labels = (("beskar", "Beskar"), ("mythic", "Mythic"), ("rainbow", "Rainbow"))
+        timer_labels = (
+            ("beskar", "Beskar"),
+            ("mythic", "Mythic"),
+            ("rainbow", "Rainbow"),
+            ("galactic", "Galactic"),
+        )
         for row, (key, label) in enumerate(timer_labels, start=1):
             ttk.Label(glance, text=label).grid(row=row, column=0, sticky="w", pady=3)
             ttk.Label(glance, textvariable=self.timer_vars[key], font=self._font(12, "bold", mono=True)).grid(
@@ -1057,9 +1069,9 @@ class DroidAlertsApp:
             variable=self.setting_vars["droid_timers_enabled"],
             command=self.on_droid_timers_toggle,
             **bootstyle("round-toggle"),
-        ).grid(row=4, column=0, sticky="w", pady=(8, 2))
+        ).grid(row=5, column=0, sticky="w", pady=(8, 2))
         self._link_label(glance, "Adjust Timer Position", self.adjust_droid_timers).grid(
-            row=4, column=1, sticky="e", pady=(8, 2)
+            row=5, column=1, sticky="e", pady=(8, 2)
         )
         self.timer_reminders_check = ttk.Checkbutton(
             glance,
@@ -1067,7 +1079,7 @@ class DroidAlertsApp:
             variable=self.setting_vars["timer_reminders_enabled"],
             **bootstyle("round-toggle"),
         )
-        self.timer_reminders_check.grid(row=5, column=0, columnspan=2, sticky="w", padx=(18, 0), pady=(2, 0))
+        self.timer_reminders_check.grid(row=6, column=0, columnspan=2, sticky="w", padx=(18, 0), pady=(2, 0))
         self.timer_reminders_check.grid_remove()
 
         session_outer, session = self._labeled_section(right_panel, "SESSION")
@@ -1095,47 +1107,229 @@ class DroidAlertsApp:
         alerts_outer, alerts = self._labeled_section(parent, "PRIORITY ALERTS")
         alerts_outer.grid(row=row, column=0, sticky="ew", pady=(0, 16))
         alerts.columnconfigure(0, weight=1)
-        alerts.columnconfigure(1, weight=1)
-        for index, combo in enumerate(ALERT_COMBOS):
+        for combo in ALERT_COMBOS:
             var = BooleanVar(value=True)
             self.alert_vars[combo] = var
-            ttk.Checkbutton(
-                alerts,
-                text=f"{combo[0]} {combo[1]}",
-                variable=var,
-                **bootstyle("round-toggle"),
-            ).grid(row=index // 2, column=index % 2, sticky="w", pady=5)
+
+        heading = ttk.Frame(alerts)
+        heading.grid(row=0, column=0, sticky="ew")
+        heading.columnconfigure(0, weight=1)
+        ttk.Label(
+            heading,
+            textvariable=self.priority_alerts_count_var,
+            **muted_style(),
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Button(
+            heading,
+            text="Modify",
+            command=self.choose_priority_alerts,
+            **bootstyle("info-outline"),
+        ).grid(row=0, column=1, sticky="e")
+
+        priority_summary = ttk.Label(
+            alerts,
+            textvariable=self.priority_alerts_summary_var,
+            wraplength=620,
+            justify="left",
+        )
+        priority_summary.grid(row=1, column=0, sticky="ew", pady=(10, 12))
+        self._autowrap(priority_summary, alerts)
+
+        ttk.Separator(alerts, orient="horizontal").grid(
+            row=2,
+            column=0,
+            sticky="ew",
+            pady=(0, 10),
+        )
+        special_alerts = ttk.Frame(alerts)
+        special_alerts.grid(row=3, column=0, sticky="ew")
+        special_alerts.columnconfigure(0, weight=1)
+        special_alerts.columnconfigure(1, weight=1)
         self.setting_vars["rebirth_ready_alert_enabled"] = BooleanVar(value=False)
         ttk.Checkbutton(
-            alerts,
+            special_alerts,
             text="Rebirth Ready",
             variable=self.setting_vars["rebirth_ready_alert_enabled"],
             **bootstyle("round-toggle"),
-        ).grid(
-            row=len(ALERT_COMBOS) // 2,
-            column=1,
-            sticky="w",
-            pady=5,
-        )
+        ).grid(row=0, column=0, sticky="w", pady=3)
 
-        rebirth_index = len(ALERT_COMBOS)
         self.setting_vars["rebirth_alert_enabled"] = BooleanVar(value=False)
         self.rebirth_alert_check = ttk.Checkbutton(
-            alerts,
+            special_alerts,
             text="Rebirth Alert",
             variable=self.setting_vars["rebirth_alert_enabled"],
             **bootstyle("round-toggle"),
         )
-        self.rebirth_alert_check.grid(
-            row=rebirth_index // 2,
-            column=rebirth_index % 2,
-            sticky="w",
-            pady=5,
-        )
+        self.rebirth_alert_check.grid(row=0, column=1, sticky="w", pady=3)
         self.rebirth_alert_tooltip = HoverTooltip(
             self.rebirth_alert_check,
             REBIRTH_ALERT_TOOLTIP,
         )
+        self._refresh_priority_alert_summary()
+
+    def _refresh_priority_alert_summary(self) -> None:
+        selected = {
+            combo for combo, var in self.alert_vars.items() if bool(var.get())
+        }
+        count = len(selected)
+        self.priority_alerts_count_var.set(
+            f"{count} alert type{'s' if count != 1 else ''} selected"
+            if count
+            else "No alert types selected"
+        )
+        rows = []
+        for droid in ALERT_DROID_ORDER:
+            rarities = [
+                rarity
+                for rarity in ALERT_RARITY_ORDER
+                if (droid, rarity) in selected
+            ]
+            if rarities:
+                rows.append(f"{droid}: {', '.join(rarities)}")
+        self.priority_alerts_summary_var.set("\n".join(rows) or "None selected")
+
+    def choose_priority_alerts(self) -> None:
+        dialog = tk.Toplevel(self.root)
+        self._style_dialog_window(dialog)
+        dialog.title("Priority Alerts")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        body = ttk.Frame(dialog, padding=20)
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body,
+            text="Priority Alerts",
+            font=self._font(14, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            body,
+            text="Choose which chat spawns should use your enabled alert channels.",
+            wraplength=680,
+            justify="left",
+            **muted_style(),
+        ).pack(anchor="w", pady=(4, 14))
+
+        choices = {
+            combo: BooleanVar(value=bool(self.alert_vars[combo].get()))
+            for combo in ALERT_COMBOS
+        }
+        matrix = ttk.Frame(body, padding=(12, 10), style="Subtle.TFrame")
+        matrix.pack(fill="x")
+        ttk.Label(
+            matrix,
+            text="Droid",
+            style="SubtleMuted.TLabel",
+            font=self._font(9, "bold"),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 16), pady=(0, 7))
+        for column, rarity in enumerate(ALERT_RARITY_ORDER, start=1):
+            matrix.columnconfigure(column, weight=1)
+            ttk.Label(
+                matrix,
+                text=rarity,
+                style="SubtleMuted.TLabel",
+                font=self._font(9, "bold"),
+            ).grid(row=0, column=column, padx=8, pady=(0, 7))
+
+        supported = set(ALERT_COMBOS)
+        for row_index, droid in enumerate(ALERT_DROID_ORDER, start=1):
+            ttk.Label(
+                matrix,
+                text=droid,
+                style="Subtle.TLabel",
+                font=self._font(10, "bold"),
+            ).grid(row=row_index, column=0, sticky="w", padx=(0, 16), pady=7)
+            for column, rarity in enumerate(ALERT_RARITY_ORDER, start=1):
+                combo = (droid, rarity)
+                if combo in supported:
+                    ttk.Checkbutton(
+                        matrix,
+                        text="",
+                        variable=choices[combo],
+                        **bootstyle("round-toggle"),
+                    ).grid(row=row_index, column=column, padx=8, pady=7)
+                else:
+                    ttk.Label(
+                        matrix,
+                        text="—",
+                        style="SubtleMuted.TLabel",
+                    ).grid(row=row_index, column=column, padx=8, pady=7)
+
+        def set_choices(combos: set[tuple[str, str]]) -> None:
+            for combo, var in choices.items():
+                var.set(combo in combos)
+
+        presets = ttk.Frame(body)
+        presets.pack(fill="x", pady=(12, 0))
+        ttk.Button(
+            presets,
+            text="Defaults",
+            command=lambda: set_choices(AppConfig().targets),
+            style="Utility.TButton",
+        ).pack(side="left")
+        ttk.Button(
+            presets,
+            text="All Galactic",
+            command=lambda: set_choices(
+                {
+                    combo
+                    for combo, var in choices.items()
+                    if bool(var.get()) or combo[0] == "Galactic"
+                }
+            ),
+            style="Utility.TButton",
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            presets,
+            text="Select all",
+            command=lambda: set_choices(set(ALERT_COMBOS)),
+            style="Utility.TButton",
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            presets,
+            text="Clear",
+            command=lambda: set_choices(set()),
+            style="Utility.TButton",
+        ).pack(side="left", padx=(8, 0))
+
+        def save_priorities(_event=None) -> str:
+            for combo, var in self.alert_vars.items():
+                var.set(bool(choices[combo].get()))
+            self._refresh_priority_alert_summary()
+            self.detail_var.set("Priority alerts updated")
+            dialog.destroy()
+            return "break"
+
+        actions = ttk.Frame(body)
+        actions.pack(fill="x", pady=(18, 0))
+        ttk.Button(
+            actions,
+            text="Cancel",
+            width=9,
+            command=dialog.destroy,
+            **bootstyle("primary"),
+        ).pack(side="right", padx=(8, 0))
+        ttk.Button(
+            actions,
+            text="Save",
+            width=9,
+            command=save_priorities,
+            **bootstyle("primary"),
+        ).pack(side="right")
+        dialog.bind("<Control-s>", save_priorities)
+        dialog.bind("<Command-s>", save_priorities)
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.update_idletasks()
+        dialog_width, dialog_height = fit_window_size(
+            max(720, dialog.winfo_reqwidth() + 20),
+            max(360, dialog.winfo_reqheight() + 20),
+            dialog.winfo_screenwidth(),
+            dialog.winfo_screenheight(),
+            horizontal_margin=80,
+            vertical_margin=120,
+        )
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        dialog.minsize(min(680, dialog_width), min(340, dialog_height))
 
     def _build_alert_channels(self, parent, *, row: int) -> None:
         channels_outer, channels = self._labeled_section(parent, "ALERT CHANNELS")
@@ -2449,6 +2643,7 @@ class DroidAlertsApp:
             self._apply_advanced_visibility(self.config.advanced_mode)
             self.refresh_sound_choices()
             self.refresh_channel_statuses()
+            self._refresh_priority_alert_summary()
             self._refresh_belt_target_text()
             self._refresh_limited_deal_target_text()
             self._load_belt_region()
@@ -5261,7 +5456,7 @@ class DroidAlertsApp:
             "Droid Timers",
             intro="Do you want a small Droid Timers bar at the top of your screen?\n\n"
             "It counts down "
-            "to the next Beskar, Mythic and Rainbow spawns. You can turn it on "
+            "to the next Beskar, Mythic, Rainbow and Galactic spawns. You can turn it on "
             "or off any time in Settings.",
             ok_text="Show Timers",
             cancel_text="No Thanks",

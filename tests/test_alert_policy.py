@@ -68,14 +68,34 @@ def main() -> int:
         failures.append("enabled Rainbow Legendary target should fire")
 
     galactic_combos = {
+        ("Galactic", "Common"),
+        ("Galactic", "Rare"),
         ("Galactic", "Epic"),
         ("Galactic", "Legendary"),
         ("Galactic", "Mythic"),
     }
     if not galactic_combos.issubset(set(ALERT_COMBOS)):
         failures.append("all Galactic priority toggles should be available")
-    if galactic_combos & default_config.targets:
-        failures.append("Galactic priority alerts should be disabled by default")
+    default_galactic = {
+        ("Galactic", "Epic"),
+        ("Galactic", "Legendary"),
+        ("Galactic", "Mythic"),
+    }
+    if (galactic_combos & default_config.targets) != default_galactic:
+        failures.append("only Galactic Epic, Legendary, and Mythic should be on by default")
+    migrated_defaults = AppConfig.from_dict(
+        {
+            "alert_targets": [
+                ["Beskar", "Epic"],
+                ["Beskar", "Legendary"],
+                ["Diamond", "Mythic"],
+                ["Rainbow", "Mythic"],
+                ["Beskar", "Mythic"],
+            ]
+        }
+    )
+    if not default_galactic.issubset(migrated_defaults.targets):
+        failures.append("legacy default selections should enable the new Galactic defaults")
     for droid, rarity in galactic_combos:
         detection = _detection(droid, rarity)
         if not detection.should_alert:

@@ -25,6 +25,8 @@ PRIORITY_ALERTS = {
     ("Beskar", "Mythic"),
     ("Diamond", "Mythic"),
     ("Rainbow", "Mythic"),
+    ("Galactic", "Common"),
+    ("Galactic", "Rare"),
     ("Galactic", "Epic"),
     ("Galactic", "Legendary"),
     ("Galactic", "Mythic"),
@@ -281,7 +283,7 @@ def color_scores(row: np.ndarray) -> dict[str, float]:
 def droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
     """Dark-outlined, glyph-sized text components in the droid-word columns.
 
-    The droid NAME ('Diamond'/'Rainbow'/'Beskar' + 'Droid') is rendered in the
+    The droid NAME ('Diamond'/'Rainbow'/'Beskar'/'Galactic' + 'Droid') is rendered in the
     droid's colors, sits on the backdrop, and is far larger than the icon -
     scenery blobs can't imitate letter-shaped outlined text (same filtering
     that made rarity classification background-proof). Columns 30-240 stop
@@ -290,7 +292,13 @@ def droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
     h, w = row.shape[:2]
     win = row[:, 30 : min(w, 240)]
     if win.size == 0:
-        return {"cyan": 0, "gray": 0, "colored_total": 0, "strong_families": 0}
+        return {
+            "cyan": 0,
+            "purple": 0,
+            "gray": 0,
+            "colored_total": 0,
+            "strong_families": 0,
+        }
     hsv = cv2.cvtColor(win, cv2.COLOR_BGR2HSV)
     gray_img = cv2.cvtColor(win, cv2.COLOR_BGR2GRAY)
     hue, sat, val = cv2.split(hsv)
@@ -320,6 +328,7 @@ def droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
     counts = {name: text_shaped_count(mask) for name, mask in families.items()}
     return {
         "cyan": counts["cyan"],
+        "purple": counts["purple"],
         "gray": text_shaped_count((sat < 55) & (val > 150) & gate),
         "colored_total": sum(counts.values()),
         "strong_families": sum(1 for v in counts.values() if v >= 60),
@@ -346,6 +355,12 @@ def droid_word_color_mask(row: np.ndarray, droid: str) -> np.ndarray:
         raw = (hue >= 78) & (hue <= 112) & (sat > 55) & (val > 95) & gate
     elif droid == "Rainbow":
         raw = (sat >= 100) & (val >= 120) & gate
+    elif droid == "Galactic":
+        # The announced #9200E0 renders around OpenCV hue 140. Preserve the
+        # anti-aliased edge range measured across the live Galactic chat
+        # captures; the literal word-shape template below prevents other
+        # purple HUD text from becoming a Galactic verdict.
+        raw = (hue >= 125) & (hue <= 155) & (sat >= 110) & (val >= 120) & gate
     else:
         raw = (sat < 60) & (val > 140) & gate
 
@@ -381,6 +396,31 @@ def droid_word_shape_score(
         result = cv2.matchTemplate(mask, template.image, cv2.TM_CCOEFF_NORMED)
         best = max(best, float(result.max()))
     return best
+
+
+def classify_galactic_droid_word(
+    row: np.ndarray,
+    templates_by_droid: dict[str, list[DroidWordTemplate]],
+    *,
+    shape_threshold: float = 0.50,
+    minimum_purple_pixels: int = 250,
+) -> tuple[str, float] | None:
+    """Return Galactic only when live colour and literal word shape agree.
+
+    Purple alone is unsafe because Epic/Mythic rarity words and scenery use
+    nearby hues. With no installed Galactic templates this path stays dormant.
+    """
+
+    if not templates_by_droid.get("Galactic"):
+        return None
+    profile = droid_word_text_profile(row)
+    purple = profile["purple"]
+    if purple < minimum_purple_pixels:
+        return None
+    shape = droid_word_shape_score(row, "Galactic", templates_by_droid)
+    if shape < shape_threshold:
+        return None
+    return "Galactic", min(0.99, max(shape, purple / 900.0))
 
 
 def classify_droid_word(row: np.ndarray) -> tuple[str, float] | None:
@@ -1214,13 +1254,27 @@ class DroidVisualDetector:
             if has_crafted_phrase(row, self.crafted_phrase_templates):
                 reject(y, "crafted-phrase")
                 continue
+            galactic_word_verdict = None
             if not has_spawn_phrase_structure(row):
-                continue
+                # Resampling around 0.75x can move a real spawn line just
+                # below the generic 700-pixel phrase floor. Only relax that
+                # floor when the independent colour + literal Galactic word
+                # recognizer agrees, so other chat/HUD text keeps the stricter
+                # false-positive protection.
+                galactic_word_verdict = classify_galactic_droid_word(
+                    row, self.droid_word_templates
+                )
+                if galactic_word_verdict is None or not has_spawn_phrase_structure(
+                    row, min_white_edge_pixels=600
+                ):
+                    continue
 
             # Word-text verdict first: background-proof and unambiguous when
             # it fires. Legacy icon-window path (plus icon-structure gate)
             # only for rows without strong word evidence.
-            word_verdict = classify_droid_word(row)
+            word_verdict = galactic_word_verdict or classify_galactic_droid_word(
+                row, self.droid_word_templates
+            ) or classify_droid_word(row)
             if word_verdict is not None:
                 droid, droid_score = word_verdict
                 if droid_score < self.droid_threshold:

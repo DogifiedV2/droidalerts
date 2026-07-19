@@ -19,13 +19,23 @@ except Exception:  # pragma: no cover - tkinter availability is platform depende
 
 # "Droid Timers" overlay: a small always-on-top, click-through strip showing
 # when the next droids are due (wall-clock schedule). Beskar spawns every
-# 15 minutes (xx:00/15/30/45), Mythic at xx:55 every hour, Rainbow every
-# 10 minutes (xx:00/10/...). Rainbow timing stays available in code, but the
-# overlay currently displays only Beskar and Mythic side by side.
-TIMER_ORDER = ("beskar", "mythic", "rainbow")
-DISPLAY_TIMER_ORDER = TIMER_ORDER[:2]
-TIMER_LABELS = {"beskar": "BESKAR", "mythic": "MYTHIC", "rainbow": "RAINBOW"}
-TIMER_COLORS = {"beskar": "#c9cdd9", "mythic": RARITY_COLORS["Mythic"]}
+# 15 minutes (xx:00/15/30/45), Galactic at xx:45 every hour, Mythic at
+# xx:55 every hour, and Rainbow every 10 minutes (xx:00/10/...). Rainbow
+# timing stays available on the Dashboard, while the overlay shows Beskar,
+# Mythic, and Galactic side by side.
+TIMER_ORDER = ("beskar", "mythic", "rainbow", "galactic")
+DISPLAY_TIMER_ORDER = ("beskar", "mythic", "galactic")
+TIMER_LABELS = {
+    "beskar": "BESKAR",
+    "mythic": "MYTHIC",
+    "rainbow": "RAINBOW",
+    "galactic": "GALACTIC",
+}
+TIMER_COLORS = {
+    "beskar": "#c9cdd9",
+    "mythic": RARITY_COLORS["Mythic"],
+    "galactic": RARITY_COLORS["Galactic"],
+}
 
 BASE_WIDTH = 376
 BASE_HEIGHT = 72
@@ -44,6 +54,11 @@ def seconds_until_next(kind: str, offset_seconds: int = 0) -> int:
         return 900 - (sec_into_hour % 900)
     if kind == "rainbow":
         return 600 - (sec_into_hour % 600)
+    if kind == "galactic":
+        delta = 45 * 60 - sec_into_hour
+        if delta <= 0:
+            delta += 3600
+        return delta
     # Mythic: xx:55 every hour.
     delta = 55 * 60 - sec_into_hour
     if delta <= 0:

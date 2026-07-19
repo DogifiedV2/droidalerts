@@ -5,18 +5,21 @@ moment a rare droid spawns with a sound, a popup on screen, and (if you want)
 a notification on your phone. No more staring at the chat box or missing a
 Mythic because you tabbed out.
 
-Out of the box it alerts on the five spawns worth dropping everything for:
+Out of the box it alerts on these priority spawns:
 
 - **Beskar Mythic**
 - **Rainbow Mythic**
 - **Diamond Mythic**
 - **Beskar Legendary**
 - **Beskar Epic**
+- **Galactic Mythic**
+- **Galactic Legendary**
+- **Galactic Epic**
 
-**Rainbow Epic** and **Rainbow Legendary** are also available as the first two
-priority-alert toggles and are off by default. **Galactic Epic**, **Galactic
-Legendary**, and **Galactic Mythic** are prepared as off-by-default options;
-chat detection will be trained from real Galactic alerts after they release.
+**Rainbow Epic** and **Rainbow Legendary** are also available as
+priority-alert options and are off by default. **Galactic Common** and
+**Galactic Rare** are available but also start off. Use **Modify** on the
+Dashboard to manage the full droid-by-rarity grid.
 
 It works on most PCs and starts with a recommended chat region. Everything it
 saves stays inside its own folder. Screenshots remain local unless you

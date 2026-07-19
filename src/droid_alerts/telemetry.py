@@ -35,6 +35,11 @@ VALID_PRIORITY_ALERT_KEYS = frozenset(
         "diamondmythic",
         "rainbowmythic",
         "beskarmythic",
+        "galacticcommon",
+        "galacticrare",
+        "galacticepic",
+        "galacticlegendary",
+        "galacticmythic",
     }
 )
 _INSTALL_ID_LOCK = threading.Lock()
