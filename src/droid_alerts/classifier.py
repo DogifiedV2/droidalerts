@@ -797,6 +797,96 @@ def classify_rarity_text_color(
     return best_rarity, float(score), float(margin), f"text-color:{best_rarity}:{best_count}"
 
 
+def galactic_rarity_text_override(
+    raw_rarity: str,
+    text_verdict: tuple[str, float, float, str],
+    shape_verdict: tuple[str, float, float, str],
+    text_counts: dict[str, int],
+) -> tuple[str, float, float, str] | None:
+    """Correct Galactic rarity colors polluted by scenery or adjacent rows.
+
+    Galactic has no fixed family ROI templates. Its broad raw-color crop can
+    therefore let orange/purple scenery outvote the actual outlined rarity
+    word. Prefer a conflicting rarity only when text-shaped color and word
+    shape corroborate it, with two measured exceptions for Galactic Rare:
+    raw Legendary is a recurring orange-background failure, while raw Common
+    needs both a Rare-shaped word and meaningful cyan dominance.
+    """
+    text_rarity, _text_score, _text_margin, text_source = text_verdict
+    shape_rarity, shape_score, _shape_margin, shape_source = shape_verdict
+    colored = {"Rare", "Epic", "Legendary", "Mythic"}
+
+    def result(rarity: str, reason: str) -> tuple[str, float, float, str]:
+        count = text_counts[rarity]
+        threshold = RARITY_COLOR_THRESHOLDS[rarity]
+        raw_text_count = text_counts.get(raw_rarity, 0)
+        score = min(0.99, count / threshold)
+        margin = min(0.99, max(0, count - raw_text_count) / threshold)
+        return (
+            rarity,
+            float(score),
+            float(margin),
+            f"galactic-text-override[{reason}]:{text_source};{shape_source}",
+        )
+
+    # Strongest general case: the colored glyph count clears its own floor,
+    # its literal word shape agrees, and it beats text-shaped pixels for the
+    # raw winner. This also corrects the rarer reverse errors (Rare reported
+    # over a real Epic/Legendary word).
+    if (
+        shape_rarity in colored
+        and shape_rarity != raw_rarity
+        and shape_score >= 0.40
+        and text_counts[shape_rarity] >= RARITY_COLOR_THRESHOLDS[shape_rarity]
+        and text_counts[shape_rarity] >= text_counts.get(raw_rarity, 0) * 1.20
+    ):
+        return result(shape_rarity, "shape+color")
+
+    # Orange scenery repeatedly makes a real cyan Rare word look Legendary.
+    # A full-strength Rare text verdict is independently background-filtered.
+    if raw_rarity == "Legendary" and text_rarity == "Rare":
+        return result("Rare", "legendary-background")
+    if (
+        raw_rarity == "Legendary"
+        and text_rarity == "Unknown"
+        and text_counts["Rare"] >= 620
+        and shape_rarity == "Rare"
+        and shape_score >= 0.50
+    ):
+        return result("Rare", "legendary-background-near-floor")
+
+    # Very strong Mythic text survives even when orange scenery dominates the
+    # raw crop. The 1000px floor stays above the measured conflicting text on
+    # genuine Legendary rows.
+    if (
+        raw_rarity == "Legendary"
+        and text_rarity == "Mythic"
+        and text_counts["Mythic"] >= 1000
+    ):
+        return result("Mythic", "legendary-background-mythic")
+
+    # Common can win from the white spawn phrase. Require either an unusually
+    # strong colored word or independent Rare word-shape evidence before
+    # replacing it, preserving all reviewed genuine Common rows.
+    if raw_rarity == "Common":
+        if (
+            shape_rarity == "Rare"
+            and shape_score >= 0.40
+            and text_counts["Rare"] >= 600
+            and text_counts["Rare"] >= text_counts["Common"] * 0.60
+        ):
+            return result("Rare", "common-phrase+rare-shape")
+        strong_floor = {"Legendary": 750, "Mythic": 1000}.get(text_rarity)
+        if (
+            strong_floor is not None
+            and text_counts[text_rarity] >= strong_floor
+            and text_counts[text_rarity] >= text_counts["Common"] * 1.20
+        ):
+            return result(text_rarity, "common-phrase+strong-color")
+
+    return None
+
+
 def classify_rarity_color(
     image: np.ndarray,
     y: int,
@@ -948,6 +1038,27 @@ def classify_rarity_roi(
     templates = templates_by_droid.get(droid, [])
     if not templates:
         verdict = classify_rarity_color(image, y, droid, row_height=row_height)
+        if droid == "Galactic" and verdict[0] != "Unknown":
+            text_verdict = classify_rarity_text_color(
+                image,
+                y,
+                droid,
+                row_height=row_height,
+            )
+            text_counts = rarity_text_color_counts(image, y, droid, row_height=row_height)
+            shape_verdict = classify_rarity_word_shape(
+                image,
+                y,
+                shape_templates or [],
+                row_height=row_height,
+                word_matches=word_matches,
+            )
+            override = galactic_rarity_text_override(
+                verdict[0], text_verdict, shape_verdict, text_counts
+            )
+            if override is not None:
+                return override
+
         if droid == "Galactic" and verdict[0] not in {"Unknown", "Common"}:
             # Galactic currently has no family-specific rarity ROI templates,
             # so its normal verdict comes directly from raw color totals. A
@@ -957,13 +1068,7 @@ def classify_rarity_roi(
             # over that unsupported colored-background verdict. Real Galactic
             # Rare/Epic/Legendary/Mythic rows retain strong text-colored pixels
             # for their own rarity and do not enter this branch.
-            text_rarity, text_score, text_margin, text_source = classify_rarity_text_color(
-                image,
-                y,
-                droid,
-                row_height=row_height,
-            )
-            text_counts = rarity_text_color_counts(image, y, droid, row_height=row_height)
+            text_rarity, text_score, text_margin, text_source = text_verdict
             colored_word_supported = (
                 text_counts[verdict[0]] >= RARITY_COLOR_THRESHOLDS[verdict[0]]
             )
@@ -1431,7 +1536,12 @@ class DroidVisualDetector:
                 row_height=self.row_height,
                 word_matches=word_matches,
             )
-            if rarity == "Unknown" and self.extra_checks:
+            # Galactic Rare regularly lands just under the global cyan floor
+            # after 0.75x normalization. Its rescue already requires both a
+            # dominant text-shaped color and the literal rarity-word shape,
+            # so keep that high-confidence recall path active even when the
+            # broader HDR/washed-out option is disabled.
+            if rarity == "Unknown" and (self.extra_checks or droid == "Galactic"):
                 rescued = rescue_weak_color_rarity(
                     image,
                     y,

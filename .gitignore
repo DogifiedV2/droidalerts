@@ -11,6 +11,7 @@ venv/
 
 data/
 training_data/
+training_review/
 tests/fixtures/
 tests/results/
 assets/sounds/
