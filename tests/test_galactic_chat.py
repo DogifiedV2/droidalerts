@@ -87,6 +87,34 @@ SUPPLIED_CAPTURE_CASES = (
 )
 
 
+TRAINING_REVIEW_CASES = (
+    (
+        "training_0793b08e_galacticrare.png",
+        (1440, 1080),
+        ("Galactic", "Rare"),
+        ("Galactic", "Legendary"),
+    ),
+    (
+        "training_3d1e09d9_galacticrare.png",
+        (2560, 1080),
+        ("Galactic", "Rare"),
+        ("Galactic", "Common"),
+    ),
+    (
+        "training_32a487db_galacticrare.png",
+        (3440, 1440),
+        ("Galactic", "Rare"),
+        ("Galactic", "Epic"),
+    ),
+    (
+        "training_7644b4ff_galacticlegendary.png",
+        (2560, 1080),
+        ("Galactic", "Legendary"),
+        ("Galactic", "Rare"),
+    ),
+)
+
+
 class GalacticChatRecognitionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -157,6 +185,40 @@ class GalacticChatRecognitionTests(unittest.TestCase):
                     expected,
                     [(item.droid, item.rarity) for item in result.detections],
                 )
+
+    def test_reviewed_galactic_false_detections_are_corrected(self):
+        fixture_dir = BASE_DIR / "tests" / "galactic_fixtures"
+        for filename, screen, expected, rejected in TRAINING_REVIEW_CASES:
+            with self.subTest(filename=filename):
+                image = cv2.imread(str(fixture_dir / filename), cv2.IMREAD_COLOR)
+                self.assertIsNotNone(image)
+
+                result = self.pipeline.detect(
+                    image,
+                    screen_width=screen[0],
+                    screen_height=screen[1],
+                )
+                detected = [(item.droid, item.rarity) for item in result.detections]
+
+                self.assertIn(expected, detected)
+                self.assertNotIn(rejected, detected)
+
+    def test_reviewed_compact_galactic_rare_row_is_not_missed(self):
+        fixture = (
+            BASE_DIR
+            / "tests"
+            / "galactic_fixtures"
+            / "training_recall_71235c34_stack.png"
+        )
+        image = cv2.imread(str(fixture), cv2.IMREAD_COLOR)
+        self.assertIsNotNone(image)
+
+        result = self.pipeline.detect(image, screen_width=2560, screen_height=1080)
+
+        self.assertEqual(
+            [("Galactic", "Common"), ("Galactic", "Rare"), ("Galactic", "Common")],
+            [(item.droid, item.rarity) for item in result.detections],
+        )
 
     def test_supplied_beskar_epic_training_template_is_bundled(self):
         template = (
