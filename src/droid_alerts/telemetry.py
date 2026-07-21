@@ -79,7 +79,41 @@ def load_or_create_anonymous_install_id() -> str:
         return value
 
 
-class AnonymousAppTelemetryClient:
+class _TelemetryHttpClient:
+    """Shared JSON transport and heartbeat interval handling."""
+
+    _lock: threading.Lock
+    _heartbeat_interval_seconds: float
+
+    def _post_json(self, endpoint_url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        request = urllib.request.Request(
+            endpoint_url,
+            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": USER_AGENT,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(
+            request,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            context=certifi_ssl_context(),
+        ) as response:
+            return json.loads(response.read().decode("utf-8") or "{}")
+
+    def _apply_server_interval(self, value: object) -> None:
+        try:
+            interval = float(value)
+        except (TypeError, ValueError):
+            return
+        interval = min(max(interval, MIN_HEARTBEAT_INTERVAL_SECONDS), MAX_HEARTBEAT_INTERVAL_SECONDS)
+        with self._lock:
+            self._heartbeat_interval_seconds = interval
+
+
+class AnonymousAppTelemetryClient(_TelemetryHttpClient):
     """Best-effort heartbeat used only to estimate how long the app is open."""
 
     def __init__(self, config: AppConfig) -> None:
@@ -150,35 +184,7 @@ class AnonymousAppTelemetryClient:
         except (OSError, ValueError, urllib.error.URLError, TimeoutError):
             return
 
-    def _post_json(self, endpoint_url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        request = urllib.request.Request(
-            endpoint_url,
-            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": USER_AGENT,
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(
-            request,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-            context=certifi_ssl_context(),
-        ) as response:
-            return json.loads(response.read().decode("utf-8") or "{}")
-
-    def _apply_server_interval(self, value: object) -> None:
-        try:
-            interval = float(value)
-        except (TypeError, ValueError):
-            return
-        interval = min(max(interval, MIN_HEARTBEAT_INTERVAL_SECONDS), MAX_HEARTBEAT_INTERVAL_SECONDS)
-        with self._lock:
-            self._heartbeat_interval_seconds = interval
-
-
-class AnonymousTelemetryClient:
+class AnonymousTelemetryClient(_TelemetryHttpClient):
     """Best-effort anonymous active-watcher and alert-count client.
 
     The active-watcher heartbeat sends random UUIDs, the app version, and the
@@ -369,35 +375,7 @@ class AnonymousTelemetryClient:
         except (OSError, ValueError, urllib.error.URLError, TimeoutError):
             return
 
-    def _post_json(self, endpoint_url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        request = urllib.request.Request(
-            endpoint_url,
-            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": USER_AGENT,
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(
-            request,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-            context=certifi_ssl_context(),
-        ) as response:
-            return json.loads(response.read().decode("utf-8") or "{}")
-
-    def _apply_server_interval(self, value: object) -> None:
-        try:
-            interval = float(value)
-        except (TypeError, ValueError):
-            return
-        interval = min(max(interval, MIN_HEARTBEAT_INTERVAL_SECONDS), MAX_HEARTBEAT_INTERVAL_SECONDS)
-        with self._lock:
-            self._heartbeat_interval_seconds = interval
-
-
-class AnonymousBeltTelemetryClient:
+class AnonymousBeltTelemetryClient(_TelemetryHttpClient):
     """Best-effort Belt Tracker presence and compact confirmed-count client.
 
     Only confirmed droid names and cumulative counts per anonymous session and
@@ -599,15 +577,6 @@ class AnonymousBeltTelemetryClient:
                 self._install_id = load_or_create_anonymous_install_id()
             return self._install_id
 
-    def _apply_server_interval(self, value: object) -> None:
-        try:
-            interval = float(value)
-        except (TypeError, ValueError):
-            return
-        interval = min(max(interval, MIN_HEARTBEAT_INTERVAL_SECONDS), MAX_HEARTBEAT_INTERVAL_SECONDS)
-        with self._lock:
-            self._heartbeat_interval_seconds = interval
-
     def _load_buckets(self) -> dict[str, dict[str, object]]:
         try:
             payload = json.loads(belt_pending_counts_path().read_text(encoding="utf-8"))
@@ -658,25 +627,6 @@ class AnonymousBeltTelemetryClient:
             temporary.replace(path)
         except OSError:
             return
-
-    def _post_json(self, endpoint_url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        request = urllib.request.Request(
-            endpoint_url,
-            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": USER_AGENT,
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(
-            request,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-            context=certifi_ssl_context(),
-        ) as response:
-            return json.loads(response.read().decode("utf-8") or "{}")
-
 
 def _priority_alert_keys(config: AppConfig) -> tuple[str, ...]:
     keys = {

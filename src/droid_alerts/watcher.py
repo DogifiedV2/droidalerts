@@ -10,6 +10,12 @@ import cv2
 
 from .alerts import AlertPolicy, row_hash
 from .capture import PixelBox, create_capture, set_dpi_awareness
+from .cb23_mission import (
+    CB23MissionDetector,
+    CB23MissionGate,
+    CB23MissionMatch,
+    cb23_mission_region,
+)
 from .classifier import Detection
 from .config import (
     CALIBRATION_FILE,
@@ -23,6 +29,7 @@ from .image_io import write_cv_image
 from .logging_io import alert_samples_dir, append_event, debug_dir, timestamp
 from .notifications import (
     DeliveryResult,
+    enabled_alert_deliveries,
     load_discord_webhook,
     load_phone_alert_credentials,
     ntfy_configured,
@@ -45,6 +52,7 @@ from .telemetry import AnonymousTelemetryClient
 
 
 REBIRTH_SCAN_INTERVAL_SECONDS = 0.4
+CB23_MISSION_SCAN_INTERVAL_SECONDS = 0.5
 
 
 def _capture_target_signature(config: AppConfig) -> tuple[object, ...]:
@@ -283,6 +291,11 @@ def run_watch(
     rebirth_ready_detector: RebirthHudDetector | None = None
     rebirth_ready_tracker = RebirthAlertTracker()
     next_rebirth_ready_scan_at = 0.0
+    cb23_mission_detector: CB23MissionDetector | None = None
+    cb23_mission_detector_failed = False
+    cb23_mission_gate = CB23MissionGate()
+    next_cb23_mission_scan_at = 0.0
+    last_cb23_mission_alert_at = float("-inf")
 
     def deliver(target, args: tuple, kwargs: dict, event: dict[str, object]) -> None:
         result = None
@@ -313,6 +326,42 @@ def run_watch(
         }
         _append_event_safely(delivery_event, emit=emit)
         emit("delivery", result=delivery_event)
+
+    def dispatch_alert_channels(
+        detection: Detection,
+        event: dict[str, object],
+        *,
+        attachment_path: Path | None,
+    ) -> None:
+        if config.popup_enabled:
+            show_popup(
+                detection,
+                config.popup_seconds,
+                icon_path=popup_icon_path(config),
+                parent=popup_parent,
+                monitor=getattr(capture, "monitor", None),
+                position=config.popup_position,
+                scale=config.popup_scale,
+                opacity=config.popup_opacity,
+            )
+
+        deliveries = enabled_alert_deliveries(
+            config,
+            detection,
+            webhook_url=webhook_url,
+            phone_credentials=phone_credentials,
+            ntfy_ready=config.ntfy_enabled and ntfy_configured(config),
+            attachment_path=attachment_path,
+            discord_sender=send_discord_alert,
+            ntfy_sender=send_ntfy_alert,
+            phone_sender=send_phone_alert,
+        )
+        for delivery in deliveries:
+            threading.Thread(
+                target=deliver,
+                args=(delivery.target, delivery.args, delivery.kwargs, event),
+                daemon=True,
+            ).start()
 
     def fire_rebirth_available_alert(
         match: RebirthMatch,
@@ -381,54 +430,7 @@ def run_watch(
         except Exception as exc:
             print(f"[SOUND] Failed to play Rebirth Alert: {exc}")
             emit("sound_error", message=str(exc))
-        if config.popup_enabled:
-            show_popup(
-                detection,
-                config.popup_seconds,
-                icon_path=popup_icon_path(config),
-                parent=popup_parent,
-                monitor=getattr(capture, "monitor", None),
-                position=config.popup_position,
-                scale=config.popup_scale,
-                opacity=config.popup_opacity,
-            )
-        if webhook_url:
-            threading.Thread(
-                target=deliver,
-                args=(send_discord_alert, (webhook_url, detection), {}, event),
-                daemon=True,
-            ).start()
-        if config.ntfy_enabled and ntfy_configured(config):
-            threading.Thread(
-                target=deliver,
-                args=(
-                    send_ntfy_alert,
-                    (config, detection),
-                    {
-                        "attachment_path": (
-                            sample_path if config.ntfy_include_attachment else None
-                        )
-                    },
-                    event,
-                ),
-                daemon=True,
-            ).start()
-        if phone_credentials:
-            threading.Thread(
-                target=deliver,
-                args=(
-                    send_phone_alert,
-                    (phone_credentials, detection),
-                    {
-                        "sound": config.phone_sound,
-                        "attachment_path": (
-                            sample_path if config.phone_include_attachment else None
-                        ),
-                    },
-                    event,
-                ),
-                daemon=True,
-            ).start()
+        dispatch_alert_channels(detection, event, attachment_path=sample_path)
 
     def fire_rebirth_ready_alert(level: int, ready_score: float) -> None:
         detection = Detection(
@@ -465,45 +467,75 @@ def run_watch(
         except Exception as exc:
             print(f"[SOUND] Failed to play Rebirth alert: {exc}")
             emit("sound_error", message=str(exc))
-        if config.popup_enabled:
-            show_popup(
-                detection,
-                config.popup_seconds,
-                icon_path=popup_icon_path(config),
-                parent=popup_parent,
-                monitor=getattr(capture, "monitor", None),
-                position=config.popup_position,
-                scale=config.popup_scale,
-                opacity=config.popup_opacity,
-            )
-        if webhook_url:
-            threading.Thread(
-                target=deliver,
-                args=(send_discord_alert, (webhook_url, detection), {}, event),
-                daemon=True,
-            ).start()
-        if config.ntfy_enabled and ntfy_configured(config):
-            threading.Thread(
-                target=deliver,
-                args=(
-                    send_ntfy_alert,
-                    (config, detection),
-                    {"attachment_path": None},
-                    event,
-                ),
-                daemon=True,
-            ).start()
-        if phone_credentials:
-            threading.Thread(
-                target=deliver,
-                args=(
-                    send_phone_alert,
-                    (phone_credentials, detection),
-                    {"sound": config.phone_sound, "attachment_path": None},
-                    event,
-                ),
-                daemon=True,
-            ).start()
+        dispatch_alert_channels(detection, event, attachment_path=None)
+
+    def fire_cb23_mission_alert(
+        match: CB23MissionMatch,
+        mission_band,
+        mission_box,
+    ) -> None:
+        local_box = match.box or (0, 0, mission_band.shape[1], mission_band.shape[0])
+        x1, y1, x2, y2 = local_box
+        detection = Detection(
+            droid="CB23",
+            rarity="Mission",
+            row_box=(
+                mission_box.left + x1,
+                mission_box.top + y1,
+                mission_box.left + x2,
+                mission_box.top + y2,
+            ),
+            droid_score=match.score,
+            rarity_score=match.mission_score,
+            rarity_margin=match.mission_score,
+            score=match.score,
+            source="cb23-mission",
+        )
+        event = {
+            "ts": timestamp(),
+            "event_type": "alert",
+            "frame": frame_index,
+            "screen_width": screen_w,
+            "screen_height": screen_h,
+            "monitor_index": active_capture_config.monitor_index,
+            "capture_source": active_capture_config.capture_source,
+            "capture_region": {
+                "source": "cb23-mission-left",
+                "left": mission_box.left,
+                "top": mission_box.top,
+                "width": mission_box.width,
+                "height": mission_box.height,
+            },
+            "template_scale": round(match.template_scale, 4),
+            "mission_score": round(match.mission_score, 4),
+            "alerted": True,
+            **detection.to_dict(),
+        }
+        event["is_priority"] = True
+        event["should_alert"] = True
+
+        sample_path = None
+        needs_attachment = (
+            (config.ntfy_enabled and config.ntfy_include_attachment)
+            or (phone_credentials is not None and config.phone_include_attachment)
+        )
+        if config.save_alert_samples or needs_attachment:
+            try:
+                sample_path = _save_cb23_mission_sample(mission_band, local_box)
+            except Exception as exc:
+                print(f"[SAMPLE] Failed to save CB23 Mission screenshot: {exc}")
+            else:
+                event["sample_path"] = str(sample_path)
+
+        _append_event_safely(event, emit=emit)
+        emit("alert", event=event)
+        print(f"[ALERT] {event['ts']} CB23 Mission score={match.score:.2f}")
+        try:
+            policy.notify(detection)
+        except Exception as exc:
+            print(f"[SOUND] Failed to play CB23 Mission alert: {exc}")
+            emit("sound_error", message=str(exc))
+        dispatch_alert_channels(detection, event, attachment_path=sample_path)
 
     # Live settings: the GUI autosaves config.json (and region nudges save
     # calibration.json); watching the file mtimes lets changes apply on the
@@ -587,6 +619,8 @@ def run_watch(
                     log_dedupe_seconds = max(12.0, config.dedupe_seconds)
                     if not config.rebirth_alert_enabled:
                         rebirth_available_gate.reset()
+                    if not config.cb23_mission_alert_enabled:
+                        cb23_mission_gate.reset()
                     webhook_url = None
                     if config.discord_enabled:
                         try:
@@ -733,6 +767,53 @@ def run_watch(
                         if confirmed and scan_now - last_rebirth_available_alert_at >= cooldown:
                             last_rebirth_available_alert_at = scan_now
                             fire_rebirth_available_alert(rebirth_match, rebirth_band, rebirth_box)
+            if (
+                config.cb23_mission_alert_enabled
+                and scan_now >= next_cb23_mission_scan_at
+            ):
+                next_cb23_mission_scan_at = (
+                    scan_now + CB23_MISSION_SCAN_INTERVAL_SECONDS
+                )
+                if cb23_mission_detector is None and not cb23_mission_detector_failed:
+                    try:
+                        cb23_mission_detector = CB23MissionDetector()
+                    except Exception as exc:
+                        cb23_mission_detector_failed = True
+                        print(f"[CB23 MISSION] Detector unavailable: {exc}")
+                        emit("cb23_mission_error", message=str(exc))
+                if cb23_mission_detector is not None:
+                    mission_box = cb23_mission_region(screen_w, screen_h)
+                    try:
+                        mission_band = capture.grab(mission_box)
+                        mission_match = cb23_mission_detector.detect(
+                            mission_band,
+                            screen_width=screen_w,
+                            screen_height=screen_h,
+                        )
+                    except Exception as exc:
+                        print(f"[CB23 MISSION] Scan failed: {exc}")
+                        emit("cb23_mission_error", message=str(exc))
+                    else:
+                        confirmed = cb23_mission_gate.update(mission_match.matched)
+                        emit(
+                            "cb23_mission_scan",
+                            matched=mission_match.matched,
+                            score=round(mission_match.score, 4),
+                            mission_score=round(mission_match.mission_score, 4),
+                            scanned_at=timestamp(),
+                        )
+                        cooldown = max(
+                            12.0,
+                            config.dedupe_seconds,
+                            config.alert_cooldown_seconds,
+                        )
+                        if confirmed and scan_now - last_cb23_mission_alert_at >= cooldown:
+                            last_cb23_mission_alert_at = scan_now
+                            fire_cb23_mission_alert(
+                                mission_match,
+                                mission_band,
+                                mission_box,
+                            )
             status_now = time.monotonic()
             if status_now - last_scan_status_at >= 1.0:
                 last_scan_status_at = status_now
@@ -868,51 +949,12 @@ def run_watch(
                                 event=event,
                                 screenshot_paths=debug_paths,
                             )
-                    if config.popup_enabled:
-                        show_popup(
-                            detection,
-                            config.popup_seconds,
-                            icon_path=popup_icon_path(config),
-                            parent=popup_parent,
-                            monitor=getattr(capture, "monitor", None),
-                            position=config.popup_position,
-                            scale=config.popup_scale,
-                            opacity=config.popup_opacity,
-                        )
-                    if webhook_url:
-                        threading.Thread(
-                            target=deliver,
-                            args=(send_discord_alert, (webhook_url, detection), {}, event),
-                            daemon=True,
-                        ).start()
-                    if config.ntfy_enabled and ntfy_configured(config):
-                        attachment_path = None
-                        if config.ntfy_include_attachment and sample_paths is not None:
-                            attachment_path = sample_paths[1]
-                        threading.Thread(
-                            target=deliver,
-                            args=(
-                                send_ntfy_alert,
-                                (config, detection),
-                                {"attachment_path": attachment_path},
-                                event,
-                            ),
-                            daemon=True,
-                        ).start()
-                    if phone_credentials:
-                        attachment_path = None
-                        if config.phone_include_attachment and sample_paths is not None:
-                            attachment_path = sample_paths[1]
-                        threading.Thread(
-                            target=deliver,
-                            args=(
-                                send_phone_alert,
-                                (phone_credentials, detection),
-                                {"sound": config.phone_sound, "attachment_path": attachment_path},
-                                event,
-                            ),
-                            daemon=True,
-                        ).start()
+                    attachment_path = sample_paths[1] if sample_paths is not None else None
+                    dispatch_alert_channels(
+                        detection,
+                        event,
+                        attachment_path=attachment_path,
+                    )
                 elif debug:
                     print(
                         f"[SEEN] {event['ts']} {label} "
@@ -1021,6 +1063,21 @@ def _save_rebirth_available_sample(
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{stamp}_det.png"
     marked = rebirth_band.copy()
+    x1, y1, x2, y2 = match_box
+    cv2.rectangle(marked, (x1, y1), (max(x1, x2 - 1), max(y1, y2 - 1)), (0, 255, 255), 2)
+    write_cv_image(path, marked)
+    return path
+
+
+def _save_cb23_mission_sample(
+    mission_band,
+    match_box: tuple[int, int, int, int],
+) -> Path:
+    stamp = timestamp()
+    folder = alert_samples_dir() / "CB23_Mission"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{stamp}_det.png"
+    marked = mission_band.copy()
     x1, y1, x2, y2 = match_box
     cv2.rectangle(marked, (x1, y1), (max(x1, x2 - 1), max(y1, y2 - 1)), (0, 255, 255), 2)
     write_cv_image(path, marked)

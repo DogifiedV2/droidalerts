@@ -239,6 +239,71 @@ class RuntimeResilienceTests(unittest.TestCase):
 
 
 class GuiRegressionTests(unittest.TestCase):
+    def test_tab_switch_lays_out_the_hidden_page_before_raising_it(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app._selected_tab = object()
+        app._unprimed_tabs = []
+        app.page_stack = Mock()
+        selected = Mock()
+        operations = Mock()
+        selected.update_idletasks = operations.prepaint
+        selected.tkraise = operations.raise_page
+        app.page_stack.update_idletasks = operations.flush
+        app.page_stack.event_generate = operations.changed
+
+        app._select_tab(selected)
+
+        self.assertIs(selected, app._selected_tab)
+        self.assertEqual(
+            [
+                unittest.mock.call.prepaint(),
+                unittest.mock.call.raise_page(),
+                unittest.mock.call.flush(),
+                unittest.mock.call.changed("<<PageChanged>>", when="tail"),
+            ],
+            operations.mock_calls,
+        )
+
+    def test_startup_primes_one_hidden_tab_per_callback(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        current = Mock()
+        pending = Mock()
+        later = Mock()
+        operations = Mock()
+        app._selected_tab = current
+        app._unprimed_tabs = [pending, later]
+        app._page_prime_after_id = "initial-id"
+        app._shutting_down = False
+        app.root = Mock()
+        app.root.after.return_value = "next-id"
+        pending.grid = operations.mount
+        current.tkraise = operations.cover
+        pending.update_idletasks = operations.prepaint
+
+        app._prime_next_tab()
+
+        self.assertEqual([later], app._unprimed_tabs)
+        self.assertEqual(
+            [
+                unittest.mock.call.mount(row=0, column=0, sticky="nsew"),
+                unittest.mock.call.cover(),
+                unittest.mock.call.prepaint(),
+            ],
+            operations.mock_calls,
+        )
+        app.root.after.assert_called_once_with(16, app._prime_next_tab)
+        self.assertEqual("next-id", app._page_prime_after_id)
+
+    def test_windows_page_stack_does_not_need_the_macos_compositor_workaround(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.root = Mock()
+        app.root.tk.call.return_value = "win32"
+        app.page_stack = Mock()
+
+        app._wire_macos_repaint_workaround()
+
+        app.page_stack.bind.assert_not_called()
+
     def test_update_version_marker_round_trips_and_defaults_empty(self):
         self.assertEqual("", AppConfig.from_dict({}).last_seen_version)
         restored = AppConfig.from_dict(

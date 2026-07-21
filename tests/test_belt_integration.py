@@ -314,10 +314,7 @@ class BeltUiWindowsTests(unittest.TestCase):
     def test_opening_belt_tab_starts_overlay_preview(self):
         app = DroidAlertsApp.__new__(DroidAlertsApp)
         app.belt_tab = object()
-        app.notebook = Mock()
-        app.notebook.select.return_value = "belt-tab"
-        app.root = Mock()
-        app.root.nametowidget.return_value = app.belt_tab
+        app._selected_tab = app.belt_tab
         app._show_belt_cpu_warning_if_needed = Mock()
         app._configure_belt_overlay = Mock()
         app._belt_overlay_requested = False
@@ -479,6 +476,46 @@ class IndependentLifecycleTests(unittest.TestCase):
         self.assertFalse(app.stop_event.is_set())
         self.assertTrue(app._belt_restart_after_stop)
         self.assertTrue(app.belt_region_reloaded)
+
+    def test_display_geometry_poll_refreshes_when_resolution_changes(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app._display_geometry_after_id = None
+        app._display_geometry_signature = ((1, 0, 0, 1920, 1080),)
+        app._shutting_down = False
+        changed = ((1, 0, 0, 2560, 1440),)
+        app._read_display_geometry_signature = Mock(return_value=changed)
+        app.refresh_display_geometry = Mock()
+        app.root = SimpleNamespace(after=Mock(return_value="display-poll"))
+
+        DroidAlertsApp._poll_display_geometry(app)
+
+        app.refresh_display_geometry.assert_called_once_with(
+            automatic=True,
+            signature=changed,
+        )
+        app.root.after.assert_called_once()
+
+    def test_display_refresh_restarts_chat_watcher_after_it_stops(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.watch_thread = threading.current_thread()
+        app._watch_stop_reason = "display-refresh"
+        app._watch_restart_after_stop = True
+        app._shutting_down = False
+        app._watch_segment_started = None
+        app.session_monitoring_seconds = 0.0
+        app.stop_event = threading.Event()
+        app.watcher_status_var = FakeVar()
+        app.watcher_detail_var = FakeVar()
+        app._set_watcher_state = Mock()
+        app.start_watcher = Mock()
+        app.root = SimpleNamespace(after=Mock())
+
+        DroidAlertsApp._watcher_finished(app, None, app.watch_thread)
+
+        self.assertFalse(app._watch_restart_after_stop)
+        self.assertIsNone(app.watch_thread)
+        self.assertEqual("Restarting screen capture…", app.watcher_status_var.value)
+        app.root.after.assert_called_once_with(100, app.start_watcher)
 
     def test_header_reports_running_when_only_belt_is_active(self):
         app = DroidAlertsApp.__new__(DroidAlertsApp)

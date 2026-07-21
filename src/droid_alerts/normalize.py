@@ -6,7 +6,7 @@ from statistics import median
 import cv2
 import numpy as np
 
-from .config import REFERENCE_ROW_HEIGHT_PX, REFERENCE_SCREEN_HEIGHT, REFERENCE_SCREEN_WIDTH
+from .config import REFERENCE_SCREEN_HEIGHT, REFERENCE_SCREEN_WIDTH
 from .row_finder import RowCandidate, measured_row_heights
 
 # Median height of confident row-finder candidates measured on reference-scale
@@ -84,9 +84,3 @@ def normalize_band(band: np.ndarray, scale: float) -> NormalizedBand:
     interpolation = cv2.INTER_AREA if scale > 1.0 else cv2.INTER_CUBIC
     resized = cv2.resize(band, (new_w, new_h), interpolation=interpolation)
     return NormalizedBand(image=resized, scale=scale, method="resize")
-
-
-def normalize_row(row: np.ndarray, measured_height: int) -> np.ndarray:
-    """Resize a single row crop so its height matches the reference row height."""
-    scale = measured_height / REFERENCE_ROW_HEIGHT_PX
-    return normalize_band(row, scale).image

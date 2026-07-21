@@ -18,6 +18,5 @@ if errorlevel 1 (
     set PY=py
 )
 
-%PY% -m pip install -r requirements.txt --quiet --disable-pip-version-check
 %PY% main.py gui
 if errorlevel 1 pause

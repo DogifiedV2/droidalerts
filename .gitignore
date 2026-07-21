@@ -24,5 +24,6 @@ config/anonymous_install_id.txt
 config/config.json.bak
 config/config.json.tmp
 config/config.json.corrupt
+config/.requirements-ready*
 /.idea/
 .DS_Store

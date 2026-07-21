@@ -8,6 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,16 @@ class DeliveryResult:
     message: str
 
 
+@dataclass(frozen=True)
+class AlertDelivery:
+    """One enabled remote-channel delivery for an alert."""
+
+    label: str
+    target: Callable[..., DeliveryResult]
+    args: tuple[object, ...]
+    kwargs: dict[str, object]
+
+
 def _delivery(channel: str, success: bool, message: str) -> DeliveryResult:
     return DeliveryResult(channel=channel, success=success, message=message)
 
@@ -50,11 +61,32 @@ def _is_rebirth_ready_detection(detection: Detection) -> bool:
     return detection.source == "rebirth-ready"
 
 
+def _is_cb23_mission_detection(detection: Detection) -> bool:
+    return detection.source == "cb23-mission"
+
+
+def alert_type_id(detection: Detection) -> str:
+    """Stable ID used by per-channel alert filters."""
+    if detection.source == "rebirth-alert":
+        return "rebirth_available"
+    if detection.source == "rebirth-ready":
+        return "rebirth_ready"
+    if detection.source == "cb23-mission":
+        return "cb23_mission"
+    if detection.source == "belt-tracker":
+        return "belt_tracker"
+    if detection.source == "limited-deal":
+        return "limited_deals"
+    return f"chat:{detection.droid}:{detection.rarity}"
+
+
 def _is_rebirth_detection(detection: Detection) -> bool:
     return _is_rebirth_available_detection(detection) or _is_rebirth_ready_detection(detection)
 
 
 def event_text(detection: Detection) -> str:
+    if _is_cb23_mission_detection(detection):
+        return "CB23 Mission"
     if _is_rebirth_detection(detection):
         return (
             "A rebirth droid is available"
@@ -70,6 +102,8 @@ def event_text(detection: Detection) -> str:
 
 
 def alert_title(detection: Detection) -> str:
+    if _is_cb23_mission_detection(detection):
+        return "Droid Alerts CB23 Mission"
     if _is_rebirth_detection(detection):
         return (
             "Droid Alerts Rebirth Alert"
@@ -129,6 +163,8 @@ def discord_webhook_configured(config: AppConfig) -> bool:
 
 
 def discord_color(detection: Detection) -> int:
+    if _is_cb23_mission_detection(detection):
+        return 0xF04444
     if _is_rebirth_detection(detection):
         return 0xFFB11B if _is_rebirth_available_detection(detection) else 0x20F070
     if _is_limited_deal_detection(detection):
@@ -177,12 +213,16 @@ def post_discord(webhook_url: str, detection: Detection) -> None:
                         )
                         if _is_rebirth_detection(detection)
                         else (
-                            "Limited Deal Alert"
-                            if _is_limited_deal_detection(detection)
+                            "CB23 Mission"
+                            if _is_cb23_mission_detection(detection)
                             else (
-                                "Belt Tracker Alert"
-                                if _is_belt_detection(detection)
-                                else "Droid Tycoon Priority Spawn"
+                                "Limited Deal Alert"
+                                if _is_limited_deal_detection(detection)
+                                else (
+                                    "Belt Tracker Alert"
+                                    if _is_belt_detection(detection)
+                                    else "Droid Tycoon Priority Spawn"
+                                )
                             )
                         )
                     ),
@@ -532,6 +572,67 @@ def send_phone_alert(
     except Exception as exc:
         print(f"[PHONE] Failed to send alert: {exc}")
         return _delivery("Pushover", False, str(exc))
+
+
+def enabled_alert_deliveries(
+    config: AppConfig,
+    detection: Detection,
+    *,
+    webhook_url: str | None,
+    phone_credentials: dict[str, str] | None,
+    ntfy_ready: bool,
+    attachment_path: Path | None,
+    discord_sender: Callable[..., DeliveryResult],
+    ntfy_sender: Callable[..., DeliveryResult],
+    phone_sender: Callable[..., DeliveryResult],
+) -> tuple[AlertDelivery, ...]:
+    """Build the remote deliveries allowed for this alert and channel config."""
+    alert_id = alert_type_id(detection)
+    deliveries: list[AlertDelivery] = []
+    if (
+        config.discord_enabled
+        and webhook_url
+        and config.channel_allows_alert("discord", alert_id)
+    ):
+        deliveries.append(
+            AlertDelivery("Discord", discord_sender, (webhook_url, detection), {})
+        )
+    if (
+        config.ntfy_enabled
+        and ntfy_ready
+        and config.channel_allows_alert("ntfy", alert_id)
+    ):
+        deliveries.append(
+            AlertDelivery(
+                "ntfy",
+                ntfy_sender,
+                (config, detection),
+                {
+                    "attachment_path": (
+                        attachment_path if config.ntfy_include_attachment else None
+                    )
+                },
+            )
+        )
+    if (
+        config.phone_alerts_enabled
+        and phone_credentials
+        and config.channel_allows_alert("pushover", alert_id)
+    ):
+        deliveries.append(
+            AlertDelivery(
+                "Pushover",
+                phone_sender,
+                (phone_credentials, detection),
+                {
+                    "sound": config.phone_sound,
+                    "attachment_path": (
+                        attachment_path if config.phone_include_attachment else None
+                    ),
+                },
+            )
+        )
+    return tuple(deliveries)
 
 
 def version_parts(value: str) -> tuple[int, ...]:

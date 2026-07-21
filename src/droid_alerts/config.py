@@ -145,6 +145,7 @@ class AppConfig:
     capture_interval_seconds: float = 0.25
     rebirth_ready_alert_enabled: bool = False
     rebirth_scan_interval_seconds: float = 5.0
+    cb23_mission_alert_enabled: bool = False
     dedupe_seconds: float = 12.0
     alert_cooldown_seconds: float = 10.0
     sound_enabled: bool = True
@@ -188,6 +189,9 @@ class AppConfig:
     phone_env_user: str = "DROIDWATCHER_PHONE_ALERTS_USER"
     phone_sound: str = "siren"
     phone_include_attachment: bool = False
+    # Alert IDs excluded from each remote channel. Missing/empty means the
+    # channel receives every enabled alert, preserving existing installs.
+    channel_disabled_alerts: dict[str, list[str]] = field(default_factory=dict)
     update_check_enabled: bool = True
     anonymous_app_stats_url: str = "https://gonk.tools/api/droid-alerts/app-heartbeat"
     anonymous_stats_url: str = "https://gonk.tools/api/droid-alerts/heartbeat"
@@ -292,6 +296,9 @@ class AppConfig:
             rebirth_ready_alert_enabled=bool(
                 data.get("rebirth_ready_alert_enabled", False)
             ),
+            cb23_mission_alert_enabled=bool(
+                data.get("cb23_mission_alert_enabled", False)
+            ),
             rebirth_scan_interval_seconds=min(
                 30.0,
                 max(2.0, float(data.get("rebirth_scan_interval_seconds", 5.0))),
@@ -337,6 +344,13 @@ class AppConfig:
             phone_env_user=str(data.get("phone_env_user", "DROIDWATCHER_PHONE_ALERTS_USER")),
             phone_sound=str(data.get("phone_sound", "siren")),
             phone_include_attachment=bool(data.get("phone_include_attachment", False)),
+            channel_disabled_alerts={
+                str(channel): sorted({str(alert_id) for alert_id in alert_ids if str(alert_id)})
+                for channel, alert_ids in data.get("channel_disabled_alerts", {}).items()
+                if channel in {"discord", "ntfy", "pushover"} and isinstance(alert_ids, list)
+            }
+            if isinstance(data.get("channel_disabled_alerts", {}), dict)
+            else {},
             update_check_enabled=bool(data.get("update_check_enabled", True)),
             anonymous_app_stats_url=str(
                 data.get(
@@ -437,6 +451,7 @@ class AppConfig:
             "capture_device_backend": int(self.capture_device_backend),
             "capture_interval_seconds": self.capture_interval_seconds,
             "rebirth_ready_alert_enabled": self.rebirth_ready_alert_enabled,
+            "cb23_mission_alert_enabled": self.cb23_mission_alert_enabled,
             "rebirth_scan_interval_seconds": self.rebirth_scan_interval_seconds,
             "dedupe_seconds": self.dedupe_seconds,
             "alert_cooldown_seconds": self.alert_cooldown_seconds,
@@ -477,6 +492,11 @@ class AppConfig:
             "phone_env_user": self.phone_env_user,
             "phone_sound": self.phone_sound,
             "phone_include_attachment": self.phone_include_attachment,
+            "channel_disabled_alerts": {
+                channel: sorted(set(alert_ids))
+                for channel, alert_ids in self.channel_disabled_alerts.items()
+                if channel in {"discord", "ntfy", "pushover"} and alert_ids
+            },
             "update_check_enabled": self.update_check_enabled,
             "anonymous_app_stats_url": self.anonymous_app_stats_url,
             "anonymous_stats_url": self.anonymous_stats_url,
@@ -523,6 +543,10 @@ class AppConfig:
     @property
     def targets(self) -> set[tuple[str, str]]:
         return {(droid, rarity) for droid, rarity in self.alert_targets}
+
+    def channel_allows_alert(self, channel: str, alert_id: str) -> bool:
+        """Return whether a remote channel should receive this alert type."""
+        return alert_id not in self.channel_disabled_alerts.get(channel.lower(), [])
 
 
 def load_config() -> AppConfig:

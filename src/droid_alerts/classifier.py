@@ -7,7 +7,6 @@ reference scale. Inputs MUST be normalized via droid_alerts.normalize first.
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -141,10 +140,6 @@ def _read_cv_image(path: str | Path, flags: int) -> np.ndarray | None:
     if encoded.size == 0:
         return None
     return cv2.imdecode(encoded, flags)
-
-
-def save_json(path: str | Path, data: object) -> None:
-    Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def preprocess_for_template(image: np.ndarray, height: int | None = None) -> np.ndarray:

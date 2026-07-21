@@ -1,27 +1,12 @@
 from __future__ import annotations
 
-import ctypes
-import sys
 from dataclasses import dataclass
 from typing import Protocol
 
 import cv2
 import numpy as np
 
-
-def set_dpi_awareness() -> None:
-    """Per-monitor DPI awareness so captured pixel coordinates match physical pixels."""
-    if sys.platform != "win32":
-        return
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        return
-    except Exception:
-        pass
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
+from .platform_ui import set_dpi_awareness
 
 
 @dataclass(frozen=True)

@@ -191,11 +191,33 @@ def _is_rebirth_detection(detection: Detection) -> bool:
     return _is_rebirth_available_detection(detection) or _is_rebirth_ready_detection(detection)
 
 
+def _is_cb23_mission_detection(detection: Detection) -> bool:
+    return detection.source == "cb23-mission"
+
+
 def _uses_attribute_rarity(detection: Detection) -> bool:
     return _is_belt_detection(detection) or detection.source == "limited-deal"
 
 
+def _caption_text(detection: Detection) -> str:
+    if _is_cb23_mission_detection(detection):
+        return "MISSION READY"
+    if _is_rebirth_detection(detection):
+        return (
+            "REBIRTH ALERT"
+            if _is_rebirth_available_detection(detection)
+            else "REBIRTH READY"
+        )
+    if detection.source == "limited-deal":
+        return "LIMITED DEAL"
+    if _is_belt_detection(detection):
+        return "BELT ALERT"
+    return "PRIORITY SPAWN" if detection.is_priority else "DROID SPAWN"
+
+
 def _title_segments(detection: Detection) -> list[tuple[str, str]]:
+    if _is_cb23_mission_detection(detection):
+        return [("CB23 MISSION", "#f04444")]
     if _is_rebirth_detection(detection):
         return (
             [("REBIRTH DROID AVAILABLE", DROID_TEXT_COLORS["Rebirth"])]
@@ -448,23 +470,7 @@ def show_popup(
             root=window, family="Segoe UI", size=max(9, int(13 * ui_scale)), weight="bold"
         )
 
-        caption = (
-            (
-                "REBIRTH ALERT"
-                if _is_rebirth_available_detection(detection)
-                else "REBIRTH READY"
-            )
-            if _is_rebirth_detection(detection)
-            else (
-                "LIMITED DEAL"
-                if detection.source == "limited-deal"
-                else (
-                    "BELT ALERT"
-                    if _is_belt_detection(detection)
-                    else ("PRIORITY SPAWN" if detection.is_priority else "DROID SPAWN")
-                )
-            )
-        )
+        caption = _caption_text(detection)
         canvas.create_text(
             center_x,
             header_height // 2 + 3,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import multiprocessing
 import sys
 from pathlib import Path
@@ -9,7 +10,31 @@ BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 
+def _source_dependencies_ready(splash=None) -> bool:
+    """Check source dependencies after the splash is visible."""
+    if getattr(sys, "frozen", False):
+        return True
+    checker_path = BASE_DIR / "tools" / "ensure_dependencies.py"
+    if not checker_path.is_file():
+        return True
+    spec = importlib.util.spec_from_file_location(
+        "droid_alerts_dependency_check", checker_path
+    )
+    if spec is None or spec.loader is None:
+        return False
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    callback = module.main
+    return (splash.run_task(callback) if splash is not None else callback()) == 0
+
+
 def main() -> None:
+    splash = None
+    if len(sys.argv) == 1 or sys.argv[1] == "gui":
+        from droid_alerts.startup_splash import create_startup_splash
+
+        splash = create_startup_splash()
+
     parser = argparse.ArgumentParser(prog="droid-alerts", description="Cross-PC Droid Tycoon alert detector.")
     sub = parser.add_subparsers(dest="command")
 
@@ -33,7 +58,12 @@ def main() -> None:
     test.add_argument("--verbose", action="store_true")
     test.add_argument("--dump-unlabeled", action="store_true", help="Dump per-candidate crops for review.")
 
-    args = parser.parse_args()
+    try:
+        args = parser.parse_args()
+    except BaseException:
+        if splash is not None:
+            splash.destroy()
+        raise
     command = args.command or "gui"
 
     if command == "watch":
@@ -45,9 +75,18 @@ def main() -> None:
             config.extra_checks = True
         run_watch(debug=args.debug, config=config)
     elif command == "gui":
-        from droid_alerts.gui import run_gui
-
-        run_gui()
+        try:
+            if not _source_dependencies_ready(splash):
+                raise SystemExit("Droid Alerts dependencies could not be installed.")
+            if splash is not None:
+                run_gui = splash.run_task(_load_gui)
+            else:
+                run_gui = _load_gui()
+            run_gui(startup_splash=splash)
+        except BaseException:
+            if splash is not None:
+                splash.destroy()
+            raise
     elif command == "calibrate":
         from droid_alerts.calibrate_cli import run_calibrate
 
@@ -64,6 +103,12 @@ def main() -> None:
         import run_eval
 
         run_eval.main(verbose=args.verbose, dump_unlabeled=args.dump_unlabeled)
+
+
+def _load_gui():
+    from droid_alerts.gui import run_gui
+
+    return run_gui
 
 
 if __name__ == "__main__":

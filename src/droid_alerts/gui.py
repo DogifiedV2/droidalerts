@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Empty as QueueEmpty
@@ -41,7 +42,6 @@ from .belt.selector import RegionSelector as BeltRegionSelector
 from .belt.targets import (
     BELT_FAMILY_ORDER,
     BELT_TARGET_FAMILIES_BY_LABEL,
-    BELT_TARGET_LABELS,
     belt_target_label,
     is_belt_alert_target,
     normalize_belt_target_tiers,
@@ -83,7 +83,6 @@ from .limited_deals import (
     LIMITED_DEAL_FAMILY_ORDER,
     LIMITED_DEAL_PRIORITY_COMBOS,
     LIMITED_DEAL_TARGET_FAMILIES_BY_LABEL,
-    LIMITED_DEAL_TARGET_LABELS,
     LimitedDeal,
     LimitedDealService,
     LimitedDealStatus,
@@ -100,8 +99,11 @@ from .maintenance import (
     storage_summary,
 )
 from .notifications import (
+    AlertDelivery,
+    alert_type_id,
     check_for_update,
     discord_webhook_configured,
+    enabled_alert_deliveries,
     event_text,
     load_discord_webhook,
     load_phone_alert_credentials,
@@ -165,9 +167,11 @@ UPDATE_POLL_INTERVAL_MS = 15 * 60 * 1000
 DISCORD_COMMUNITY_URL = "https://discord.gg/ZmFPjS4784"
 TRACKER_URL = "https://gonk.tools/tracker"
 WIKI_URL = "https://gonk.tools/wiki"
+STATS_URL = "https://gonk.tools/stats"
 IDENTIFY_INSTALL_URL = "https://gonk.tools/identify"
 DEFAULT_WINDOW_WIDTH = 1470
 DEFAULT_WINDOW_HEIGHT = 1040
+DISPLAY_GEOMETRY_POLL_MS = 2000
 SIDEBAR_WIDTH = 232
 PRIORITY_DIALOG_WIDTH = 760
 PRIORITY_DIALOG_HEIGHT = 860
@@ -176,12 +180,10 @@ REBIRTH_ALERT_TOOLTIP = (
     "Receive a notification when a droid you need for rebirth spawns"
 )
 WHATS_NEW_ITEMS = (
-    "Added Galactic detection.",
-    "Reworked the Priority Alerts tab; you can select every Galactic rarity.",
-    "Added Rebirth Ready detection. You can AFK and come back when you can rebirth.",
-    "Added the Galactic timer.",
-    "PSA: Galactic detection is in beta. Please enable Debug captures and "
-    "Share alert debug screenshots with the developer to help improve it.",
+    "Updated Galactic detection.",
+    "Added a Stats button.",
+    "Added config options for alerts.",
+    "Added a CB23 Mission alert.",
 )
 BELT_REGION_INSTRUCTIONS = (
     "Officially supported setup: stand at the start of the belt and match the guide with two "
@@ -341,7 +343,13 @@ def clamp_dialog_position(
 
 
 class DroidAlertsApp:
-    def __init__(self, root: tk.Tk, *, config: AppConfig | None = None) -> None:
+    def __init__(
+        self,
+        root: tk.Tk,
+        *,
+        config: AppConfig | None = None,
+        defer_startup_prompts: bool = False,
+    ) -> None:
         self.root = root
         self.root.title("Droid Alerts")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -364,6 +372,7 @@ class DroidAlertsApp:
         self.watch_thread: threading.Thread | None = None
         self.stop_event: threading.Event | None = None
         self._watch_stop_reason = ""
+        self._watch_restart_after_stop = False
         self._watcher_header_state = "Stopped"
         self.belt_process = None
         self.belt_stop_event = None
@@ -402,6 +411,10 @@ class DroidAlertsApp:
         self.update_check_running = False
         self.available_update: dict[str, str] | None = None
         self._update_poll_after_id: str | None = None
+        self._first_time_intro_after_id: str | None = None
+        self._discord_offer_after_id: str | None = None
+        self._display_geometry_after_id: str | None = None
+        self._display_geometry_signature: tuple[tuple[int, int, int, int, int], ...] | None = None
         self._log_file_signature: tuple[int, int] | None = None
         self._log_refresh_after_id: str | None = None
         self._autosave_after_id: str | None = None
@@ -451,11 +464,11 @@ class DroidAlertsApp:
         self.limited_deal_priority_tree = None
         self.storage_status_var = StringVar(value="Calculating storage…")
         self.channel_status_vars = {
-            "Popup": StringVar(value="Ready"),
-            "Sound": StringVar(value="Ready"),
-            "Discord": StringVar(value="Not configured"),
-            "ntfy": StringVar(value="Not configured"),
-            "Pushover": StringVar(value="Not configured"),
+            "Popup": StringVar(value=""),
+            "Sound": StringVar(value=""),
+            "Discord": StringVar(value=""),
+            "ntfy": StringVar(value=""),
+            "Pushover": StringVar(value=""),
         }
         self.timer_vars = {
             "beskar": StringVar(value="--:--"),
@@ -478,12 +491,16 @@ class DroidAlertsApp:
         self._options_content_width: int | None = None
         self._options_scrollregion_bounds: tuple[int, int, int, int] | None = None
         self._options_scrollregion_after_id: str | None = None
+        self._page_prime_after_id: str | None = None
         self._macos_repaint_after_id: str | None = None
+        self._unprimed_tabs: list[object] = []
         self.scrollable_pages: dict[object, tuple[tk.Canvas, object, int]] = {}
 
         self._build_ui()
         self.app_telemetry.start()
         self.load_settings()
+        self._display_geometry_signature = self._read_display_geometry_signature()
+        self._schedule_display_geometry_poll()
         self._start_limited_deals()
         self._apply_initial_geometry()
         self._wire_auto_save()
@@ -491,12 +508,40 @@ class DroidAlertsApp:
             self.show_droid_timers()
         self.refresh_logs()
         self._schedule_log_refresh()
-        self.root.after(700, self.run_first_time_intro)
-        self.root.after(1100, self.offer_discord_community)
+        if not defer_startup_prompts:
+            self.schedule_startup_prompts()
         self._update_poll_after_id = self.root.after(1500, self._poll_for_updates)
         self.root.after(200, self._update_dashboard_timers)
         self.root.after(500, self._refresh_storage_status)
         self.root.after(800, self._start_runtime_features)
+        self._page_prime_after_id = self.root.after_idle(self._prime_next_tab)
+
+    def schedule_startup_prompts(
+        self,
+        *,
+        first_delay_ms: int = 700,
+        discord_delay_ms: int = 1100,
+    ) -> None:
+        """Schedule modal startup notices only after the dashboard is revealed."""
+
+        if self._first_time_intro_after_id is None:
+            def run_intro() -> None:
+                self._first_time_intro_after_id = None
+                self.run_first_time_intro()
+
+            self._first_time_intro_after_id = self.root.after(
+                max(0, int(first_delay_ms)),
+                run_intro,
+            )
+        if self._discord_offer_after_id is None:
+            def offer_discord() -> None:
+                self._discord_offer_after_id = None
+                self.offer_discord_community()
+
+            self._discord_offer_after_id = self.root.after(
+                max(0, int(discord_delay_ms)),
+                offer_discord,
+            )
 
     def _apply_initial_geometry(self) -> None:
         # Size the window from measured content so Windows DPI scaling and
@@ -616,17 +661,6 @@ class DroidAlertsApp:
             sticky="nw",
         )
 
-        def hide_native_tabs() -> None:
-            # Navigation lives in the sidebar. An empty tab layout keeps the
-            # Notebook useful as a page stack without rendering a second nav.
-            try:
-                style = ttk.Style()
-                style.layout("TNotebook.Tab", [])
-                style.configure("TNotebook", borderwidth=0, tabmargins=0)
-            except Exception:
-                pass
-
-        hide_native_tabs()
         main = ttk.Frame(
             outer,
             padding=(26, 20, 26, 16),
@@ -653,24 +687,42 @@ class DroidAlertsApp:
         self.update_ready_button.grid(row=0, column=1, sticky="e")
         self.update_ready_button.grid_remove()
 
-        self.notebook = ttk.Notebook(main)
-        self.notebook.grid(row=1, column=0, sticky="nsew")
-        self.root.after_idle(hide_native_tabs)
+        # Paint Dashboard first for a faster usable window. The remaining
+        # pages are mapped and prepainted behind it during idle callbacks, so
+        # later switches can still reveal an already-rendered page atomically.
+        self.page_stack = ttk.Frame(main, style="Page.TFrame")
+        self.page_stack.grid(row=1, column=0, sticky="nsew")
+        self.page_stack.columnconfigure(0, weight=1)
+        self.page_stack.rowconfigure(0, weight=1)
 
-        self.dashboard_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
-        self.belt_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
-        self.limited_deals_tab = ttk.Frame(
-            self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame"
+        self.dashboard_tab = ttk.Frame(
+            self.page_stack, padding=(2, 2, 2, 6), style="Page.TFrame"
         )
-        self.logs_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
-        self.files_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
-        self.settings_tab = ttk.Frame(self.notebook, padding=(2, 2, 2, 6), style="Page.TFrame")
-        self.notebook.add(self.dashboard_tab, text="Dashboard")
-        self.notebook.add(self.belt_tab, text="Belt Tracker")
-        self.notebook.add(self.limited_deals_tab, text="Limited Deals")
-        self.notebook.add(self.logs_tab, text="History")
-        self.notebook.add(self.files_tab, text="Diagnostics")
-        self.notebook.add(self.settings_tab, text="Settings")
+        self.belt_tab = ttk.Frame(
+            self.page_stack, padding=(2, 2, 2, 6), style="Page.TFrame"
+        )
+        self.limited_deals_tab = ttk.Frame(
+            self.page_stack, padding=(2, 2, 2, 6), style="Page.TFrame"
+        )
+        self.logs_tab = ttk.Frame(
+            self.page_stack, padding=(2, 2, 2, 6), style="Page.TFrame"
+        )
+        self.files_tab = ttk.Frame(
+            self.page_stack, padding=(2, 2, 2, 6), style="Page.TFrame"
+        )
+        self.settings_tab = ttk.Frame(
+            self.page_stack, padding=(2, 2, 2, 6), style="Page.TFrame"
+        )
+        self.dashboard_tab.grid(row=0, column=0, sticky="nsew")
+        self._unprimed_tabs = [
+            self.belt_tab,
+            self.limited_deals_tab,
+            self.logs_tab,
+            self.files_tab,
+            self.settings_tab,
+        ]
+        self._selected_tab = self.dashboard_tab
+        self.dashboard_tab.tkraise()
         self.dashboard_content = self._create_scrollable_page(self.dashboard_tab)
         self.belt_content = self._create_scrollable_page(self.belt_tab)
         self.limited_deals_content = self._create_scrollable_page(self.limited_deals_tab)
@@ -692,7 +744,7 @@ class DroidAlertsApp:
             button = ttk.Button(
                 nav,
                 text=text,
-                command=lambda selected=tab: self.notebook.select(selected),
+                command=lambda selected=tab: self._select_tab(selected),
                 style="Sidebar.TButton",
             )
             button.grid(row=row, column=0, sticky="ew", pady=2)
@@ -715,7 +767,7 @@ class DroidAlertsApp:
                 )
                 self.limited_deals_new_tag.bind(
                     "<Button-1>",
-                    lambda _event: self.notebook.select(self.limited_deals_tab),
+                    lambda _event: self._select_tab(self.limited_deals_tab),
                 )
             elif tab is self.logs_tab:
                 self.history_tab_button = button
@@ -734,6 +786,7 @@ class DroidAlertsApp:
                 ("Discord  ↗", DISCORD_COMMUNITY_URL),
                 ("Tracker  ↗", TRACKER_URL),
                 ("Wiki  ↗", WIKI_URL),
+                ("Stats  ↗", STATS_URL),
             )
         ):
             ttk.Button(
@@ -758,10 +811,10 @@ class DroidAlertsApp:
         )
         self.header_status_label.grid(row=1, column=0, sticky="w", pady=(3, 0))
         self._refresh_header_status()
-        self.notebook.bind("<<NotebookTabChanged>>", self._highlight_active_tab, add="+")
-        self.notebook.bind("<<NotebookTabChanged>>", self._on_belt_tab_opened, add="+")
-        self.notebook.bind(
-            "<<NotebookTabChanged>>",
+        self.page_stack.bind("<<PageChanged>>", self._highlight_active_tab, add="+")
+        self.page_stack.bind("<<PageChanged>>", self._on_belt_tab_opened, add="+")
+        self.page_stack.bind(
+            "<<PageChanged>>",
             self._on_limited_deals_tab_opened,
             add="+",
         )
@@ -841,7 +894,7 @@ class DroidAlertsApp:
 
     def _on_page_mousewheel(self, event):
         try:
-            selected = self.root.nametowidget(self.notebook.select())
+            selected = self._selected_tab
             canvas, _scrollbar, _window = self.scrollable_pages[selected]
         except Exception:
             return None
@@ -908,12 +961,6 @@ class DroidAlertsApp:
             self.options_canvas.configure(background=self.current_theme.colors["bg"])
         for canvas, _scrollbar, _window in self.scrollable_pages.values():
             canvas.configure(background=self.current_theme.colors["bg"])
-        try:
-            style = ttk.Style()
-            style.layout("TNotebook.Tab", [])
-            style.configure("TNotebook", borderwidth=0, tabmargins=0)
-        except Exception:
-            pass
         self._configure_history_tags()
         self._highlight_active_tab()
         self._apply_watcher_status_style(self.status_var.get())
@@ -1180,6 +1227,13 @@ class DroidAlertsApp:
             self.rebirth_alert_check,
             REBIRTH_ALERT_TOOLTIP,
         )
+        self.setting_vars["cb23_mission_alert_enabled"] = BooleanVar(value=False)
+        ttk.Checkbutton(
+            special_alerts,
+            text="CB23 Mission",
+            variable=self.setting_vars["cb23_mission_alert_enabled"],
+            **bootstyle("round-toggle"),
+        ).grid(row=1, column=0, sticky="w", pady=3)
         self._refresh_priority_alert_summary()
 
     def _refresh_priority_alert_summary(self) -> None:
@@ -1401,12 +1455,115 @@ class DroidAlertsApp:
                 self._link_label(channels, "Set up", setup, style="Utility.TButton").grid(
                     row=row, column=2, sticky="e", padx=(0, 16)
                 )
+                self._link_label(
+                    channels,
+                    "Config",
+                    lambda selected=channel, title=label: self.configure_channel_alerts(selected, title),
+                    style="Utility.TButton",
+                ).grid(row=row, column=3, sticky="e", padx=(0, 16))
             self._link_label(
                 channels,
                 "Test",
                 lambda selected=channel: self.send_channel_test(selected),
                 style="Utility.TButton",
-            ).grid(row=row, column=3, sticky="e")
+            ).grid(row=row, column=4, sticky="e")
+
+    def _enabled_channel_alert_options(self, config: AppConfig) -> list[tuple[str, str]]:
+        options = [
+            (f"chat:{droid}:{rarity}", f"{droid} · {rarity}")
+            for droid, rarity in ALERT_COMBOS
+            if bool(self.alert_vars.get((droid, rarity)) and self.alert_vars[(droid, rarity)].get())
+        ]
+        if bool(self._value("rebirth_ready_alert_enabled")):
+            options.append(("rebirth_ready", "Rebirth Ready"))
+        if bool(self._value("rebirth_alert_enabled")):
+            options.append(("rebirth_available", "Rebirth Alert"))
+        if bool(self._value("cb23_mission_alert_enabled")):
+            options.append(("cb23_mission", "CB23 Mission"))
+        if config.belt_target_tiers:
+            options.append(("belt_tracker", "Belt Tracker alerts"))
+        if config.limited_deal_priority_alerts or config.limited_deal_target_tiers:
+            options.append(("limited_deals", "Limited Deal alerts"))
+        return options
+
+    def configure_channel_alerts(self, channel: str, label: str) -> None:
+        """Choose which globally enabled alerts are delivered to one channel."""
+        config = self.save_settings(interactive=False, update_detail=False)
+        if config is None:
+            return
+        options = self._enabled_channel_alert_options(config)
+        disabled = set(config.channel_disabled_alerts.get(channel, []))
+
+        dialog = tk.Toplevel(self.root)
+        dialog.withdraw()
+        self._style_dialog_window(dialog)
+        dialog.title(f"{label} Alert Config")
+        dialog.transient(self.root)
+        body = ttk.Frame(dialog, padding=20)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=f"{label} alerts", font=self._font(14, "bold")).pack(anchor="w")
+        ttk.Label(
+            body,
+            text=f"Turn off any alert you do not want sent to {label}.",
+            wraplength=500,
+            justify="left",
+            **muted_style(),
+        ).pack(anchor="w", pady=(4, 14))
+
+        choices: dict[str, BooleanVar] = {}
+        list_frame = ttk.Frame(body, padding=(12, 8), style="Subtle.TFrame")
+        list_frame.pack(fill="both", expand=True)
+        if options:
+            for alert_id, alert_label in options:
+                choices[alert_id] = BooleanVar(value=alert_id not in disabled)
+                ttk.Checkbutton(
+                    list_frame,
+                    text=alert_label,
+                    variable=choices[alert_id],
+                    **bootstyle("round-toggle"),
+                ).pack(anchor="w", fill="x", pady=3)
+        else:
+            ttk.Label(
+                list_frame,
+                text="No alerts are currently enabled.",
+                **muted_style(),
+            ).pack(anchor="w", pady=8)
+
+        actions = ttk.Frame(body)
+        actions.pack(fill="x", pady=(16, 0))
+
+        def save() -> None:
+            current_ids = set(choices)
+            retained = disabled - current_ids
+            newly_disabled = {alert_id for alert_id, var in choices.items() if not bool(var.get())}
+            config.channel_disabled_alerts[channel] = sorted(retained | newly_disabled)
+            if not config.channel_disabled_alerts[channel]:
+                config.channel_disabled_alerts.pop(channel, None)
+            save_config(config)
+            self.config = config
+            self.detail_var.set(f"{label} alert config saved")
+            dialog.destroy()
+
+        ttk.Button(actions, text="Cancel", command=dialog.destroy).pack(side="right")
+        ttk.Button(actions, text="Save", command=save, **bootstyle("primary")).pack(
+            side="right", padx=(0, 8)
+        )
+        dialog.update_idletasks()
+        width = min(560, max(420, dialog.winfo_reqwidth() + 20))
+        height = min(720, max(300, dialog.winfo_reqheight() + 20))
+        dialog.geometry(
+            centered_window_geometry(
+                width,
+                height,
+                parent_x=self.root.winfo_rootx(),
+                parent_y=self.root.winfo_rooty(),
+                parent_width=self.root.winfo_width(),
+                parent_height=self.root.winfo_height(),
+            )
+        )
+        dialog.deiconify()
+        dialog.lift()
+        dialog.grab_set()
 
     def _build_alert_appearance(self, parent, *, row: int) -> None:
         appearance_outer, appearance = self._labeled_section(parent, "ALERT APPEARANCE")
@@ -2196,6 +2353,24 @@ class DroidAlertsApp:
             state="readonly",
             width=10,
         ).grid(row=4, column=1, sticky="w", padx=(12, 0))
+        ttk.Separator(data).grid(
+            row=5,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(12, 10),
+        )
+        ttk.Label(
+            data,
+            text="Recalculate capture and overlay positions after a resolution change.",
+            style="Muted.TLabel",
+        ).grid(row=6, column=0, sticky="w", pady=4)
+        ttk.Button(
+            data,
+            text="Refresh Display Layout",
+            command=self.refresh_display_geometry,
+            style="Utility.TButton",
+        ).grid(row=6, column=1, sticky="w", padx=(12, 0), pady=4)
 
         remote_outer, remote = self._labeled_section(self.advanced_container, "NOTIFICATION DETAILS")
         remote_outer.grid(row=3, column=0, sticky="ew", pady=(0, 16))
@@ -2282,9 +2457,56 @@ class DroidAlertsApp:
         self.root.bind_all("<Button-4>", self._on_options_mousewheel, add="+")
         self.root.bind_all("<Button-5>", self._on_options_mousewheel, add="+")
 
+    def _prepare_tab(self, selected) -> bool:
+        index = next(
+            (
+                index
+                for index, page in enumerate(self._unprimed_tabs)
+                if page is selected
+            ),
+            None,
+        )
+        if index is None:
+            return False
+        self._unprimed_tabs.pop(index)
+        selected.grid(row=0, column=0, sticky="nsew")
+        # A newly managed page is stacked on top by default. Put the current
+        # page back above it before flushing the target page's first layout.
+        self._selected_tab.tkraise()
+        selected.update_idletasks()
+        return True
+
+    def _prime_next_tab(self) -> None:
+        self._page_prime_after_id = None
+        if self._shutting_down or not self._unprimed_tabs:
+            return
+        try:
+            self._prepare_tab(self._unprimed_tabs[0])
+        except tk.TclError:
+            return
+        if self._unprimed_tabs:
+            # Yield between pages instead of blocking the first usable
+            # Dashboard frame with every remaining page's paint work.
+            self._page_prime_after_id = self.root.after(16, self._prime_next_tab)
+
+    def _select_tab(self, selected) -> None:
+        if selected is self._selected_tab:
+            return
+        try:
+            # Finish any pending geometry work while the old page still covers
+            # the target, then reveal the fully laid-out page in one operation.
+            if not self._prepare_tab(selected):
+                selected.update_idletasks()
+            selected.tkraise()
+            self._selected_tab = selected
+            self.page_stack.update_idletasks()
+        except tk.TclError:
+            return
+        self.page_stack.event_generate("<<PageChanged>>", when="tail")
+
     def _highlight_active_tab(self, _event=None) -> None:
         try:
-            selected = self.root.nametowidget(self.notebook.select())
+            selected = self._selected_tab
         except Exception:
             return
         for button, tab in self.tab_buttons:
@@ -2295,7 +2517,7 @@ class DroidAlertsApp:
 
     def _on_belt_tab_opened(self, _event=None) -> None:
         try:
-            selected = self.root.nametowidget(self.notebook.select())
+            selected = self._selected_tab
         except Exception:
             return
         if selected is self.belt_tab:
@@ -2305,7 +2527,7 @@ class DroidAlertsApp:
 
     def _on_limited_deals_tab_opened(self, _event=None) -> None:
         try:
-            selected = self.root.nametowidget(self.notebook.select())
+            selected = self._selected_tab
         except Exception:
             return
         if selected is self.limited_deals_tab:
@@ -2329,12 +2551,11 @@ class DroidAlertsApp:
         self.config = config
 
     def _wire_macos_repaint_workaround(self) -> None:
-        # Tk's Aqua backend defers repainting remapped widgets, so freshly
-        # selected notebook tabs keep showing stale content for up to a
-        # second. Forcing a recomposite after every tab change fixes it.
+        # Aqua can still defer compositing an already-mapped page after its
+        # stacking order changes, so retain the stronger macOS workaround.
         if self.root.tk.call("tk", "windowingsystem") != "aqua":
             return
-        self.notebook.bind("<<NotebookTabChanged>>", self._on_macos_tab_changed, add="+")
+        self.page_stack.bind("<<PageChanged>>", self._on_macos_tab_changed, add="+")
 
     def _on_macos_tab_changed(self, _event=None) -> None:
         self._force_macos_repaint()
@@ -2352,7 +2573,7 @@ class DroidAlertsApp:
     def _force_macos_repaint(self) -> None:
         try:
             self.root.update_idletasks()
-            selected = self.root.nametowidget(self.notebook.select())
+            selected = self._selected_tab
         except Exception:
             return
         # Canvas-hosted pages need an explicit nudge on top of the window-level
@@ -2477,7 +2698,7 @@ class DroidAlertsApp:
         if self.droid_timers is not None:
             self.droid_timers.enter_edit_mode()
             self.detail_var.set(
-                "Drag the timer strip to move it; use − / + to resize; click Done to save"
+                "Drag to move; use − / + to resize; Reset to default restores the layout; Done saves"
             )
 
     def hide_droid_timers(self) -> None:
@@ -2602,6 +2823,7 @@ class DroidAlertsApp:
                 "popup_enabled",
                 "sound_enabled",
                 "rebirth_ready_alert_enabled",
+                "cb23_mission_alert_enabled",
                 "droid_timers_enabled",
                 "save_alert_samples",
                 "ntfy_enabled",
@@ -2873,6 +3095,94 @@ class DroidAlertsApp:
             return
         self.monitor_display_var.set(format_monitor_label(selected_monitor, primary))
         self._refresh_capture_source_text()
+
+    @staticmethod
+    def _geometry_signature(monitors) -> tuple[tuple[int, int, int, int, int], ...]:
+        return tuple(
+            (monitor.index, monitor.left, monitor.top, monitor.width, monitor.height)
+            for monitor in monitors
+        )
+
+    def _read_display_geometry_signature(
+        self,
+    ) -> tuple[tuple[int, int, int, int, int], ...] | None:
+        try:
+            return self._geometry_signature(list_monitors())
+        except Exception as exc:
+            print(f"[GUI] Failed to read display geometry: {exc}")
+            return None
+
+    def _schedule_display_geometry_poll(self) -> None:
+        if self._shutting_down:
+            return
+        self._display_geometry_after_id = self.root.after(
+            DISPLAY_GEOMETRY_POLL_MS,
+            self._poll_display_geometry,
+        )
+
+    def _poll_display_geometry(self) -> None:
+        self._display_geometry_after_id = None
+        try:
+            signature = self._read_display_geometry_signature()
+            if signature is None:
+                return
+            previous = self._display_geometry_signature
+            self._display_geometry_signature = signature
+            if previous is not None and signature != previous:
+                self.refresh_display_geometry(automatic=True, signature=signature)
+        finally:
+            self._schedule_display_geometry_poll()
+
+    def refresh_display_geometry(
+        self,
+        *,
+        automatic: bool = False,
+        signature: tuple[tuple[int, int, int, int, int], ...] | None = None,
+    ) -> None:
+        """Recreate capture sessions and overlays after display geometry changes."""
+        if signature is None:
+            signature = self._read_display_geometry_signature()
+        if signature is not None:
+            self._display_geometry_signature = signature
+
+        try:
+            region_overlay_was_open = bool(
+                self.region_overlay is not None and self.region_overlay.winfo_exists()
+            )
+        except tk.TclError:
+            region_overlay_was_open = False
+        if region_overlay_was_open:
+            self.close_region_overlay()
+
+        timers_were_open = bool(
+            self.droid_timers is not None and self.droid_timers.alive
+        )
+        if timers_were_open:
+            self.hide_droid_timers()
+
+        self.refresh_monitor_choices(sync_belt=False)
+
+        if self.is_watching():
+            self._watch_restart_after_stop = True
+            self.stop_watcher(reason="display-refresh")
+
+        if self.is_belt_tracking():
+            self._belt_restart_after_stop = True
+            self.stop_belt_tracking(reason="monitor-change")
+        else:
+            self._load_belt_region()
+
+        if timers_were_open:
+            self.show_droid_timers()
+        if region_overlay_was_open:
+            try:
+                self.toggle_region_overlay()
+            except Exception as exc:
+                self.detail_var.set(f"Display refreshed; chat region could not reopen: {exc}")
+                return
+
+        action = "changed; layout refreshed automatically" if automatic else "refreshed"
+        self.detail_var.set(f"Display geometry {action}")
 
     def _apply_monitor_index(self, monitor_index: int) -> None:
         previous_index = max(1, int(self._value("monitor_index")))
@@ -3670,262 +3980,142 @@ class DroidAlertsApp:
             self.belt_detail_var.set("Stop Belt Tracker before changing target droids.")
             return
 
-        dialog = tk.Toplevel(self.root)
-        dialog.withdraw()
-        self._style_dialog_window(dialog)
-        dialog.title("Priority Alerts")
-        dialog.transient(self.root)
-
-        body = ttk.Frame(dialog, padding=20)
-        body.pack(fill="both", expand=True)
-        ttk.Label(body, text="Priority Alerts", font=self._font(14, "bold")).pack(anchor="w")
-        ttk.Label(
-            body,
-            text=(
-                "Choose the minimum belt tier for each droid. Higher tiers also alert: "
-                "Default → Gold → Diamond → Rainbow → Beskar."
-            ),
-            wraplength=650,
-            justify="left",
-            **muted_style(),
-        ).pack(anchor="w", pady=(4, 12))
-
-        search_row = ttk.Frame(body)
-        search_row.pack(fill="x", pady=(0, 10))
-        search_row.columnconfigure(1, weight=1)
-        ttk.Label(search_row, text="Search").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        search_var = StringVar()
-        search_entry = ttk.Entry(search_row, textvariable=search_var)
-        search_entry.grid(row=0, column=1, sticky="ew")
-        ttk.Button(
-            search_row,
-            text="Clear",
-            command=lambda: search_var.set(""),
-            style="Utility.TButton",
-        ).grid(row=0, column=2, padx=(8, 0))
-
-        list_frame = ttk.Frame(body)
-        list_frame.pack(fill="both", expand=True)
-        picker = ttk.Treeview(
-            list_frame,
-            columns=("droid", "minimum_tier"),
-            show="headings",
-            selectmode="extended",
-            height=9,
-        )
-        picker.heading("droid", text="Droid")
-        picker.heading("minimum_tier", text="Alert from")
-        picker.column("droid", anchor="w", stretch=True, minwidth=220)
-        picker.column("minimum_tier", anchor="w", stretch=False, width=130)
-        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=picker.yview)
-        picker.configure(yscrollcommand=scrollbar.set)
-        picker.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        list_frame.rowconfigure(0, weight=1)
-        list_frame.columnconfigure(0, weight=1)
-
         rules = normalize_belt_target_tiers(self.config.belt_target_tiers)
-        count_var = StringVar()
-        feedback_var = StringVar()
-        tier_var = StringVar(value=BELT_TARGET_LABELS[BELT_FAMILY_ORDER[0]])
-        tier_values = ("Off",) + tuple(
-            BELT_TARGET_LABELS[family] for family in BELT_FAMILY_ORDER
-        )
 
-        def refresh_count(_event=None) -> None:
-            selected_count = len(picker.selection())
-            visible_count = len(picker.get_children())
-            count_var.set(
-                f"{len(rules)} alert rule{'s' if len(rules) != 1 else ''} · "
-                f"{visible_count} shown · {selected_count} selected"
-            )
-
-        def refresh_picker(*_args) -> None:
-            selected = set(picker.selection())
-            query = search_var.get().strip().casefold()
-            for item in picker.get_children():
-                picker.delete(item)
-            for name in BELT_DROID_NAMES:
-                if query and query not in name.casefold():
-                    continue
-                picker.insert(
-                    "",
-                    "end",
-                    iid=name,
-                    values=(name, belt_target_label(rules.get(name))),
-                )
-                if name in selected:
-                    picker.selection_add(name)
-            refresh_count()
-
-        def select_all(_event=None) -> str:
-            picker.selection_set(picker.get_children())
-            refresh_count()
-            return "break"
-
-        def apply_tier(_event=None) -> str:
-            selected = tuple(picker.selection())
-            if not selected:
-                feedback_var.set("Select one or more droids first.")
-                return "break"
-            label = tier_var.get()
-            family = BELT_TARGET_FAMILIES_BY_LABEL.get(label)
-            for name in selected:
-                if family is None:
-                    rules.pop(name, None)
-                else:
-                    rules[name] = family
-                if picker.exists(name):
-                    picker.item(name, values=(name, belt_target_label(rules.get(name))))
-            feedback_var.set(
-                f"Updated {len(selected)} droid{'s' if len(selected) != 1 else ''} to {label}."
-            )
-            refresh_count()
-            return "break"
-
-        def cycle_tier(event) -> str:
-            name = picker.identify_row(event.y)
-            if not name:
-                return "break"
-            current = rules.get(name)
-            choices: tuple[str | None, ...] = (None,) + BELT_FAMILY_ORDER
-            next_family = choices[(choices.index(current) + 1) % len(choices)]
-            if next_family is None:
-                rules.pop(name, None)
-            else:
-                rules[name] = next_family
-            picker.selection_set(name)
-            picker.item(name, values=(name, belt_target_label(rules.get(name))))
-            tier_var.set(belt_target_label(rules.get(name)))
-            feedback_var.set(f"{name}: {belt_target_label(rules.get(name))}")
-            refresh_count()
-            return "break"
-
-        def set_all_default() -> None:
-            rules.clear()
-            rules.update({name: BELT_FAMILY_ORDER[0] for name in BELT_DROID_NAMES})
-            feedback_var.set("Every droid will alert from Default upward.")
-            refresh_picker()
-
-        def clear_rules() -> None:
-            rules.clear()
-            feedback_var.set("All belt alert rules cleared.")
-            refresh_picker()
-
-        def save_targets(_event=None) -> str:
+        def save_rules(updated_rules: Mapping[str, str]) -> None:
             config = load_config()
-            config.belt_target_tiers = normalize_belt_target_tiers(rules)
+            config.belt_target_tiers = normalize_belt_target_tiers(updated_rules)
             save_config(config)
             self.config = config
             self._refresh_belt_target_text()
             self.belt_status_var.set("Belt alert rules saved")
-            dialog.destroy()
-            return "break"
 
-        picker.bind("<<TreeviewSelect>>", refresh_count)
-        picker.bind("<Control-a>", select_all)
-        picker.bind("<Command-a>", select_all)
-        picker.bind("<Double-1>", cycle_tier)
-        search_var.trace_add("write", refresh_picker)
-        ttk.Label(body, textvariable=count_var, **muted_style()).pack(anchor="w", pady=(8, 0))
-
-        edit_row = ttk.Frame(body)
-        edit_row.pack(fill="x", pady=(10, 0))
-        ttk.Label(edit_row, text="Set selected to").pack(side="left")
-        tier_picker = ttk.Combobox(
-            edit_row,
-            textvariable=tier_var,
-            values=tier_values,
-            state="readonly",
-            width=14,
+        self._open_target_rule_editor(
+            window_title="Priority Alerts",
+            heading="Priority Alerts",
+            description=(
+                "Choose the minimum belt tier for each droid. Higher tiers also alert: "
+                "Default → Gold → Diamond → Rainbow → Beskar."
+            ),
+            columns=(
+                ("droid", "Droid", 220, True),
+                ("minimum_tier", "Alert from", 130, False),
+            ),
+            row_keys=tuple(BELT_DROID_NAMES),
+            row_values=lambda name: (name, belt_target_label(rules.get(name))),
+            row_search_text=lambda name: name,
+            row_display_name=lambda name: name,
+            rules=rules,
+            family_order=BELT_FAMILY_ORDER,
+            families_by_label=BELT_TARGET_FAMILIES_BY_LABEL,
+            label_for=belt_target_label,
+            all_default_message="Every droid will alert from Default upward.",
+            clear_message="All belt alert rules cleared.",
+            save_rules=save_rules,
+            list_height=9,
+            dialog_height=PRIORITY_DIALOG_HEIGHT,
+            minimum_width=620,
+            description_wrap=650,
+            tip="Tip: select multiple rows to edit together, or double-click a row to advance it.",
+            centered=True,
         )
-        tier_picker.pack(side="left", padx=(8, 0))
-        tier_picker.bind("<<ComboboxSelected>>", apply_tier)
-        ttk.Button(
-            edit_row,
-            text="Apply",
-            command=apply_tier,
-            **bootstyle("info-outline"),
-        ).pack(side="left", padx=(8, 0))
-        ttk.Label(edit_row, textvariable=feedback_var, **muted_style()).pack(
-            side="left", padx=(12, 0)
-        )
-        ttk.Label(
-            body,
-            text="Tip: select multiple rows to edit together, or double-click a row to advance it.",
-            **muted_style(),
-        ).pack(anchor="w", pady=(6, 0))
-
-        actions = ttk.Frame(body)
-        actions.pack(fill="x", pady=(12, 0))
-        ttk.Button(
-            actions,
-            text="All Default+",
-            command=set_all_default,
-            **bootstyle("info-outline"),
-        ).pack(side="left")
-        ttk.Button(
-            actions,
-            text="Clear all",
-            command=clear_rules,
-            **bootstyle("danger-outline"),
-        ).pack(side="left", padx=(8, 0))
-        ttk.Button(actions, text="Cancel", command=dialog.destroy).pack(
-            side="right", padx=(8, 0)
-        )
-        ttk.Button(actions, text="Save", command=save_targets, **bootstyle("primary")).pack(
-            side="right"
-        )
-        dialog.bind("<Control-s>", save_targets)
-        dialog.bind("<Command-s>", save_targets)
-        dialog.bind("<Escape>", lambda _event: dialog.destroy())
-        refresh_picker()
-        dialog.update_idletasks()
-        dialog_width, dialog_height = fit_window_size(
-            max(PRIORITY_DIALOG_WIDTH, dialog.winfo_reqwidth() + 20),
-            max(PRIORITY_DIALOG_HEIGHT, dialog.winfo_reqheight() + 20),
-            dialog.winfo_screenwidth(),
-            dialog.winfo_screenheight(),
-            horizontal_margin=80,
-            vertical_margin=120,
-        )
-        dialog.geometry(
-            centered_window_geometry(
-                dialog_width,
-                dialog_height,
-                parent_x=self.root.winfo_rootx(),
-                parent_y=self.root.winfo_rooty(),
-                parent_width=self.root.winfo_width(),
-                parent_height=self.root.winfo_height(),
-            )
-        )
-        dialog.minsize(min(620, dialog_width), min(700, dialog_height))
-        dialog.deiconify()
-        dialog.lift()
-        dialog.grab_set()
-        search_entry.focus_set()
 
     def choose_limited_deal_targets(self) -> None:
-        dialog = tk.Toplevel(self.root)
-        self._style_dialog_window(dialog)
-        dialog.title("Limited Deal Alert Rules")
-        dialog.transient(self.root)
-        dialog.grab_set()
+        rules = normalize_limited_deal_target_tiers(
+            self.config.limited_deal_target_tiers
+        )
+        droids_by_id = {str(droid.id): droid for droid in LIMITED_DEAL_DROIDS}
 
-        body = ttk.Frame(dialog, padding=20)
-        body.pack(fill="both", expand=True)
-        ttk.Label(
-            body,
-            text="Custom Droid Alerts",
-            font=self._font(14, "bold"),
-        ).pack(anchor="w")
-        ttk.Label(
-            body,
-            text=(
+        def row_values(droid_id: str) -> tuple[object, ...]:
+            droid = droids_by_id[droid_id]
+            return (
+                droid.name,
+                droid.rarity,
+                limited_deal_target_label(rules.get(droid_id)),
+            )
+
+        def save_rules(updated_rules: Mapping[str, str]) -> None:
+            config = load_config()
+            config.limited_deal_target_tiers = normalize_limited_deal_target_tiers(
+                updated_rules
+            )
+            save_config(config)
+            self.config = config
+            self._refresh_limited_deal_target_text()
+            self._evaluate_current_limited_deal()
+            self.detail_var.set("Limited Deal droid rules saved")
+
+        self._open_target_rule_editor(
+            window_title="Limited Deal Alert Rules",
+            heading="Custom Droid Alerts",
+            description=(
                 "Choose the minimum Limited Deal tier for each droid. Higher tiers also alert: "
                 "Default → Gold → Diamond → Rainbow → Beskar → Galactic."
             ),
-            wraplength=700,
+            columns=(
+                ("droid", "Droid", 260, True),
+                ("class", "Class", 110, False),
+                ("minimum_tier", "Alert from", 135, False),
+            ),
+            row_keys=tuple(droids_by_id),
+            row_values=row_values,
+            row_search_text=lambda droid_id: (
+                f"{droids_by_id[droid_id].name} {droids_by_id[droid_id].rarity}"
+            ),
+            row_display_name=lambda droid_id: droids_by_id[droid_id].name,
+            rules=rules,
+            family_order=LIMITED_DEAL_FAMILY_ORDER,
+            families_by_label=LIMITED_DEAL_TARGET_FAMILIES_BY_LABEL,
+            label_for=limited_deal_target_label,
+            all_default_message="Every rotating droid will alert from Default upward.",
+            clear_message="All custom Limited Deal rules cleared.",
+            save_rules=save_rules,
+            list_height=12,
+            dialog_height=LIMITED_DEAL_DIALOG_HEIGHT,
+            minimum_width=660,
+            description_wrap=700,
+            tip="Tip: select several rows to edit together, or double-click a row to advance it.",
+            centered=False,
+        )
+
+    def _open_target_rule_editor(
+        self,
+        *,
+        window_title: str,
+        heading: str,
+        description: str,
+        columns: Sequence[tuple[str, str, int, bool]],
+        row_keys: Sequence[str],
+        row_values: Callable[[str], tuple[object, ...]],
+        row_search_text: Callable[[str], str],
+        row_display_name: Callable[[str], str],
+        rules: dict[str, str],
+        family_order: tuple[str, ...],
+        families_by_label: Mapping[str, str],
+        label_for: Callable[[str | None], str],
+        all_default_message: str,
+        clear_message: str,
+        save_rules: Callable[[Mapping[str, str]], None],
+        list_height: int,
+        dialog_height: int,
+        minimum_width: int,
+        description_wrap: int,
+        tip: str,
+        centered: bool,
+    ) -> None:
+        dialog = tk.Toplevel(self.root)
+        dialog.withdraw()
+        self._style_dialog_window(dialog)
+        dialog.title(window_title)
+        dialog.transient(self.root)
+
+        body = ttk.Frame(dialog, padding=20)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=heading, font=self._font(14, "bold")).pack(anchor="w")
+        ttk.Label(
+            body,
+            text=description,
+            wraplength=description_wrap,
             justify="left",
             **muted_style(),
         ).pack(anchor="w", pady=(4, 12))
@@ -3952,34 +4142,29 @@ class DroidAlertsApp:
         list_frame.columnconfigure(0, weight=1)
         picker = ttk.Treeview(
             list_frame,
-            columns=("droid", "class", "minimum_tier"),
+            columns=tuple(column[0] for column in columns),
             show="headings",
             selectmode="extended",
-            height=12,
+            height=list_height,
         )
-        picker.heading("droid", text="Droid")
-        picker.heading("class", text="Class")
-        picker.heading("minimum_tier", text="Alert from")
-        picker.column("droid", anchor="w", stretch=True, minwidth=260)
-        picker.column("class", anchor="w", stretch=False, width=110)
-        picker.column("minimum_tier", anchor="w", stretch=False, width=135)
+        for column_id, column_heading, column_width, stretch in columns:
+            picker.heading(column_id, text=column_heading)
+            column_options = {"minwidth": column_width} if stretch else {"width": column_width}
+            picker.column(
+                column_id,
+                anchor="w",
+                stretch=stretch,
+                **column_options,
+            )
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=picker.yview)
         picker.configure(yscrollcommand=scrollbar.set)
         picker.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
 
-        rules = normalize_limited_deal_target_tiers(
-            self.config.limited_deal_target_tiers
-        )
         count_var = StringVar()
         feedback_var = StringVar()
-        tier_var = StringVar(
-            value=LIMITED_DEAL_TARGET_LABELS[LIMITED_DEAL_FAMILY_ORDER[0]]
-        )
-        tier_values = ("Off",) + tuple(
-            LIMITED_DEAL_TARGET_LABELS[family]
-            for family in LIMITED_DEAL_FAMILY_ORDER
-        )
+        tier_var = StringVar(value=label_for(family_order[0]))
+        tier_values = ("Off",) + tuple(label_for(family) for family in family_order)
 
         def refresh_count(_event=None) -> None:
             selected_count = len(picker.selection())
@@ -3994,24 +4179,17 @@ class DroidAlertsApp:
             query = search_var.get().strip().casefold()
             for item in picker.get_children():
                 picker.delete(item)
-            for droid in LIMITED_DEAL_DROIDS:
-                haystack = f"{droid.name} {droid.rarity}".casefold()
-                if query and query not in haystack:
+            for key in row_keys:
+                if query and query not in row_search_text(key).casefold():
                     continue
-                item_id = str(droid.id)
-                picker.insert(
-                    "",
-                    "end",
-                    iid=item_id,
-                    values=(
-                        droid.name,
-                        droid.rarity,
-                        limited_deal_target_label(rules.get(item_id)),
-                    ),
-                )
-                if item_id in selected:
-                    picker.selection_add(item_id)
+                picker.insert("", "end", iid=key, values=row_values(key))
+                if key in selected:
+                    picker.selection_add(key)
             refresh_count()
+
+        def update_row(key: str) -> None:
+            if picker.exists(key):
+                picker.item(key, values=row_values(key))
 
         def select_all(_event=None) -> str:
             picker.selection_set(picker.get_children())
@@ -4024,24 +4202,13 @@ class DroidAlertsApp:
                 feedback_var.set("Select one or more droids first.")
                 return "break"
             label = tier_var.get()
-            family = LIMITED_DEAL_TARGET_FAMILIES_BY_LABEL.get(label)
-            for droid_id in selected:
+            family = families_by_label.get(label)
+            for key in selected:
                 if family is None:
-                    rules.pop(droid_id, None)
+                    rules.pop(key, None)
                 else:
-                    rules[droid_id] = family
-                if picker.exists(droid_id):
-                    droid = next(
-                        item for item in LIMITED_DEAL_DROIDS if item.id == int(droid_id)
-                    )
-                    picker.item(
-                        droid_id,
-                        values=(
-                            droid.name,
-                            droid.rarity,
-                            limited_deal_target_label(rules.get(droid_id)),
-                        ),
-                    )
+                    rules[key] = family
+                update_row(key)
             feedback_var.set(
                 f"Updated {len(selected)} droid{'s' if len(selected) != 1 else ''} to {label}."
             )
@@ -4049,52 +4216,37 @@ class DroidAlertsApp:
             return "break"
 
         def cycle_tier(event) -> str:
-            droid_id = picker.identify_row(event.y)
-            if not droid_id:
+            key = picker.identify_row(event.y)
+            if not key:
                 return "break"
-            current = rules.get(droid_id)
-            choices: tuple[str | None, ...] = (None,) + LIMITED_DEAL_FAMILY_ORDER
+            current = rules.get(key)
+            choices: tuple[str | None, ...] = (None,) + family_order
             next_family = choices[(choices.index(current) + 1) % len(choices)]
             if next_family is None:
-                rules.pop(droid_id, None)
+                rules.pop(key, None)
             else:
-                rules[droid_id] = next_family
-            droid = next(item for item in LIMITED_DEAL_DROIDS if item.id == int(droid_id))
-            picker.selection_set(droid_id)
-            picker.item(
-                droid_id,
-                values=(
-                    droid.name,
-                    droid.rarity,
-                    limited_deal_target_label(rules.get(droid_id)),
-                ),
-            )
-            tier_var.set(limited_deal_target_label(rules.get(droid_id)))
-            feedback_var.set(f"{droid.name}: {limited_deal_target_label(rules.get(droid_id))}")
+                rules[key] = next_family
+            picker.selection_set(key)
+            update_row(key)
+            label = label_for(rules.get(key))
+            tier_var.set(label)
+            feedback_var.set(f"{row_display_name(key)}: {label}")
             refresh_count()
             return "break"
 
         def set_all_default() -> None:
             rules.clear()
-            rules.update(
-                {str(droid.id): LIMITED_DEAL_FAMILY_ORDER[0] for droid in LIMITED_DEAL_DROIDS}
-            )
-            feedback_var.set("Every rotating droid will alert from Default upward.")
+            rules.update({key: family_order[0] for key in row_keys})
+            feedback_var.set(all_default_message)
             refresh_picker()
 
         def clear_rules() -> None:
             rules.clear()
-            feedback_var.set("All custom Limited Deal rules cleared.")
+            feedback_var.set(clear_message)
             refresh_picker()
 
         def save_targets(_event=None) -> str:
-            config = load_config()
-            config.limited_deal_target_tiers = normalize_limited_deal_target_tiers(rules)
-            save_config(config)
-            self.config = config
-            self._refresh_limited_deal_target_text()
-            self._evaluate_current_limited_deal()
-            self.detail_var.set("Limited Deal droid rules saved")
+            save_rules(rules)
             dialog.destroy()
             return "break"
 
@@ -4128,11 +4280,7 @@ class DroidAlertsApp:
         ttk.Label(edit_row, textvariable=feedback_var, **muted_style()).pack(
             side="left", padx=(12, 0)
         )
-        ttk.Label(
-            body,
-            text="Tip: select several rows to edit together, or double-click a row to advance it.",
-            **muted_style(),
-        ).pack(anchor="w", pady=(6, 0))
+        ttk.Label(body, text=tip, **muted_style()).pack(anchor="w", pady=(6, 0))
 
         actions = ttk.Frame(body)
         actions.pack(fill="x", pady=(12, 0))
@@ -4162,16 +4310,29 @@ class DroidAlertsApp:
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
         refresh_picker()
         dialog.update_idletasks()
-        dialog_width, dialog_height = fit_window_size(
+        dialog_width, fitted_height = fit_window_size(
             max(PRIORITY_DIALOG_WIDTH, dialog.winfo_reqwidth() + 20),
-            max(LIMITED_DEAL_DIALOG_HEIGHT, dialog.winfo_reqheight() + 20),
+            max(dialog_height, dialog.winfo_reqheight() + 20),
             dialog.winfo_screenwidth(),
             dialog.winfo_screenheight(),
             horizontal_margin=80,
             vertical_margin=120,
         )
-        dialog.geometry(f"{dialog_width}x{dialog_height}")
-        dialog.minsize(min(660, dialog_width), min(700, dialog_height))
+        geometry = f"{dialog_width}x{fitted_height}"
+        if centered:
+            geometry = centered_window_geometry(
+                dialog_width,
+                fitted_height,
+                parent_x=self.root.winfo_rootx(),
+                parent_y=self.root.winfo_rooty(),
+                parent_width=self.root.winfo_width(),
+                parent_height=self.root.winfo_height(),
+            )
+        dialog.geometry(geometry)
+        dialog.minsize(min(minimum_width, dialog_width), min(700, fitted_height))
+        dialog.deiconify()
+        dialog.lift()
+        dialog.grab_set()
         search_entry.focus_set()
 
     def _belt_overlay_changed(self) -> None:
@@ -4742,72 +4903,109 @@ class DroidAlertsApp:
             shape_score=1.0,
         )
 
+        self._dispatch_gui_alert(
+            config,
+            detection,
+            delivery_source="belt_tracker",
+            delivery_rarity="" if detection.rarity == "Belt" else detection.rarity,
+            sound_error_prefix="Alert sound failed",
+            popup_error_prefix=None,
+            thread_name_prefix="DroidAlertsBelt",
+        )
+
+    def _dispatch_gui_alert(
+        self,
+        config: AppConfig,
+        detection: Detection,
+        *,
+        delivery_source: str,
+        delivery_rarity: str,
+        sound_error_prefix: str,
+        popup_error_prefix: str | None,
+        thread_name_prefix: str,
+        extra_delivery_fields: Mapping[str, object] | None = None,
+    ) -> None:
         if config.sound_enabled:
             try:
                 AlertPolicy(config).notify(detection)
             except Exception as exc:
                 self.channel_status_vars["Sound"].set("Failed to play")
-                self.detail_var.set(f"Alert sound failed: {exc}")
-        if config.popup_enabled:
-            show_popup(
-                detection,
-                config.popup_seconds,
-                icon_path=popup_icon_path(config),
-                parent=self.root,
-                monitor=self._current_monitor_info(),
-                position=config.popup_position,
-                scale=config.popup_scale,
-                opacity=config.popup_opacity,
-            )
+                self.detail_var.set(f"{sound_error_prefix}: {exc}")
 
-        deliveries: list[tuple[str, object, tuple[object, ...], dict[str, object]]] = []
-        if config.discord_enabled:
+        if config.popup_enabled:
+            popup_kwargs = {
+                "icon_path": popup_icon_path(config),
+                "parent": self.root,
+                "monitor": self._current_monitor_info(),
+                "position": config.popup_position,
+                "scale": config.popup_scale,
+                "opacity": config.popup_opacity,
+            }
+            if popup_error_prefix is None:
+                show_popup(detection, config.popup_seconds, **popup_kwargs)
+            else:
+                try:
+                    show_popup(detection, config.popup_seconds, **popup_kwargs)
+                except Exception as exc:
+                    self.channel_status_vars["Popup"].set("Failed to show")
+                    self.detail_var.set(f"{popup_error_prefix}: {exc}")
+
+        alert_id = alert_type_id(detection)
+        webhook_url = None
+        if config.discord_enabled and config.channel_allows_alert("discord", alert_id):
             try:
                 webhook_url, _source = load_discord_webhook(config)
             except Exception as exc:
-                webhook_url = None
                 self.channel_status_vars["Discord"].set(f"Failed · {str(exc)[:70]}")
-            if webhook_url:
-                deliveries.append(("Discord", send_discord_alert, (webhook_url, detection), {}))
-        if config.ntfy_enabled and ntfy_configured(config):
-            deliveries.append(
-                ("ntfy", send_ntfy_alert, (config, detection), {"attachment_path": None})
-            )
-        if config.phone_alerts_enabled:
+
+        ntfy_ready = False
+        if config.ntfy_enabled and config.channel_allows_alert("ntfy", alert_id):
+            ntfy_ready = ntfy_configured(config)
+
+        credentials = None
+        if config.phone_alerts_enabled and config.channel_allows_alert("pushover", alert_id):
             try:
                 credentials, _source = load_phone_alert_credentials(config)
             except Exception as exc:
-                credentials = None
                 self.channel_status_vars["Pushover"].set(f"Failed · {str(exc)[:70]}")
-            if credentials:
-                deliveries.append(
-                    (
-                        "Pushover",
-                        send_phone_alert,
-                        (credentials, detection),
-                        {"sound": config.phone_sound, "attachment_path": None},
-                    )
-                )
 
-        for label, target, args, kwargs in deliveries:
-            self.channel_status_vars[label].set("Sending…")
+        deliveries = enabled_alert_deliveries(
+            config,
+            detection,
+            webhook_url=webhook_url,
+            phone_credentials=credentials,
+            ntfy_ready=ntfy_ready,
+            attachment_path=None,
+            discord_sender=send_discord_alert,
+            ntfy_sender=send_ntfy_alert,
+            phone_sender=send_phone_alert,
+        )
+        extra_fields = dict(extra_delivery_fields or {})
+        for delivery in deliveries:
+            self.channel_status_vars[delivery.label].set("Sending…")
             threading.Thread(
-                target=self._deliver_belt_alert,
-                args=(label, target, args, kwargs, detection),
-                name=f"DroidAlertsBelt{label}",
+                target=self._deliver_gui_alert,
+                args=(
+                    delivery,
+                    detection,
+                    delivery_source,
+                    delivery_rarity,
+                    extra_fields,
+                ),
+                name=f"{thread_name_prefix}{delivery.label}",
                 daemon=True,
             ).start()
 
-    def _deliver_belt_alert(
+    def _deliver_gui_alert(
         self,
-        label: str,
-        target,
-        args: tuple[object, ...],
-        kwargs: dict[str, object],
+        delivery: AlertDelivery,
         detection: Detection,
+        delivery_source: str,
+        delivery_rarity: str,
+        extra_delivery_fields: Mapping[str, object],
     ) -> None:
         try:
-            result = target(*args, **kwargs)
+            result = delivery.target(*delivery.args, **delivery.kwargs)
             success = bool(getattr(result, "success", False))
             detail = str(getattr(result, "message", "") or "")
         except Exception as exc:
@@ -4816,22 +5014,25 @@ class DroidAlertsApp:
         delivery_event: dict[str, object] = {
             "ts": timestamp(),
             "event_type": "delivery",
-            "source": "belt_tracker",
-            "channel": label,
+            "source": delivery_source,
+            "channel": delivery.label,
             "success": success,
             "detail": detail,
             "droid": detection.droid,
-            "rarity": "" if detection.rarity == "Belt" else detection.rarity,
+            "rarity": delivery_rarity,
             "alerted": True,
             "is_priority": True,
             "score": detection.score,
+            **extra_delivery_fields,
         }
         append_event(delivery_event)
         self._post_to_ui(
-            lambda label=label, event=delivery_event: self._belt_delivery_finished(label, event)
+            lambda label=delivery.label, event=delivery_event: self._gui_delivery_finished(
+                label, event
+            )
         )
 
-    def _belt_delivery_finished(self, label: str, event: dict[str, object]) -> None:
+    def _gui_delivery_finished(self, label: str, event: dict[str, object]) -> None:
         success = bool(event.get("success"))
         detail = str(event.get("detail") or "")
         self.channel_status_vars[label].set(
@@ -5128,111 +5329,15 @@ class DroidAlertsApp:
         append_event(alert_event)
         self.detail_var.set(event_text(detection))
 
-        if config.sound_enabled:
-            try:
-                AlertPolicy(config).notify(detection)
-            except Exception as exc:
-                self.channel_status_vars["Sound"].set("Failed to play")
-                self.detail_var.set(f"Limited Deal sound failed: {exc}")
-        if config.popup_enabled:
-            try:
-                show_popup(
-                    detection,
-                    config.popup_seconds,
-                    icon_path=popup_icon_path(config),
-                    parent=self.root,
-                    monitor=self._current_monitor_info(),
-                    position=config.popup_position,
-                    scale=config.popup_scale,
-                    opacity=config.popup_opacity,
-                )
-            except Exception as exc:
-                self.channel_status_vars["Popup"].set("Failed to show")
-                self.detail_var.set(f"Limited Deal popup failed: {exc}")
-
-        deliveries: list[tuple[str, object, tuple[object, ...], dict[str, object]]] = []
-        if config.discord_enabled:
-            try:
-                webhook_url, _source = load_discord_webhook(config)
-            except Exception as exc:
-                webhook_url = None
-                self.channel_status_vars["Discord"].set(f"Failed · {str(exc)[:70]}")
-            if webhook_url:
-                deliveries.append(("Discord", send_discord_alert, (webhook_url, detection), {}))
-        if config.ntfy_enabled and ntfy_configured(config):
-            deliveries.append(
-                ("ntfy", send_ntfy_alert, (config, detection), {"attachment_path": None})
-            )
-        if config.phone_alerts_enabled:
-            try:
-                credentials, _source = load_phone_alert_credentials(config)
-            except Exception as exc:
-                credentials = None
-                self.channel_status_vars["Pushover"].set(f"Failed · {str(exc)[:70]}")
-            if credentials:
-                deliveries.append(
-                    (
-                        "Pushover",
-                        send_phone_alert,
-                        (credentials, detection),
-                        {"sound": config.phone_sound, "attachment_path": None},
-                    )
-                )
-
-        for label, target, args, kwargs in deliveries:
-            self.channel_status_vars[label].set("Sending…")
-            threading.Thread(
-                target=self._deliver_limited_deal_alert,
-                args=(label, target, args, kwargs, detection, deal.starts_at),
-                name=f"DroidAlertsLimitedDeal{label}",
-                daemon=True,
-            ).start()
-        self.refresh_logs(update_detail=False)
-
-    def _deliver_limited_deal_alert(
-        self,
-        label: str,
-        target,
-        args: tuple[object, ...],
-        kwargs: dict[str, object],
-        detection: Detection,
-        starts_at: str,
-    ) -> None:
-        try:
-            result = target(*args, **kwargs)
-            success = bool(getattr(result, "success", False))
-            detail = str(getattr(result, "message", "") or "")
-        except Exception as exc:
-            success = False
-            detail = str(exc)
-        delivery_event: dict[str, object] = {
-            "ts": timestamp(),
-            "event_type": "delivery",
-            "source": "limited_deal",
-            "channel": label,
-            "success": success,
-            "detail": detail,
-            "droid": detection.droid,
-            "rarity": detection.rarity,
-            "starts_at": starts_at,
-            "alerted": True,
-            "is_priority": True,
-            "score": detection.score,
-        }
-        append_event(delivery_event)
-        self._post_to_ui(
-            lambda label=label, event=delivery_event: self._limited_deal_delivery_finished(
-                label, event
-            )
-        )
-
-    def _limited_deal_delivery_finished(
-        self, label: str, event: dict[str, object]
-    ) -> None:
-        success = bool(event.get("success"))
-        detail = str(event.get("detail") or "")
-        self.channel_status_vars[label].set(
-            "Delivered just now" if success else f"Failed · {detail[:70]}"
+        self._dispatch_gui_alert(
+            config,
+            detection,
+            delivery_source="limited_deal",
+            delivery_rarity=detection.rarity,
+            sound_error_prefix="Limited Deal sound failed",
+            popup_error_prefix="Limited Deal popup failed",
+            thread_name_prefix="DroidAlertsLimitedDeal",
+            extra_delivery_fields={"starts_at": deal.starts_at},
         )
         self.refresh_logs(update_detail=False)
 
@@ -5372,23 +5477,10 @@ class DroidAlertsApp:
         return text or "just now"
 
     def refresh_channel_statuses(self) -> None:
-        config = self.config if hasattr(self, "config") else load_config()
-        self.channel_status_vars["Popup"].set("Ready" if config.popup_enabled else "Off")
-        self.channel_status_vars["Sound"].set("Ready" if config.sound_enabled else "Off")
-
-        def configured(check) -> bool:
-            try:
-                return bool(check(config))
-            except Exception:
-                return False
-
-        checks = (
-            ("Discord", config.discord_enabled, configured(discord_webhook_configured)),
-            ("ntfy", config.ntfy_enabled, configured(ntfy_configured)),
-            ("Pushover", config.phone_alerts_enabled, configured(phone_alerts_configured)),
-        )
-        for label, enabled, configured in checks:
-            self.channel_status_vars[label].set("Ready" if enabled and configured else ("Off" if configured else "Not configured"))
+        # The toggle already communicates enabled/off. Keep this column for
+        # transient test and delivery results instead of repeating readiness.
+        for status in self.channel_status_vars.values():
+            status.set("")
 
     def _start_runtime_features(self) -> None:
         self.config = load_config()
@@ -5601,6 +5693,7 @@ class DroidAlertsApp:
             and not selected
             and not bool(self._value("rebirth_ready_alert_enabled"))
             and not bool(self._value("rebirth_alert_enabled"))
+            and not bool(self._value("cb23_mission_alert_enabled"))
             and not self._confirm_message(
                 "No Priority Alerts",
                 "Continue with no priority alerts selected?",
@@ -5677,6 +5770,9 @@ class DroidAlertsApp:
         config.extra_checks = bool(self._value("extra_checks"))
         config.start_watcher_on_launch = bool(self._value("start_watcher_on_launch"))
         config.rebirth_alert_enabled = bool(self._value("rebirth_alert_enabled"))
+        config.cb23_mission_alert_enabled = bool(
+            self._value("cb23_mission_alert_enabled")
+        )
         config.ui_theme = normalize_theme_key(self._value("ui_theme"))
         config.belt_overlay_enabled = bool(self._value("belt_overlay_enabled"))
         config.belt_dev_mode = bool(self._value("belt_dev_mode"))
@@ -6252,13 +6348,11 @@ class DroidAlertsApp:
         if channel == "discord":
             webhook_url, _source = load_discord_webhook(config)
             if not webhook_url:
-                self.channel_status_vars[label].set("Not configured")
                 self.detail_var.set("Set up Discord before testing it")
                 return False
             target, args = send_discord_alert, (webhook_url, detection)
         elif channel == "ntfy":
             if not ntfy_configured(config):
-                self.channel_status_vars[label].set("Not configured")
                 self.detail_var.set("Set up ntfy before testing it")
                 return False
             target, args, kwargs = send_ntfy_alert, (config, detection), {"attachment_path": None}
@@ -6270,7 +6364,6 @@ class DroidAlertsApp:
                 self.detail_var.set(f"Pushover credentials could not be read: {exc}")
                 return False
             if not credentials:
-                self.channel_status_vars[label].set("Not configured")
                 self.detail_var.set("Set up Pushover before testing it")
                 return False
             target, args, kwargs = (
@@ -6380,11 +6473,24 @@ class DroidAlertsApp:
         if thread is not None and self.watch_thread is not thread:
             return
         reason = self._watch_stop_reason
+        restart = (
+            self._watch_restart_after_stop
+            and reason == "display-refresh"
+            and not self._shutting_down
+        )
+        self._watch_restart_after_stop = False
         if self._watch_segment_started is not None:
             self.session_monitoring_seconds += time.monotonic() - self._watch_segment_started
             self._watch_segment_started = None
         self.watch_thread = None
         self.stop_event = None
+        self._watch_stop_reason = ""
+        if restart:
+            self._set_watcher_state("Running")
+            self.watcher_status_var.set("Restarting screen capture…")
+            self.watcher_detail_var.set("Applying the new display resolution")
+            self.root.after(100, self.start_watcher)
+            return
         if exc is None:
             self._set_watcher_state("Stopped")
             self.watcher_status_var.set("Ready to watch")
@@ -6396,7 +6502,6 @@ class DroidAlertsApp:
             self.watcher_detail_var.set(str(exc))
             self.detail_var.set(f"Watcher stopped: {exc}")
             self._show_message("Watcher", str(exc), tone="danger")
-        self._watch_stop_reason = ""
         self._maybe_close_device_capture_session()
 
     def stop_watcher(self, *, reason: str = "manual") -> None:
@@ -7206,6 +7311,7 @@ class DroidAlertsApp:
         from .updater import exit_for_external_update, restart_program
 
         self._shutting_down = True
+        self._watch_restart_after_stop = False
         self._belt_restart_after_stop = False
         self.detail_var.set("Update installed, restarting...")
         self.app_telemetry.stop()
@@ -7234,6 +7340,7 @@ class DroidAlertsApp:
 
     def on_close(self) -> None:
         self._shutting_down = True
+        self._watch_restart_after_stop = False
         self._belt_restart_after_stop = False
         self.app_telemetry.stop()
         if self.limited_deal_service is not None:
@@ -7251,8 +7358,12 @@ class DroidAlertsApp:
             self._limited_deal_countdown_after_id,
             self._storage_after_id,
             self._update_poll_after_id,
+            self._first_time_intro_after_id,
+            self._discord_offer_after_id,
+            self._display_geometry_after_id,
             self._belt_poll_after_id,
             self._options_scrollregion_after_id,
+            self._page_prime_after_id,
             self._macos_repaint_after_id,
         ):
             if after_id is not None:
@@ -7273,11 +7384,50 @@ class DroidAlertsApp:
         self.root.destroy()
 
 
-def run_gui() -> None:
+def run_gui(*, startup_splash=None) -> None:
     # DPI awareness must be set before the first window exists, or Windows
     # bitmap-scales the UI and fixed sizes stop matching font metrics.
     set_dpi_awareness()
     config = load_config()
-    root = make_root(config.ui_theme)
-    DroidAlertsApp(root, config=config)
+    root = startup_splash.root if startup_splash is not None else make_root(config.ui_theme)
+    if startup_splash is not None:
+        startup_splash.set_status("Loading dashboard…")
+    try:
+        app = DroidAlertsApp(
+            root,
+            config=config,
+            defer_startup_prompts=startup_splash is not None,
+        )
+        if startup_splash is not None:
+            # Do not let the idle page-primer run during the hidden first-frame
+            # paint; only Dashboard is needed before the window is revealed.
+            if app._page_prime_after_id is not None:
+                root.after_cancel(app._page_prime_after_id)
+                app._page_prime_after_id = None
+            startup_splash.lift()
+            transparent = False
+            try:
+                root.attributes("-alpha", 0.0)
+                transparent = True
+            except tk.TclError:
+                pass
+            root.deiconify()
+            # Modal startup prompts were deferred above, so this full update
+            # can paint every dashboard widget behind the splash without a
+            # What's New dialog interrupting splash cleanup.
+            root.update()
+            if transparent:
+                root.attributes("-alpha", 1.0)
+            root.update_idletasks()
+            startup_splash.close()
+            root.lift()
+            app.schedule_startup_prompts(first_delay_ms=100, discord_delay_ms=500)
+            if app._unprimed_tabs:
+                app._page_prime_after_id = root.after_idle(app._prime_next_tab)
+    except BaseException:
+        if startup_splash is not None:
+            startup_splash.destroy()
+        else:
+            root.destroy()
+        raise
     root.mainloop()

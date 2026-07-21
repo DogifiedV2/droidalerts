@@ -12,6 +12,9 @@
   "capture_device_pid": null,
   "capture_device_backend": 0,
   "capture_interval_seconds": 0.25,
+  "rebirth_ready_alert_enabled": false,
+  "cb23_mission_alert_enabled": false,
+  "rebirth_scan_interval_seconds": 5.0,
   "dedupe_seconds": 12.0,
   "alert_cooldown_seconds": 10.0,
   "sound_enabled": true,
@@ -51,6 +54,7 @@
   "phone_env_user": "DROIDWATCHER_PHONE_ALERTS_USER",
   "phone_sound": "siren",
   "phone_include_attachment": false,
+  "channel_disabled_alerts": {},
   "update_check_enabled": true,
   "anonymous_app_stats_url": "https://gonk.tools/api/droid-alerts/app-heartbeat",
   "anonymous_stats_url": "https://gonk.tools/api/droid-alerts/heartbeat",
@@ -106,6 +110,18 @@
     ],
     [
       "Beskar",
+      "Mythic"
+    ],
+    [
+      "Galactic",
+      "Epic"
+    ],
+    [
+      "Galactic",
+      "Legendary"
+    ],
+    [
+      "Galactic",
       "Mythic"
     ]
   ]

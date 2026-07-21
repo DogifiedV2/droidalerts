@@ -5,13 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
-from . import classifier
 from .capture import PixelBox
 from .config import CALIBRATION_FILE, config_dir
-from .normalize import estimate_scale, normalize_band
-from .row_finder import find_candidate_rows
 
 # Position-notes "safer" auto box for standard wide captures.
 AUTO_BOX_PERCENT = {"left": 0.0, "top": 0.47, "width": 0.33, "height": 0.16}
@@ -58,57 +53,6 @@ def auto_box_profile(screen_width: int, screen_height: int) -> str:
     if aspect >= ULTRAWIDE_ASPECT_MIN:
         return "ultrawide"
     return "wide"
-
-
-@dataclass
-class ValidationResult:
-    rows_found: int
-    evidence_rows: int
-
-    @property
-    def ok(self) -> bool:
-        return self.evidence_rows >= 1
-
-
-def validate_region(
-    band_bgr: np.ndarray,
-    templates: list[classifier.Template],
-    *,
-    screen_height: int | None = None,
-    screen_width: int | None = None,
-    rarity_threshold: float = 0.35,
-) -> ValidationResult:
-    """Position-notes recommendation: do not rely on percentages alone.
-
-    Requires at least one candidate row showing icon-color-blob evidence plus
-    rarity-word template evidence on the normalized band. Note: an empty chat
-    box legitimately fails this. Callers must only count failures on frames
-    that contain candidate rows.
-    """
-    candidates = find_candidate_rows(band_bgr)
-    scale, _method = estimate_scale(
-        screen_height=screen_height, screen_width=screen_width, candidates=candidates
-    )
-    normalized = normalize_band(band_bgr, scale)
-    norm_candidates = find_candidate_rows(normalized.image)
-    if not norm_candidates:
-        return ValidationResult(rows_found=0, evidence_rows=0)
-
-    rarity_matches = classifier.rarity_candidates(normalized.image, templates, rarity_threshold)
-    evidence_rows = 0
-    for candidate in norm_candidates:
-        center = (candidate.y0 + candidate.y1) // 2
-        has_rarity = any(
-            abs(((m.box[1] + m.box[3]) // 2) - center) <= 22 for m in rarity_matches
-        )
-        if not has_rarity:
-            continue
-        y0 = max(0, center - 22)
-        row = normalized.image[y0 : y0 + 44, :]
-        droid, score = classifier.best_droid_type(row)
-        if score >= 0.08 or classifier.has_spawn_phrase_structure(row):
-            evidence_rows += 1
-    return ValidationResult(rows_found=len(norm_candidates), evidence_rows=evidence_rows)
 
 
 @dataclass

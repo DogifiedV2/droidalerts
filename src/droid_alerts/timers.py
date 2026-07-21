@@ -39,7 +39,7 @@ TIMER_COLORS = {
 
 BASE_WIDTH = 376
 BASE_HEIGHT = 72
-EDIT_BAR_HEIGHT = 40
+EDIT_BAR_HEIGHT = 72
 MIN_SCALE = 0.6
 MAX_SCALE = 2.0
 DEFAULT_CENTER_X_RATIO = 0.5
@@ -258,8 +258,7 @@ class DroidTimersOverlay:
         self._refresh_times()
 
     def _build_edit_bar(self, card_top: int) -> None:
-        """Small control bar under the card: size -/+, Done. Drag anywhere
-        on the strip to move it."""
+        """Controls below the card for resizing, saving, and restoring defaults."""
         canvas = self.canvas
         s = self.scale
         bar_h = int(EDIT_BAR_HEIGHT * s)
@@ -287,6 +286,31 @@ class DroidTimersOverlay:
         canvas.tag_bind("size-down", "<Button-1>", lambda _e: self._resize_step(-0.1))
         canvas.tag_bind("size-up", "<Button-1>", lambda _e: self._resize_step(0.1))
         canvas.tag_bind("done", "<Button-1>", lambda _e: self.exit_edit_mode())
+
+        reset_y1 = y2 + int(5 * s)
+        reset_y2 = card_top + bar_h - int(2 * s)
+        reset_x = width // 2
+        reset_half_w = int(78 * s)
+        _rounded_rect(
+            canvas,
+            reset_x - reset_half_w,
+            reset_y1,
+            reset_x + reset_half_w,
+            reset_y2,
+            max(1, (reset_y2 - reset_y1) // 2),
+            fill=CARD_BG_SOFT,
+            outline="#5bc0de",
+            tags=("reset-default",),
+        )
+        canvas.create_text(
+            reset_x,
+            (reset_y1 + reset_y2) // 2,
+            text="Reset to default",
+            fill="#f5f6fa",
+            font=button_font,
+            tags=("reset-default",),
+        )
+        canvas.tag_bind("reset-default", "<Button-1>", lambda _e: self._reset_layout())
 
     def _refresh_times(self) -> None:
         for kind, item in self._time_items.items():
@@ -343,12 +367,18 @@ class DroidTimersOverlay:
         self.scale = new_scale
         self._build_card()
 
+    def _reset_layout(self) -> None:
+        self.scale = 1.0
+        self.center_x_ratio = DEFAULT_CENTER_X_RATIO
+        self.top_y_ratio = DEFAULT_TOP_Y_RATIO
+        self._build_card()
+
     def _on_press(self, event: "tk.Event") -> None:
         if not self.edit_mode:
             return
         # Ignore presses on the control buttons (they have their own bindings).
         tags = self.canvas.gettags("current")
-        if any(tag in ("size-down", "size-up", "done") for tag in tags):
+        if any(tag in ("size-down", "size-up", "done", "reset-default") for tag in tags):
             return
         self._drag_offset = (event.x_root - self.window.winfo_x(), event.y_root - self.window.winfo_y())
 

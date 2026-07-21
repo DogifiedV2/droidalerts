@@ -19,6 +19,7 @@ from droid_alerts.config import AppConfig
 from droid_alerts.classifier import Detection
 from droid_alerts.gui import (
     DISCORD_COMMUNITY_URL,
+    STATS_URL,
     TRACKER_URL,
     WIKI_URL,
     DroidAlertsApp,
@@ -318,26 +319,25 @@ class LimitedDealSchedulingTests(unittest.TestCase):
 class LimitedDealAlertDeliveryTests(unittest.TestCase):
     def test_first_time_popup_is_triggered_only_when_limited_deals_tab_opens(self):
         app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app.root = Mock()
-        app.notebook = Mock()
         app.limited_deals_tab = object()
         app.show_limited_deals_intro_if_needed = Mock()
 
-        app.root.nametowidget.return_value = object()
+        app._selected_tab = object()
         DroidAlertsApp._on_limited_deals_tab_opened(app)
         app.show_limited_deals_intro_if_needed.assert_not_called()
 
-        app.root.nametowidget.return_value = app.limited_deals_tab
+        app._selected_tab = app.limited_deals_tab
         DroidAlertsApp._on_limited_deals_tab_opened(app)
         app.show_limited_deals_intro_if_needed.assert_called_once_with()
 
     def test_sidebar_external_links_open_the_requested_destinations(self):
-        urls = (DISCORD_COMMUNITY_URL, TRACKER_URL, WIKI_URL)
+        urls = (DISCORD_COMMUNITY_URL, TRACKER_URL, WIKI_URL, STATS_URL)
         self.assertEqual(
             (
                 "https://discord.gg/ZmFPjS4784",
                 "https://gonk.tools/tracker",
                 "https://gonk.tools/wiki",
+                "https://gonk.tools/stats",
             ),
             urls,
         )
