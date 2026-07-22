@@ -116,9 +116,11 @@ def read_source(source_root: Path, relative_path: str) -> tuple[Path, np.ndarray
     return source_path, image
 
 
-def clear_pngs(path: Path) -> None:
+def clear_pngs(path: Path, *, preserve_prefixes: tuple[str, ...] = ()) -> None:
     path.mkdir(parents=True, exist_ok=True)
     for old in path.glob("*.png"):
+        if old.name.startswith(preserve_prefixes):
+            continue
         old.unlink()
 
 
@@ -126,7 +128,9 @@ def build_templates(source_root: Path, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     clear_pngs(out_dir)
     roi_dir = out_dir / "rarity_rois"
-    clear_pngs(roi_dir)
+    # Galactic prototypes are built from the separately reviewed debug-data
+    # corpus. A normal current_ui rebuild must not silently delete them.
+    clear_pngs(roi_dir, preserve_prefixes=("Galactic__",))
     crafted_dir = out_dir / "crafted_phrases"
     clear_pngs(crafted_dir)
 

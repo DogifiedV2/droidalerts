@@ -1,0 +1,983 @@
+{
+  "fixtures": {
+    "live_20260708/00db4e95_diamondmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/069bdfa8_beskarlegendary_fp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_no_alerts": true,
+      "note": "live FP 2026-07-08 (alerted Beskar Legendary): rebirth-13 milestone line on orange background"
+    },
+    "live_20260708/1246b99c_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/1593e5d6_beskarepic_fp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "note": "Rainbow Epic spawn; regression rejects the former Beskar Epic misclassification.",
+      "rows": [
+        [
+          "Rainbow",
+          "Epic"
+        ]
+      ],
+      "expect_alerts": [
+        [
+          "Rainbow",
+          "Epic"
+        ]
+      ],
+      "reject_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/23fc3e3c_rainbowmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/259b7684_diamondmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/369a460c_beskarlegendary_unlabeled.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "note": "real Legendary spawn line, droid word occluded by smokedbyjacob nameplate; true droid unknown"
+    },
+    "live_20260708/52efc52a_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/5b9020c8_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/5d60fadf_diamondmythic_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/5eff1103_rainbowmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/65986506_beskarlegendary_fp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_no_alerts": true,
+      "note": "live FP 2026-07-08 (alerted Beskar Legendary): Diamond Common spawn + orange COMPLETE quest banners"
+    },
+    "live_20260708/66cde3b4_beskarlegendary_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Legendary"
+        ]
+      ]
+    },
+    "live_20260708/6f22bc23_beskarmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "note": "row visibly reads Beskar Droid (Mythic); gray word evidence must not be overridden by unrelated cyan scenery",
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/76428664_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/77a4fec2_beskarepic_fp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "note": "Rainbow Epic spawn; regression rejects the former Beskar Epic misclassification.",
+      "rows": [
+        [
+          "Rainbow",
+          "Epic"
+        ]
+      ],
+      "expect_alerts": [
+        [
+          "Rainbow",
+          "Epic"
+        ]
+      ],
+      "reject_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/7ac35698_rainbowmythic_tp.png": {
+      "mode": "band",
+      "scale": 0.8462,
+      "expect_alerts": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/81ea88f6_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/9a18ca3b_beskarmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/9e545a21_beskarlegendary_fp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_no_alerts": true,
+      "note": "live FP 2026-07-08 (alerted Beskar Legendary): Beskar Common spawn + orange COMPLETE quest banner read as Legendary"
+    },
+    "live_20260708/a6863b4e_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/a959ac3f_beskarlegendary_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Legendary"
+        ]
+      ]
+    },
+    "live_20260708/abb76a2c_beskarlegendary_fp.png": {
+      "mode": "band",
+      "scale": 0.8462,
+      "expect_no_alerts": true,
+      "note": "live FP 2026-07-08 (alerted Beskar Legendary): Beskar Rare spawn in front of orange billboard"
+    },
+    "live_20260708/b63e1dd1_rainbowmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/b7e704cb_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/bac0bee3_beskarlegendary_fp.png": {
+      "mode": "band",
+      "scale": 0.8462,
+      "expect_no_alerts": true,
+      "note": "live FP 2026-07-08 (alerted Beskar Legendary): Diamond Legendary spawn, nameplate read as Beskar"
+    },
+    "live_20260708/bacede22_beskarmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/c0d1dfb5_diamondmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/c1d48498_beskarlegendary_fp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_no_alerts": true,
+      "note": "live FP 2026-07-08 (alerted Beskar Legendary): rebirth-12 milestone line + Craft 2 Legendary Droids quest"
+    },
+    "live_20260708/c678a3c6_beskarlegendary_fp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_no_alerts": true,
+      "note": "live FP 2026-07-08 (alerted Beskar Legendary): MONO-WLKR promo card with LEGENDARY badge"
+    },
+    "live_20260708/d1d8cb72_diamondmythic_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/d9d70357_beskarlegendary_fp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_no_alerts": true,
+      "note": "live FP 2026-07-08 (alerted Beskar Legendary): Diamond Legendary spawn + gold hexagon, word verdict fell to Beskar icon path"
+    },
+    "live_20260708/db991bad_rainbowmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/e088d647_beskarlegendary_fp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_no_alerts": true,
+      "note": "live FP 2026-07-08 (alerted Beskar Legendary): gold coin + 360MM money counter"
+    },
+    "live_20260708/ee33a2f4_beskarlegendary_fp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_no_alerts": true,
+      "note": "live FP 2026-07-08 (alerted Beskar Legendary): gold coins + 444M money counter + Sell 40 Droids quest"
+    },
+    "live_20260708/f0568241_diamondmythic_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/f1814f01_rainbowmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/febc3448_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/07a23165_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/118fb764_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/1294b0db_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/330afdcc_beskarmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/38d45c16_beskarlegendary_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Legendary"
+        ]
+      ]
+    },
+    "live_20260708/40e11a16_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/57b9e62a_beskarlegendary_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Legendary"
+        ]
+      ]
+    },
+    "live_20260708/5f271f00_beskarmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/5fa0cf2f_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/71cdab0e_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/a0798c87_beskarlegendary_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Legendary"
+        ]
+      ]
+    },
+    "live_20260708/a84ffdca_beskarmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "note": "all three visible rows explicitly read Beskar Droid",
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/c8591dee_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/dae9bda4_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/0a7eb02d_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/56c62119_beskarlegendary_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Legendary"
+        ]
+      ]
+    },
+    "live_20260708/6201c8f4_beskarlegendary_tp.png": {
+      "mode": "band",
+      "scale": 0.6346,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Legendary"
+        ]
+      ]
+    },
+    "live_20260708/652eedf5_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/6f7da0b3_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/72ce32db_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/76a72063_rainbowmythic_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ]
+    },
+    "live_20260708/782b46b9_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/836cbf6f_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/959ff5bb_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/aea5a665_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/e8dfcc0b_beskarepic_tp.png": {
+      "mode": "band",
+      "scale": 0.75,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ]
+    },
+    "live_20260708/effbe7e1_beskarlegendary_tp.png": {
+      "mode": "band",
+      "scale": 0.6346,
+      "expect_alerts": [
+        [
+          "Beskar",
+          "Legendary"
+        ]
+      ]
+    },
+    "live_20260708/b73a1f30_diamondmythic_tp.png": {
+      "mode": "band",
+      "scale": 1.0,
+      "expect_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ]
+    },
+    "report_20260710/1c604b7b_diamondmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        1920,
+        1080
+      ],
+      "reject_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ],
+      "note": "No Diamond Mythic row is present; visible rows are Diamond Common and Beskar Mythic."
+    },
+    "report_20260710/c7687bb8_beskarlegendary_fp.png": {
+      "mode": "band",
+      "screen": [
+        1920,
+        1080
+      ],
+      "reject_alerts": [
+        [
+          "Beskar",
+          "Legendary"
+        ]
+      ],
+      "note": "visible line is MuNTeRx Droid (Legendary), not Beskar Droid"
+    },
+    "report_20260710/e9d94a40_beskarmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        1920,
+        1080
+      ],
+      "reject_alerts": [
+        [
+          "Beskar",
+          "Mythic"
+        ]
+      ],
+      "note": "visible line is Beskar Droid (Common), not Mythic"
+    },
+    "report_20260710/431eed0d_beskarmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        2560,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Beskar",
+          "Mythic"
+        ]
+      ],
+      "note": "image only shows crafted Rainbow Droid; no Beskar Mythic spawn"
+    },
+    "report_20260710/897be87d_diamondmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        2560,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ],
+      "note": "No Diamond Mythic row is present; the matching rarity belongs to Beskar."
+    },
+    "report_20260710/b4d7a1c0_beskarmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        2560,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Beskar",
+          "Mythic"
+        ]
+      ],
+      "note": "No droid spawn line is present; the visible text is a player rebirth notification."
+    },
+    "report_20260710/e245aa32_rainbowmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        2560,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ],
+      "note": "Visible spawn is Diamond Droid Mythic, not Rainbow Droid Mythic."
+    },
+    "report_20260710/1d5135d2_rainbowmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        2560,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ],
+      "note": "Only Diamond Droid Common and Diamond Droid Rare are visible; no Rainbow Mythic."
+    },
+    "report_20260710/00691f1a_beskarepic_fp.png": {
+      "mode": "band",
+      "screen": [
+        1920,
+        1080
+      ],
+      "reject_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ],
+      "note": "Visible spawn is Rainbow Droid Epic, not Beskar Droid Epic."
+    },
+    "report_20260710/8f043764_diamondmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        1920,
+        1080
+      ],
+      "reject_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ],
+      "note": "Image shows Beskar Droid (Mythic), not Diamond Droid"
+    },
+    "report_20260710/0a69e78e_diamondmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        2560,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ],
+      "note": "visible line is Beskar Droid (Mythic), not Diamond Droid"
+    },
+    "report_20260710/1693bd9d_beskarepic_fp.png": {
+      "mode": "band",
+      "screen": [
+        2560,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Beskar",
+          "Epic"
+        ]
+      ],
+      "note": "visible line is RedCityChudroid (Epic), not Beskar Droid"
+    },
+    "report_20260710/6a1b5fe5_diamondmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        2560,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ],
+      "note": "No Diamond Mythic row is present; visible rows are Beskar Mythic and Beskar Rare."
+    },
+    "report_20260710/0570ec6b_beskarlegendary_fp.png": {
+      "mode": "band",
+      "screen": [
+        3440,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Beskar",
+          "Legendary"
+        ]
+      ],
+      "note": "No Beskar Legendary row is present; visible rows are Beskar Mythic, Beskar Common, and Rainbow Common."
+    },
+    "report_20260710/2132e067_diamondmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        3440,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ],
+      "note": "No Diamond Mythic row is present; visible rows are Beskar Common and Beskar Mythic."
+    },
+    "report_20260710/4c6bfafa_diamondmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        3440,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ],
+      "note": "Image shows Diamond Rare and Rainbow Legendary; no Diamond Mythic"
+    },
+    "report_20260710/52b1ea66_rainbowmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        3440,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ],
+      "note": "Image shows Rainbow Common entries only; no Mythic"
+    },
+    "report_20260710/629c6611_rainbowmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        3440,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ],
+      "note": "Image shows Diamond Common; no Rainbow Mythic"
+    },
+    "report_20260710/ce3f5a0a_beskarlegendary_fp.png": {
+      "mode": "band",
+      "screen": [
+        3440,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Beskar",
+          "Legendary"
+        ]
+      ],
+      "note": "Image shows Beskar Common and Rare; no Legendary"
+    },
+    "report_20260710/dfbc2984_beskarmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        3440,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Beskar",
+          "Mythic"
+        ]
+      ],
+      "note": "Image shows lower-rarity Beskar entries; no Mythic"
+    },
+    "report_20260710/e01a59a7_rainbowmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        3440,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ],
+      "note": "Image shows Diamond Droid (Mythic), not Rainbow Droid"
+    },
+    "report_20260710/729360b6_rainbowmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        2560,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ],
+      "note": "no spawn notification text is visible; only a Rainbow Droid model is on screen"
+    },
+    "report_20260710/7743fc22_diamondmythic_fp.png": {
+      "mode": "band",
+      "screen": [
+        2560,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Diamond",
+          "Mythic"
+        ]
+      ],
+      "note": "visible line is Beskar Droid (Mythic), not Diamond Droid"
+    },
+    "report_20260710/e962a8d8_beskarlegendary_fp.png": {
+      "mode": "band",
+      "screen": [
+        2560,
+        1440
+      ],
+      "reject_alerts": [
+        [
+          "Beskar",
+          "Legendary"
+        ]
+      ],
+      "note": "no Beskar Legendary spawn is visible; only Beskar Rare/Common and a crafting message"
+    }
+  }
+}

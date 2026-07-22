@@ -31,6 +31,7 @@ from droid_alerts.pipeline import Pipeline  # noqa: E402
 from droid_alerts.region import auto_box_percent  # noqa: E402
 
 FIXTURES_DIR = BASE_DIR / "tests" / "fixtures"
+FIXTURE_MANIFEST = BASE_DIR / "tests" / "fixture_manifest.json"
 RESULTS_DIR = BASE_DIR / "tests" / "results"
 
 # 2026-07-06: the Beskar Mythic gap closed. A real full-row capture from the
@@ -39,7 +40,7 @@ KNOWN_GAPS: list[str] = []
 
 
 def load_manifest() -> dict:
-    return json.loads((FIXTURES_DIR / "manifest.json").read_text(encoding="utf-8-sig"))["fixtures"]
+    return json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8-sig"))["fixtures"]
 
 
 def evaluate_fixture(pipeline: Pipeline, path: Path, spec: dict) -> dict:

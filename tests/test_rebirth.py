@@ -11,18 +11,47 @@ import numpy as np
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
+sys.path.insert(0, str(BASE_DIR / "tests"))
 
 from droid_alerts.classifier import Detection
 from droid_alerts.config import AppConfig
 from droid_alerts.notifications import alert_title, event_text
+from droid_alerts.normalize import scale_from_screen
 from droid_alerts.rebirth import (
     RebirthAlertTracker,
     RebirthHudDetector,
     RebirthObservation,
 )
+from resolution_matrix import RESOLUTION_CASES, resize_for_screen
 
 
 FIXTURES = BASE_DIR / "tests" / "rebirth_fixtures"
+
+
+def _rebirth_hud_at_resolution(
+    image: np.ndarray,
+    screen_width: int,
+    screen_height: int,
+) -> np.ndarray:
+    """Scale a real 1080p HUD crop and reproduce narrower-display bars."""
+
+    scaled = resize_for_screen(
+        image,
+        source_scale=scale_from_screen(1080, 1920),
+        target_scale=scale_from_screen(screen_height, screen_width),
+    )
+    bottom_bar = max(0, round((screen_height - screen_width * 9 / 16) / 2))
+    if bottom_bar:
+        scaled = cv2.copyMakeBorder(
+            scaled,
+            0,
+            bottom_bar,
+            0,
+            0,
+            cv2.BORDER_CONSTANT,
+            value=0,
+        )
+    return scaled
 
 
 class RebirthHudDetectorTests(unittest.TestCase):
@@ -69,6 +98,35 @@ class RebirthHudDetectorTests(unittest.TestCase):
 
         self.assertTrue(observation.ready)
         self.assertEqual(25, observation.level)
+
+    def test_reads_ready_and_level_across_shared_resolution_matrix(self):
+        for filename, expected_level in (
+            ("rebirth_22_ready.png", 22),
+            ("rebirth_25_ready.png", 25),
+        ):
+            source = cv2.imread(str(FIXTURES / filename))
+            self.assertIsNotNone(source)
+            for case in RESOLUTION_CASES:
+                with self.subTest(
+                    fixture=filename,
+                    resolution=f"{case.width}x{case.height}",
+                ):
+                    image = _rebirth_hud_at_resolution(
+                        source,
+                        case.width,
+                        case.height,
+                    )
+                    observation = self.detector.detect(
+                        image,
+                        screen_height=case.height,
+                        screen_width=case.width,
+                    )
+
+                    self.assertTrue(
+                        observation.ready,
+                        f"ready_score={observation.ready_score:.4f}",
+                    )
+                    self.assertEqual(expected_level, observation.level)
 
     def test_ready_without_level_fails_closed(self):
         image = cv2.imread(str(FIXTURES / "rebirth_22_ready.png"))

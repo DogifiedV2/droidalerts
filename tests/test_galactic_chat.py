@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import sys
 import unittest
+from collections import Counter
 from pathlib import Path
 
 import cv2
@@ -13,7 +15,10 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.classifier import (  # noqa: E402
     classify_galactic_droid_word,
+    collect_word_matches,
+    galactic_rarity_roi_fallback,
     load_droid_word_templates,
+    rarity_text_color_counts,
 )
 from droid_alerts.pipeline import Pipeline  # noqa: E402
 
@@ -115,6 +120,69 @@ TRAINING_REVIEW_CASES = (
 )
 
 
+REVIEWED_FALSE_TARGET_CASES = (
+    (
+        "review_false_galactic_rare_blue_common_1482a3d0.png",
+        (2560, 1080),
+        ("Galactic", "Rare"),
+    ),
+    (
+        "review_false_galactic_legendary_rare_ca00e765.png",
+        (2560, 1440),
+        ("Galactic", "Legendary"),
+    ),
+    (
+        "review_false_galactic_mythic_rare_c5e2ba9f.png",
+        (1440, 1080),
+        ("Galactic", "Mythic"),
+    ),
+    (
+        "review_false_galactic_common_rare_2928047e.png",
+        (2560, 1080),
+        ("Galactic", "Common"),
+    ),
+    (
+        "review_false_beskar_epic_rare_467a79d9.png",
+        (2560, 1440),
+        ("Beskar", "Epic"),
+    ),
+    (
+        "review_false_beskar_epic_common_be167e75.png",
+        (2560, 1440),
+        ("Beskar", "Epic"),
+    ),
+)
+
+
+REVIEWED_RECALL_CASES = (
+    (
+        "review_recall_beskar_legendary_df23bdf0.png",
+        (1440, 1080),
+        ("Beskar", "Legendary"),
+    ),
+    (
+        "review_recall_beskar_epic_92d17d4d.png",
+        (2560, 1440),
+        ("Beskar", "Epic"),
+    ),
+    (
+        "review_recall_beskar_legendary_4f94003e.png",
+        (1920, 1080),
+        ("Beskar", "Legendary"),
+    ),
+    (
+        "review_recall_beskar_legendary_c1feb426.png",
+        (1920, 1080),
+        ("Beskar", "Legendary"),
+    ),
+    (
+        "review_recall_beskar_epic_c8a2e65f.png",
+        (1920, 1080),
+        ("Beskar", "Epic"),
+    ),
+)
+
+
 class GalacticChatRecognitionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -203,6 +271,42 @@ class GalacticChatRecognitionTests(unittest.TestCase):
                 self.assertIn(expected, detected)
                 self.assertNotIn(rejected, detected)
 
+    def test_reviewed_false_targets_stay_rejected(self):
+        fixture_dir = BASE_DIR / "tests" / "galactic_fixtures"
+        for filename, screen, rejected in REVIEWED_FALSE_TARGET_CASES:
+            with self.subTest(filename=filename):
+                image = cv2.imread(str(fixture_dir / filename), cv2.IMREAD_COLOR)
+                self.assertIsNotNone(image)
+
+                result = self.pipeline.detect(
+                    image,
+                    screen_width=screen[0],
+                    screen_height=screen[1],
+                )
+
+                self.assertNotIn(
+                    rejected,
+                    [(item.droid, item.rarity) for item in result.detections],
+                )
+
+    def test_reviewed_compact_alerts_are_not_lost(self):
+        fixture_dir = BASE_DIR / "tests" / "galactic_fixtures"
+        for filename, screen, expected in REVIEWED_RECALL_CASES:
+            with self.subTest(filename=filename):
+                image = cv2.imread(str(fixture_dir / filename), cv2.IMREAD_COLOR)
+                self.assertIsNotNone(image)
+
+                result = self.pipeline.detect(
+                    image,
+                    screen_width=screen[0],
+                    screen_height=screen[1],
+                )
+
+                self.assertIn(
+                    expected,
+                    [(item.droid, item.rarity) for item in result.detections],
+                )
+
     def test_reviewed_compact_galactic_rare_row_is_not_missed(self):
         fixture = (
             BASE_DIR
@@ -229,6 +333,65 @@ class GalacticChatRecognitionTests(unittest.TestCase):
         )
 
         self.assertTrue(template.is_file())
+
+    def test_reviewed_galactic_priority_roi_prototypes_are_bundled(self):
+        templates = self.pipeline.detector.rarity_roi_templates["Galactic"]
+        counts = Counter(template.rarity for template in templates)
+        manifest = json.loads(
+            (
+                BASE_DIR / "templates" / "galactic_rarity_rois_manifest.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        self.assertEqual({"Epic": 8, "Legendary": 8, "Mythic": 8}, dict(counts))
+        self.assertEqual(
+            {"Epic": 146, "Legendary": 58, "Mythic": 41},
+            manifest["selection"]["reviewedRows"],
+        )
+        self.assertTrue(all(template.image.shape == (44, 230) for template in templates))
+
+    def test_reviewed_galactic_roi_fallback_recognizes_priority_rarities(self):
+        fixture_dir = BASE_DIR / "tests" / "galactic_fixtures"
+        for filename, expected in (
+            ("galactic_epic_large_scale_100.png", "Epic"),
+            ("review_resolution_galactic_legendary_987c3480.png", "Legendary"),
+            ("review_resolution_galactic_mythic_c2956efc.png", "Mythic"),
+        ):
+            with self.subTest(filename=filename):
+                image = cv2.imread(str(fixture_dir / filename), cv2.IMREAD_COLOR)
+                result = self.pipeline.detect(
+                    image,
+                    screen_width=2560,
+                    screen_height=1440,
+                    keep_normalized=True,
+                )
+                detection = next(
+                    item
+                    for item in result.detections
+                    if (item.droid, item.rarity) == ("Galactic", expected)
+                )
+                y = detection.row_box[1]
+                word_matches = collect_word_matches(
+                    result.normalized_image,
+                    self.pipeline.detector.templates,
+                    min_score=0.20,
+                )
+                fallback = galactic_rarity_roi_fallback(
+                    result.normalized_image,
+                    y,
+                    self.pipeline.detector.rarity_roi_templates["Galactic"],
+                    rarity_text_color_counts(
+                        result.normalized_image,
+                        y,
+                        "Galactic",
+                        row_height=44,
+                    ),
+                    word_matches,
+                    row_height=44,
+                )
+
+                self.assertIsNotNone(fallback)
+                self.assertEqual(expected, fallback[0])
 
     def test_other_purple_words_do_not_become_galactic(self):
         for text in ("EPIC", "MYTHIC", "PURPLE SHOP"):

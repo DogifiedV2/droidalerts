@@ -1,9 +1,9 @@
-"""Evaluate an exported debug-detection batch against its false report.
+"""Evaluate an exported debug-detection batch against reviewed ground truth.
 
 Every submission folder is expected to contain ``metadata.json`` and
-``roi.png``. Submissions listed in the TSV are negative examples for their
-reported combo; every other submission is a positive example for the combo in
-its metadata.
+``roi.png``. The preferred JSON manifest labels each submission as ``real``,
+``false``, or ``uncertain``. The legacy false-only TSV format remains supported
+for older exports.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import cv2
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
+DEFAULT_GROUND_TRUTH = BASE_DIR / "tests" / "data_report_manifest.json"
 
 from droid_alerts.config import Thresholds, templates_dir  # noqa: E402
 from droid_alerts.pipeline import Pipeline  # noqa: E402
@@ -36,23 +37,81 @@ def load_false_ids(report_path: Path) -> dict[str, dict[str, str]]:
     return false_rows
 
 
+def load_ground_truth(manifest_path: Path) -> dict[str, dict[str, object]]:
+    payload = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        raise ValueError(f"Ground-truth manifest has no entries list: {manifest_path}")
+
+    truth: dict[str, dict[str, object]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError(f"Invalid ground-truth entry in {manifest_path}")
+        submission_id = str(entry.get("submissionId", ""))
+        status = str(entry.get("status", ""))
+        if not submission_id or status not in {"real", "false", "uncertain"}:
+            raise ValueError(f"Invalid ground-truth entry in {manifest_path}: {entry}")
+        if submission_id in truth:
+            raise ValueError(f"Duplicate submission ID in {manifest_path}: {submission_id}")
+        truth[submission_id] = entry
+    return truth
+
+
 def submission_dirs(root: Path) -> list[Path]:
     return sorted(path.parent for path in root.glob("*/*/metadata.json"))
 
 
-def evaluate(root: Path, false_report: Path, *, verbose: bool = False) -> int:
-    false_rows = load_false_ids(false_report)
+def evaluate(
+    root: Path,
+    *,
+    ground_truth: Path | None = None,
+    false_report: Path | None = None,
+    verbose: bool = False,
+) -> int:
+    if ground_truth is not None:
+        truth = load_ground_truth(ground_truth)
+        false_rows: dict[str, dict[str, str]] = {}
+    elif false_report is not None:
+        false_rows = load_false_ids(false_report)
+        truth = {}
+    else:
+        raise ValueError("A ground-truth manifest or false report is required")
     submissions = submission_dirs(root)
     pipeline = Pipeline(templates_dir(), Thresholds())
 
     positive_total = positive_passed = 0
     negative_total = negative_passed = 0
+    uncertain_total = skipped_total = 0
     versions: Counter[str] = Counter()
     failures: list[str] = []
     started = time.perf_counter()
 
     for index, folder in enumerate(submissions, start=1):
         metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
+        target = (metadata["detection"]["droid"], metadata["detection"]["rarity"])
+        submission_id = str(metadata["id"])
+        versions[str(metadata.get("appVersion", "?"))] += 1
+
+        if truth:
+            entry = truth.get(submission_id)
+            if entry is None:
+                skipped_total += 1
+                continue
+            manifest_target = (str(entry["droid"]), str(entry["rarity"]))
+            if manifest_target != target:
+                failures.append(
+                    f"manifest/metadata target mismatch for {folder}: "
+                    f"manifest={manifest_target}, metadata={target}"
+                )
+                continue
+            status = str(entry["status"])
+            if status == "uncertain":
+                uncertain_total += 1
+                continue
+            is_false = status == "false"
+        else:
+            is_false = submission_id in false_rows
+
         image = cv2.imread(str(folder / "roi.png"), cv2.IMREAD_COLOR)
         if image is None:
             failures.append(f"unreadable roi: {folder / 'roi.png'}")
@@ -64,11 +123,7 @@ def evaluate(root: Path, false_report: Path, *, verbose: bool = False) -> int:
             screen_width=int(resolution["width"]),
             screen_height=int(resolution["height"]),
         )
-        target = (metadata["detection"]["droid"], metadata["detection"]["rarity"])
         detected = [(detection.droid, detection.rarity) for detection in result.detections]
-        submission_id = str(metadata["id"])
-        is_false = submission_id in false_rows
-        versions[str(metadata.get("appVersion", "?"))] += 1
 
         if is_false:
             negative_total += 1
@@ -97,6 +152,10 @@ def evaluate(root: Path, false_report: Path, *, verbose: bool = False) -> int:
     print(f"versions: {dict(versions)}")
     print(f"valid detections: {positive_passed}/{positive_total}")
     print(f"false detections rejected: {negative_passed}/{negative_total}")
+    if uncertain_total:
+        print(f"uncertain detections skipped: {uncertain_total}")
+    if skipped_total:
+        print(f"out-of-scope submissions skipped: {skipped_total}")
     print(f"elapsed: {elapsed:.2f}s")
     if failures:
         print("failures:")
@@ -112,12 +171,21 @@ def main() -> int:
     parser.add_argument(
         "--false-report",
         type=Path,
-        help="TSV listing false submission paths (defaults to ROOT/false_detections.tsv).",
+        help="Legacy TSV listing false submission paths.",
+    )
+    parser.add_argument(
+        "--ground-truth",
+        type=Path,
+        help=f"Reviewed JSON manifest (defaults to {DEFAULT_GROUND_TRUTH}).",
     )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
-    report = args.false_report or args.root / "false_detections.tsv"
-    return evaluate(args.root, report, verbose=args.verbose)
+    if args.ground_truth and args.false_report:
+        parser.error("--ground-truth and --false-report are mutually exclusive")
+    if args.false_report:
+        return evaluate(args.root, false_report=args.false_report, verbose=args.verbose)
+    manifest = args.ground_truth or DEFAULT_GROUND_TRUTH
+    return evaluate(args.root, ground_truth=manifest, verbose=args.verbose)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ import numpy as np
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
+sys.path.insert(0, str(BASE_DIR / "tests"))
 CB23_MISSION_TOAST_FIXTURE = BASE_DIR / "tests" / "cb23_mission_toast.png"
 
 from droid_alerts.cb23_mission import (  # noqa: E402
@@ -24,9 +25,11 @@ from droid_alerts.cb23_mission import (  # noqa: E402
 from droid_alerts.classifier import Detection  # noqa: E402
 from droid_alerts.capture import MonitorInfo, PixelBox  # noqa: E402
 from droid_alerts.config import AppConfig, assets_dir  # noqa: E402
+from droid_alerts.normalize import scale_from_screen  # noqa: E402
 from droid_alerts.notifications import alert_title, alert_type_id, event_text  # noqa: E402
 from droid_alerts.popup import _caption_text  # noqa: E402
 from droid_alerts import watcher  # noqa: E402
+from resolution_matrix import RESOLUTION_CASES, place_inside, resize_for_screen  # noqa: E402
 
 
 def _synthetic_frame(
@@ -78,22 +81,45 @@ def _synthetic_frame(
 
 
 def _reported_mission_band(screen_width: int, screen_height: int) -> np.ndarray:
-    """Recreate the supplied mission toast at a requested 16:9 resolution."""
+    """Place the supplied toast at the target HUD scale without stretching it."""
 
     toast = cv2.imread(str(CB23_MISSION_TOAST_FIXTURE), cv2.IMREAD_COLOR)
     assert toast is not None
     reference_width, reference_height = 1814, 1020
-    reference_region = cb23_mission_region(reference_width, reference_height)
-    band = np.zeros((reference_height, reference_region.width, 3), dtype=np.uint8)
-    band[520 : 520 + toast.shape[0], : toast.shape[1]] = toast
-
     target_region = cb23_mission_region(screen_width, screen_height)
-    interpolation = cv2.INTER_AREA if screen_height < reference_height else cv2.INTER_CUBIC
-    return cv2.resize(
-        band,
-        (target_region.width, target_region.height),
-        interpolation=interpolation,
+    band = np.zeros((target_region.height, target_region.width, 3), dtype=np.uint8)
+    reference_scale = scale_from_screen(reference_height, reference_width)
+    target_scale = scale_from_screen(screen_height, screen_width)
+    scaled_toast = resize_for_screen(
+        toast,
+        source_scale=reference_scale,
+        target_scale=target_scale,
     )
+    toast_y = round(520 * target_scale / reference_scale)
+    place_inside(scaled_toast, band, x=0, y=toast_y)
+    return band
+
+
+def _synthetic_mission_band(
+    screen_width: int,
+    screen_height: int,
+    *,
+    with_mission_toast: bool,
+    with_cb23: bool,
+) -> np.ndarray:
+    source = _synthetic_frame(
+        with_mission_toast=with_mission_toast,
+        with_cb23=with_cb23,
+    )
+    scaled = resize_for_screen(
+        source,
+        source_scale=scale_from_screen(720, 1280),
+        target_scale=scale_from_screen(screen_height, screen_width),
+    )
+    region = cb23_mission_region(screen_width, screen_height)
+    band = np.zeros((region.height, region.width, 3), dtype=np.uint8)
+    place_inside(scaled, band, x=0, y=0)
+    return band
 
 
 class CB23MissionDetectorTests(unittest.TestCase):
@@ -118,26 +144,37 @@ class CB23MissionDetectorTests(unittest.TestCase):
 
     def test_detects_reported_mission_toast_across_resolutions(self) -> None:
         detector = CB23MissionDetector()
-        resolutions = (
-            (1280, 720),
-            (1366, 768),
-            (1600, 900),
-            (1920, 1080),
-            (2560, 1440),
-            (3840, 2160),
-        )
-
-        for screen_width, screen_height in resolutions:
-            with self.subTest(resolution=f"{screen_width}x{screen_height}"):
+        for case in RESOLUTION_CASES:
+            with self.subTest(resolution=f"{case.width}x{case.height}"):
                 match = detector.detect(
-                    _reported_mission_band(screen_width, screen_height),
-                    screen_width=screen_width,
-                    screen_height=screen_height,
+                    _reported_mission_band(case.width, case.height),
+                    screen_width=case.width,
+                    screen_height=case.height,
                 )
                 self.assertTrue(
                     match.matched,
                     f"score={match.score:.4f}, mission_score={match.mission_score:.4f}",
                 )
+
+    def test_mission_negatives_are_rejected_across_resolutions(self) -> None:
+        detector = CB23MissionDetector()
+        for case in RESOLUTION_CASES:
+            for with_mission_toast, with_cb23, label in (
+                (False, True, "portrait-only"),
+                (True, False, "toast-only"),
+            ):
+                with self.subTest(resolution=f"{case.width}x{case.height}", case=label):
+                    match = detector.detect(
+                        _synthetic_mission_band(
+                            case.width,
+                            case.height,
+                            with_mission_toast=with_mission_toast,
+                            with_cb23=with_cb23,
+                        ),
+                        screen_width=case.width,
+                        screen_height=case.height,
+                    )
+                    self.assertFalse(match.matched)
 
     def test_portrait_without_mission_toast_is_rejected(self) -> None:
         frame = _synthetic_frame(with_mission_toast=False)
