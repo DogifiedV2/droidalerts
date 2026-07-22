@@ -14,7 +14,8 @@ training_data/
 training_review/
 tests/fixtures/
 tests/results/
-assets/sounds/
+assets/sounds/*
+!assets/sounds/wake_alarm.wav
 config/calibration.json
 config/belt_regions.json
 config/discord_webhook.txt

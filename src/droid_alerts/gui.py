@@ -30,7 +30,7 @@ except Exception:
     BOOTSTRAP = False
 
 from . import __version__
-from .alerts import AlertPolicy
+from .alerts import AlertPolicy, WAKE_ALARM_FILE, WakeAlarm
 from .belt.names import DROID_NAMES as BELT_DROID_NAMES
 from .belt.dev_logging import belt_dev_dir
 from .belt.overlay import BeltOverlay
@@ -172,6 +172,7 @@ IDENTIFY_INSTALL_URL = "https://gonk.tools/identify"
 DEFAULT_WINDOW_WIDTH = 1470
 DEFAULT_WINDOW_HEIGHT = 1040
 DISPLAY_GEOMETRY_POLL_MS = 2000
+WAKE_ALARM_MAX_MS = 40_000
 SIDEBAR_WIDTH = 232
 PRIORITY_DIALOG_WIDTH = 760
 PRIORITY_DIALOG_HEIGHT = 860
@@ -435,6 +436,11 @@ class DroidAlertsApp:
         self._storage_after_id: str | None = None
         self.history_rows_by_item: dict[str, dict[str, object]] = {}
         self._last_cleanup_at = 0.0
+        self.wake_alarm = WakeAlarm()
+        self.wake_alarm_dialog: tk.Toplevel | None = None
+        self._wake_alarm_test_after_id: str | None = None
+        self._wake_alarm_auto_stop_after_id: str | None = None
+        self._wake_alarm_is_test = False
 
         self.status_var = StringVar(value="Stopped")
         self.sidebar_status_var = StringVar(value="●  Stopped")
@@ -463,6 +469,7 @@ class DroidAlertsApp:
         self.limited_deal_portrait_image: tk.PhotoImage | None = None
         self.limited_deal_priority_tree = None
         self.storage_status_var = StringVar(value="Calculating storage…")
+        self.wake_alarm_status_var = StringVar(value="Alarm is idle")
         self.channel_status_vars = {
             "Popup": StringVar(value=""),
             "Sound": StringVar(value=""),
@@ -2228,6 +2235,9 @@ class DroidAlertsApp:
         self.advanced_widgets = [self.advanced_container]
 
         advanced_bool_keys = (
+            "wake_alarm_enabled",
+            "wake_alarm_beskar_mythic",
+            "wake_alarm_galactic_mythic",
             "save_alert_samples",
             "save_debug_screenshots",
             "share_debug_detections",
@@ -2263,6 +2273,61 @@ class DroidAlertsApp:
         }
         for key, value in string_defaults.items():
             self.setting_vars[key] = StringVar(value=value)
+
+        wake_outer, wake = self._labeled_section(
+            self.advanced_container,
+            "WAKE-UP ALARM",
+        )
+        wake_outer.grid(row=5, column=0, sticky="ew", pady=(0, 16))
+        wake.columnconfigure(0, weight=1)
+        wake.columnconfigure(1, weight=1)
+        ttk.Checkbutton(
+            wake,
+            text="WAKE ME UP AT ALL COSTS",
+            variable=self.setting_vars["wake_alarm_enabled"],
+            **bootstyle("danger-round-toggle"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        ttk.Label(
+            wake,
+            text="Loops a loud alarm for up to 40 seconds, or until you press STOP ALARM. "
+            "This is separate from the normal Sound toggle.",
+            wraplength=760,
+            justify="left",
+            **muted_style(),
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        targets = ttk.Frame(wake)
+        targets.grid(row=2, column=0, sticky="w")
+        ttk.Checkbutton(
+            targets,
+            text="Beskar Mythic",
+            variable=self.setting_vars["wake_alarm_beskar_mythic"],
+            **bootstyle("round-toggle"),
+        ).grid(row=0, column=0, sticky="w", pady=3)
+        ttk.Checkbutton(
+            targets,
+            text="Galactic Mythic",
+            variable=self.setting_vars["wake_alarm_galactic_mythic"],
+            **bootstyle("round-toggle"),
+        ).grid(row=1, column=0, sticky="w", pady=3)
+        wake_actions = ttk.Frame(wake)
+        wake_actions.grid(row=2, column=1, sticky="e", padx=(20, 0))
+        ttk.Button(
+            wake_actions,
+            text="Test for 3 Seconds",
+            command=self.test_wake_alarm,
+            **bootstyle("warning-outline"),
+        ).grid(row=0, column=0, sticky="ew", pady=3)
+        ttk.Button(
+            wake_actions,
+            text="STOP ALARM",
+            command=self.stop_wake_alarm,
+            **bootstyle("danger"),
+        ).grid(row=1, column=0, sticky="ew", pady=3)
+        ttk.Label(
+            wake,
+            textvariable=self.wake_alarm_status_var,
+            **muted_style(),
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         self._build_alert_appearance(self.advanced_container, row=0)
 
@@ -2822,6 +2887,9 @@ class DroidAlertsApp:
             for key in (
                 "popup_enabled",
                 "sound_enabled",
+                "wake_alarm_enabled",
+                "wake_alarm_beskar_mythic",
+                "wake_alarm_galactic_mythic",
                 "rebirth_ready_alert_enabled",
                 "cb23_mission_alert_enabled",
                 "droid_timers_enabled",
@@ -4455,7 +4523,12 @@ class DroidAlertsApp:
         names: list[str] = []
         for folder in (user_sounds_dir(), sounds_dir()):
             if folder.exists():
-                names.extend(path.name for path in folder.glob("*.wav") if path.is_file())
+                names.extend(
+                    path.name
+                    for path in folder.glob("*.wav")
+                    if path.is_file()
+                    and path.name.casefold() != WAKE_ALARM_FILE.casefold()
+                )
         values = ("System beeps", *sorted(set(names), key=str.casefold))
         self.sound_combobox.configure(values=values)
         current = str(self._value("sound_file"))
@@ -4490,6 +4563,177 @@ class DroidAlertsApp:
         self.refresh_sound_choices()
         self._set_var("sound_file", target.name)
         self.detail_var.set(f"Alert sound added: {target.name}")
+
+    def test_wake_alarm(self) -> None:
+        """Play the wake alarm for exactly three seconds without enabling it."""
+        if self._wake_alarm_test_after_id is not None:
+            try:
+                self.root.after_cancel(self._wake_alarm_test_after_id)
+            except tk.TclError:
+                pass
+            self._wake_alarm_test_after_id = None
+        try:
+            generation = self.wake_alarm.start()
+        except Exception as exc:
+            self.wake_alarm_status_var.set("Alarm test failed")
+            self._show_message("Wake-up Alarm", str(exc), tone="danger")
+            return
+        self._wake_alarm_is_test = True
+        self.wake_alarm_status_var.set("Testing alarm for 3 seconds…")
+        self.detail_var.set("Wake-up alarm test started")
+        self._wake_alarm_test_after_id = self.root.after(
+            3000,
+            lambda generation=generation: self._finish_wake_alarm_test(generation),
+        )
+
+    def _finish_wake_alarm_test(self, generation: int) -> None:
+        self._wake_alarm_test_after_id = None
+        if self.wake_alarm.stop(generation):
+            self._wake_alarm_is_test = False
+            self.wake_alarm_status_var.set("3-second test finished")
+            self.detail_var.set("Wake-up alarm test finished")
+
+    def stop_wake_alarm(self) -> None:
+        """Stop either a test or a real alarm in response to a user action."""
+        if self._wake_alarm_test_after_id is not None:
+            try:
+                self.root.after_cancel(self._wake_alarm_test_after_id)
+            except tk.TclError:
+                pass
+            self._wake_alarm_test_after_id = None
+        if self._wake_alarm_auto_stop_after_id is not None:
+            try:
+                self.root.after_cancel(self._wake_alarm_auto_stop_after_id)
+            except tk.TclError:
+                pass
+            self._wake_alarm_auto_stop_after_id = None
+        was_active = self.wake_alarm.stop()
+        self._wake_alarm_is_test = False
+        self._close_wake_alarm_dialog()
+        self.wake_alarm_status_var.set("Alarm stopped" if was_active else "Alarm is idle")
+        if was_active:
+            self.detail_var.set("Wake-up alarm stopped manually")
+
+    def _finish_wake_alarm_alert(self, generation: int) -> None:
+        """Enforce the maximum real-alarm duration without stopping newer alarms."""
+        self._wake_alarm_auto_stop_after_id = None
+        if not self.wake_alarm.stop(generation):
+            return
+        self._wake_alarm_is_test = False
+        self._close_wake_alarm_dialog()
+        self.wake_alarm_status_var.set("Alarm stopped after 40 seconds")
+        self.detail_var.set("Wake-up alarm reached its 40-second limit")
+
+    def _close_wake_alarm_dialog(self) -> None:
+        dialog = self.wake_alarm_dialog
+        self.wake_alarm_dialog = None
+        if dialog is not None:
+            try:
+                dialog.grab_release()
+                dialog.destroy()
+            except tk.TclError:
+                pass
+
+    def _maybe_start_wake_alarm(
+        self,
+        config: AppConfig,
+        droid: object,
+        rarity: object,
+    ) -> None:
+        droid_name = str(droid or "").strip()
+        rarity_name = str(rarity or "").strip()
+        if not config.wake_alarm_matches(droid_name, rarity_name):
+            return
+        if self.wake_alarm.active:
+            if not self._wake_alarm_is_test:
+                return
+            # Upgrade an in-progress three-second test to a real alarm. Its
+            # old timeout must never silence the actual Mythic alert.
+            if self._wake_alarm_test_after_id is not None:
+                try:
+                    self.root.after_cancel(self._wake_alarm_test_after_id)
+                except tk.TclError:
+                    pass
+                self._wake_alarm_test_after_id = None
+        label = f"{droid_name} {rarity_name}"
+        try:
+            generation = self.wake_alarm.start()
+        except Exception as exc:
+            self.wake_alarm_status_var.set("Alarm failed to start")
+            self.detail_var.set(f"Wake-up alarm failed: {exc}")
+            return
+        self._wake_alarm_is_test = False
+        if self._wake_alarm_auto_stop_after_id is not None:
+            try:
+                self.root.after_cancel(self._wake_alarm_auto_stop_after_id)
+            except tk.TclError:
+                pass
+        self._wake_alarm_auto_stop_after_id = self.root.after(
+            WAKE_ALARM_MAX_MS,
+            lambda generation=generation: self._finish_wake_alarm_alert(generation),
+        )
+        self.wake_alarm_status_var.set(f"ALARMING · {label}")
+        self._show_wake_alarm_stop_dialog(label)
+
+    def _show_wake_alarm_stop_dialog(self, label: str) -> None:
+        dialog = self.wake_alarm_dialog
+        if dialog is not None:
+            try:
+                dialog.lift()
+                dialog.focus_force()
+                return
+            except tk.TclError:
+                self.wake_alarm_dialog = None
+
+        try:
+            self.root.deiconify()
+            self.root.lift()
+        except tk.TclError:
+            pass
+        dialog = tk.Toplevel(self.root)
+        self.wake_alarm_dialog = dialog
+        self._style_dialog_window(dialog)
+        dialog.title("WAKE UP — MYTHIC DETECTED")
+        dialog.resizable(False, False)
+        try:
+            dialog.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        body = ttk.Frame(dialog, padding=(34, 28))
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body,
+            text="WAKE UP!",
+            font=self._font(28, "bold"),
+            **bootstyle("danger"),
+        ).pack(pady=(0, 8))
+        ttk.Label(
+            body,
+            text=f"{label} was detected.",
+            font=self._font(15, "bold"),
+        ).pack(pady=(0, 4))
+        ttk.Label(
+            body,
+            text="The alarm will stop after 40 seconds, or immediately when you stop it.",
+            **muted_style(),
+        ).pack(pady=(0, 22))
+        stop_button = ttk.Button(
+            body,
+            text="STOP ALARM",
+            command=self.stop_wake_alarm,
+            width=24,
+            **bootstyle("danger"),
+        )
+        stop_button.pack(ipady=10)
+        dialog.bind("<Escape>", lambda _event: self.stop_wake_alarm())
+        dialog.protocol("WM_DELETE_WINDOW", self.stop_wake_alarm)
+        dialog.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - dialog.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - dialog.winfo_height()) // 3
+        dialog.geometry(format_tk_geometry(x=x, y=y))
+        dialog.grab_set()
+        dialog.lift()
+        stop_button.focus_set()
 
     def _update_dashboard_timers(self) -> None:
         offset = int(getattr(self.config, "timer_offset_seconds", 0))
@@ -4925,7 +5169,11 @@ class DroidAlertsApp:
         thread_name_prefix: str,
         extra_delivery_fields: Mapping[str, object] | None = None,
     ) -> None:
-        if config.sound_enabled:
+        self._maybe_start_wake_alarm(config, detection.droid, detection.rarity)
+        wake_alarm = getattr(self, "wake_alarm", None)
+        if config.sound_enabled and not (
+            wake_alarm is not None and wake_alarm.active
+        ):
             try:
                 AlertPolicy(config).notify(detection)
             except Exception as exc:
@@ -5387,6 +5635,11 @@ class DroidAlertsApp:
                     else:
                         label = f"{row.get('rarity', '')} {row.get('droid', '')}".strip()
                     self.last_alert_var.set(f"Last alert: {label} · {detected_at}")
+                    self._maybe_start_wake_alarm(
+                        self.config,
+                        row.get("droid"),
+                        row.get("rarity"),
+                    )
         elif event_type == "delivery":
             result = event.get("result")
             if isinstance(result, dict):
@@ -5753,6 +6006,13 @@ class DroidAlertsApp:
             return None
 
         config.sound_enabled = bool(self._value("sound_enabled"))
+        config.wake_alarm_enabled = bool(self._value("wake_alarm_enabled"))
+        config.wake_alarm_beskar_mythic = bool(
+            self._value("wake_alarm_beskar_mythic")
+        )
+        config.wake_alarm_galactic_mythic = bool(
+            self._value("wake_alarm_galactic_mythic")
+        )
         config.popup_enabled = bool(self._value("popup_enabled"))
         config.rebirth_ready_alert_enabled = bool(
             self._value("rebirth_ready_alert_enabled")
@@ -6464,6 +6724,7 @@ class DroidAlertsApp:
                 popup_parent=self.root,
                 status_callback=self._queue_watcher_status,
                 capture_factory=self._create_runtime_capture,
+                local_sound_allowed=lambda: not self.wake_alarm.active,
             )
             self._post_to_ui(lambda thread=thread: self._watcher_finished(None, thread))
         except Exception as exc:
@@ -6568,8 +6829,6 @@ class DroidAlertsApp:
                 continue
             event_type = str(row.get("event_type") or "")
             is_debug_row = self._log_row_is_debug(row)
-            if selected_filter == "All" and is_debug_row:
-                continue
             if selected_filter == "Priority alerts" and not (
                 event_type == "alert"
                 or event_type == "limited_deal"
@@ -7314,6 +7573,7 @@ class DroidAlertsApp:
         self._watch_restart_after_stop = False
         self._belt_restart_after_stop = False
         self.detail_var.set("Update installed, restarting...")
+        self.wake_alarm.stop()
         self.app_telemetry.stop()
         if self.limited_deal_service is not None:
             self.limited_deal_service.stop()
@@ -7342,6 +7602,7 @@ class DroidAlertsApp:
         self._shutting_down = True
         self._watch_restart_after_stop = False
         self._belt_restart_after_stop = False
+        self.wake_alarm.stop()
         self.app_telemetry.stop()
         if self.limited_deal_service is not None:
             self.limited_deal_service.stop()
@@ -7365,6 +7626,8 @@ class DroidAlertsApp:
             self._options_scrollregion_after_id,
             self._page_prime_after_id,
             self._macos_repaint_after_id,
+            self._wake_alarm_test_after_id,
+            self._wake_alarm_auto_stop_after_id,
         ):
             if after_id is not None:
                 try:

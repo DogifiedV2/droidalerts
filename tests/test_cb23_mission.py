@@ -13,6 +13,7 @@ import numpy as np
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
+CB23_MISSION_TOAST_FIXTURE = BASE_DIR / "tests" / "cb23_mission_toast.png"
 
 from droid_alerts.cb23_mission import (  # noqa: E402
     CB23MissionDetector,
@@ -76,6 +77,25 @@ def _synthetic_frame(
     return frame
 
 
+def _reported_mission_band(screen_width: int, screen_height: int) -> np.ndarray:
+    """Recreate the supplied mission toast at a requested 16:9 resolution."""
+
+    toast = cv2.imread(str(CB23_MISSION_TOAST_FIXTURE), cv2.IMREAD_COLOR)
+    assert toast is not None
+    reference_width, reference_height = 1814, 1020
+    reference_region = cb23_mission_region(reference_width, reference_height)
+    band = np.zeros((reference_height, reference_region.width, 3), dtype=np.uint8)
+    band[520 : 520 + toast.shape[0], : toast.shape[1]] = toast
+
+    target_region = cb23_mission_region(screen_width, screen_height)
+    interpolation = cv2.INTER_AREA if screen_height < reference_height else cv2.INTER_CUBIC
+    return cv2.resize(
+        band,
+        (target_region.width, target_region.height),
+        interpolation=interpolation,
+    )
+
+
 class CB23MissionDetectorTests(unittest.TestCase):
     def test_region_scans_full_height_of_left_side(self) -> None:
         region = cb23_mission_region(1920, 1080)
@@ -95,6 +115,29 @@ class CB23MissionDetectorTests(unittest.TestCase):
         self.assertTrue(match.matched)
         self.assertGreater(match.score, 0.90)
         self.assertGreaterEqual(match.mission_score, 1.0)
+
+    def test_detects_reported_mission_toast_across_resolutions(self) -> None:
+        detector = CB23MissionDetector()
+        resolutions = (
+            (1280, 720),
+            (1366, 768),
+            (1600, 900),
+            (1920, 1080),
+            (2560, 1440),
+            (3840, 2160),
+        )
+
+        for screen_width, screen_height in resolutions:
+            with self.subTest(resolution=f"{screen_width}x{screen_height}"):
+                match = detector.detect(
+                    _reported_mission_band(screen_width, screen_height),
+                    screen_width=screen_width,
+                    screen_height=screen_height,
+                )
+                self.assertTrue(
+                    match.matched,
+                    f"score={match.score:.4f}, mission_score={match.mission_score:.4f}",
+                )
 
     def test_portrait_without_mission_toast_is_rejected(self) -> None:
         frame = _synthetic_frame(with_mission_toast=False)

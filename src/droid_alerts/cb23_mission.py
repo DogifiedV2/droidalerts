@@ -23,6 +23,10 @@ CB23_RELEASE_FRAMES = 2
 REFERENCE_TEMPLATE_SCALE = 0.29
 HUD_SCALE_FACTORS = tuple(value / 100.0 for value in range(70, 136, 5))
 COARSE_SEARCH_SCALE = 0.3
+# Downsampling can slightly reorder otherwise-near-identical HUD scale scores.
+# Verify the strongest few candidates at full resolution instead of trusting a
+# single aliased coarse winner.
+FULL_RESOLUTION_CANDIDATES = 3
 VERIFY_PADDING_PX = 10
 LEFT_SCAN_WIDTH_RATIO = 0.55
 
@@ -104,8 +108,7 @@ class CB23MissionDetector:
         )
 
         coarse_best = float("-inf")
-        coarse_location = (0, 0)
-        coarse_scale = 0.0
+        coarse_candidates: list[tuple[float, float, tuple[int, int]]] = []
         for factor in HUD_SCALE_FACTORS:
             template_scale = base_scale * factor
             width = max(8, int(round(self._template_bgr.shape[1] * template_scale)))
@@ -123,46 +126,62 @@ class CB23MissionDetector:
             )
             finite_scores = np.where(np.isfinite(scores), scores, -1.0)
             _minimum, maximum, _min_location, max_location = cv2.minMaxLoc(finite_scores)
+            coarse_candidates.append((float(maximum), template_scale, max_location))
             if maximum > coarse_best:
                 coarse_best = float(maximum)
-                coarse_location = max_location
-                coarse_scale = template_scale
 
-        if coarse_scale <= 0.0:
+        if not coarse_candidates:
             return CB23MissionMatch(False, 0.0)
 
-        width = max(8, int(round(self._template_bgr.shape[1] * coarse_scale)))
-        height = max(8, int(round(self._template_bgr.shape[0] * coarse_scale)))
-        template, mask = self._resized_template(width, height)
-        estimated_x = int(round(coarse_location[0] / COARSE_SEARCH_SCALE))
-        estimated_y = int(round(coarse_location[1] / COARSE_SEARCH_SCALE))
-        search_x0 = max(0, estimated_x - VERIFY_PADDING_PX)
-        search_y0 = max(0, estimated_y - VERIFY_PADDING_PX)
-        search_x1 = min(image_width, estimated_x + width + VERIFY_PADDING_PX)
-        search_y1 = min(image_height, estimated_y + height + VERIFY_PADDING_PX)
-        verification = image[search_y0:search_y1, search_x0:search_x1]
-        if verification.shape[1] < width or verification.shape[0] < height:
+        verified_score = float("-inf")
+        verified_box: tuple[int, int, int, int] | None = None
+        verified_scale = 0.0
+        strongest_candidates = sorted(
+            coarse_candidates,
+            key=lambda candidate: candidate[0],
+            reverse=True,
+        )[:FULL_RESOLUTION_CANDIDATES]
+        for _coarse_score, candidate_scale, coarse_location in strongest_candidates:
+            width = max(8, int(round(self._template_bgr.shape[1] * candidate_scale)))
+            height = max(8, int(round(self._template_bgr.shape[0] * candidate_scale)))
+            template, mask = self._resized_template(width, height)
+            estimated_x = int(round(coarse_location[0] / COARSE_SEARCH_SCALE))
+            estimated_y = int(round(coarse_location[1] / COARSE_SEARCH_SCALE))
+            search_x0 = max(0, estimated_x - VERIFY_PADDING_PX)
+            search_y0 = max(0, estimated_y - VERIFY_PADDING_PX)
+            search_x1 = min(image_width, estimated_x + width + VERIFY_PADDING_PX)
+            search_y1 = min(image_height, estimated_y + height + VERIFY_PADDING_PX)
+            verification = image[search_y0:search_y1, search_x0:search_x1]
+            if verification.shape[1] < width or verification.shape[0] < height:
+                continue
+
+            scores = cv2.matchTemplate(
+                verification,
+                template,
+                cv2.TM_CCORR_NORMED,
+                mask=mask,
+            )
+            finite_scores = np.where(np.isfinite(scores), scores, -1.0)
+            _minimum, maximum, _min_location, max_location = cv2.minMaxLoc(finite_scores)
+            score = max(0.0, float(maximum))
+            if score <= verified_score:
+                continue
+            x = search_x0 + max_location[0]
+            y = search_y0 + max_location[1]
+            verified_score = score
+            verified_box = (x, y, x + width, y + height)
+            verified_scale = candidate_scale
+
+        if verified_box is None:
             return CB23MissionMatch(False, max(0.0, coarse_best))
 
-        scores = cv2.matchTemplate(
-            verification,
-            template,
-            cv2.TM_CCORR_NORMED,
-            mask=mask,
-        )
-        finite_scores = np.where(np.isfinite(scores), scores, -1.0)
-        _minimum, maximum, _min_location, max_location = cv2.minMaxLoc(finite_scores)
-        score = max(0.0, float(maximum))
-        x = search_x0 + max_location[0]
-        y = search_y0 + max_location[1]
-        box = (x, y, x + width, y + height)
-        mission_score = self._mission_toast_score(image, box)
+        mission_score = self._mission_toast_score(image, verified_box)
         return CB23MissionMatch(
-            matched=score >= self.threshold and mission_score >= 1.0,
-            score=score,
+            matched=verified_score >= self.threshold and mission_score >= 1.0,
+            score=verified_score,
             mission_score=mission_score,
-            box=box,
-            template_scale=coarse_scale,
+            box=verified_box,
+            template_scale=verified_scale,
         )
 
     def _resized_template(self, width: int, height: int) -> tuple[np.ndarray, np.ndarray]:

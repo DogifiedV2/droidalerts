@@ -16,6 +16,11 @@ AUTO_BOX_PERCENT = {"left": 0.0, "top": 0.47, "width": 0.33, "height": 0.16}
 COMPACT_ASPECT_MAX = 1.50
 COMPACT_AUTO_BOX_PERCENT = {"left": 0.0, "top": 0.36, "width": 0.33, "height": 0.16}
 
+# 16:10-ish captures place the chat box slightly above the standard 16:9
+# position. Measured on a 1920x1200 capture: the correct top edge is y=534.
+SIXTEEN_TEN_ASPECT_MAX = 1.70
+SIXTEEN_TEN_AUTO_BOX_PERCENT = {"left": 0.0, "top": 0.445, "width": 0.33, "height": 0.16}
+
 # 3440-wide ultrawide captures place the chat alert row above the standard
 # wide profile. Measured from a 3440x1392 capture where the old 47% top started
 # below the alert row.
@@ -41,6 +46,8 @@ def auto_box_ratios(screen_width: int, screen_height: int) -> dict[str, float]:
     profile = auto_box_profile(screen_width, screen_height)
     if profile == "compact":
         return COMPACT_AUTO_BOX_PERCENT
+    if profile == "16:10":
+        return SIXTEEN_TEN_AUTO_BOX_PERCENT
     if profile == "ultrawide":
         return ULTRAWIDE_AUTO_BOX_PERCENT
     return AUTO_BOX_PERCENT
@@ -50,6 +57,8 @@ def auto_box_profile(screen_width: int, screen_height: int) -> str:
     aspect = screen_width / max(1, screen_height)
     if aspect <= COMPACT_ASPECT_MAX:
         return "compact"
+    if aspect <= SIXTEEN_TEN_ASPECT_MAX:
+        return "16:10"
     if aspect >= ULTRAWIDE_ASPECT_MIN:
         return "ultrawide"
     return "wide"

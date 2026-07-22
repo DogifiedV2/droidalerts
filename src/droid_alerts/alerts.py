@@ -4,6 +4,7 @@ import hashlib
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -12,6 +13,9 @@ import numpy as np
 
 from .classifier import Detection
 from .config import AppConfig, sounds_dir, user_sounds_dir
+
+
+WAKE_ALARM_FILE = "wake_alarm.wav"
 
 
 def row_hash(row_bgr: np.ndarray) -> str:
@@ -141,9 +145,150 @@ def _alert_wav(preferred: str = "") -> Path | None:
     if preferred:
         for directory in directories:
             selected = directory / Path(preferred).name
-            if selected.is_file() and selected.suffix.lower() == ".wav":
+            if (
+                selected.name.casefold() != WAKE_ALARM_FILE.casefold()
+                and selected.is_file()
+                and selected.suffix.lower() == ".wav"
+            ):
                 return selected
     for directory in directories:
         for path in sorted(directory.glob("*.wav")) if directory.exists() else ():
-            return path
+            if path.name.casefold() != WAKE_ALARM_FILE.casefold():
+                return path
     return None
+
+
+class WakeAlarm:
+    """Loop the bundled alarm until explicitly stopped.
+
+    ``start`` returns a generation token. A timed test can pass that token to
+    ``stop`` so its three-second callback cannot accidentally stop a newer,
+    real alert.
+    """
+
+    def __init__(self, wav_path: Path | None = None) -> None:
+        self.wav_path = wav_path or (sounds_dir() / WAKE_ALARM_FILE)
+        self._lock = threading.Lock()
+        self._generation = 0
+        self._stop_event: threading.Event | None = None
+        self._process: subprocess.Popen | None = None
+        self._active = False
+
+    @property
+    def active(self) -> bool:
+        with self._lock:
+            return self._active
+
+    def start(self) -> int:
+        if not self.wav_path.is_file():
+            raise RuntimeError(f"Wake alarm sound is missing: {self.wav_path}")
+        self.stop()
+        with self._lock:
+            self._generation += 1
+            generation = self._generation
+            stop_event = threading.Event()
+            self._stop_event = stop_event
+            self._active = True
+
+        if sys.platform == "win32":
+            try:
+                import winsound
+
+                winsound.PlaySound(
+                    str(self.wav_path),
+                    winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP,
+                )
+            except Exception as exc:
+                with self._lock:
+                    self._active = False
+                raise RuntimeError(f"Windows could not start the wake alarm: {exc}") from exc
+        else:
+            try:
+                command = self._player_command()
+            except Exception:
+                with self._lock:
+                    self._active = False
+                raise
+            threading.Thread(
+                target=self._loop_player,
+                args=(generation, stop_event, command),
+                name="DroidAlertsWakeAlarm",
+                daemon=True,
+            ).start()
+        return generation
+
+    def stop(self, generation: int | None = None) -> bool:
+        with self._lock:
+            if generation is not None and generation != self._generation:
+                return False
+            was_active = self._active
+            self._active = False
+            stop_event = self._stop_event
+            self._stop_event = None
+            process = self._process
+            self._process = None
+        if stop_event is not None:
+            stop_event.set()
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+            except OSError:
+                pass
+        if sys.platform == "win32" and was_active:
+            try:
+                import winsound
+
+                winsound.PlaySound(None, 0)
+            except Exception:
+                pass
+        return was_active
+
+    def _player_command(self) -> list[str]:
+        if sys.platform == "darwin":
+            player = shutil.which("afplay")
+            if player:
+                return [player, str(self.wav_path)]
+        else:
+            player = next(
+                (path for name in ("paplay", "aplay", "play") if (path := shutil.which(name))),
+                None,
+            )
+            if player:
+                return [player, str(self.wav_path)]
+        raise RuntimeError("No supported sound player was found for the wake alarm.")
+
+    def _loop_player(
+        self,
+        generation: int,
+        stop_event: threading.Event,
+        command: list[str],
+    ) -> None:
+        while not stop_event.is_set():
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except OSError:
+                break
+            with self._lock:
+                if generation != self._generation or stop_event.is_set():
+                    try:
+                        process.terminate()
+                    except OSError:
+                        pass
+                    break
+                self._process = process
+            while process.poll() is None and not stop_event.wait(0.05):
+                pass
+            if stop_event.is_set() and process.poll() is None:
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
+        with self._lock:
+            if generation == self._generation:
+                self._process = None
+                self._active = False

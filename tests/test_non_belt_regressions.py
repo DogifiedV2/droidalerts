@@ -467,6 +467,32 @@ class GuiRegressionTests(unittest.TestCase):
         self.assertEqual(1, len(app.history_rows_by_item))
         self.assertIn("1 shown", app.history_summary_var.get())
 
+    def test_history_all_filter_includes_debug_rows(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.logs_tree = FakeTree()
+        app.history_rows_by_item = {}
+        app.history_summary_var = FakeVar()
+        app.detail_var = FakeVar()
+        app.history_filter_var = FakeVar("All")
+        app.history_search_var = FakeVar("")
+        app._log_file_signature = None
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            path.write_text(
+                "\n".join(
+                    (
+                        json.dumps({"event_type": "alert", "droid": "Rainbow", "alerted": True}),
+                        json.dumps({"event_type": "debug_snapshot", "debug": True}),
+                    )
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(gui, "logs_dir", return_value=Path(directory)):
+                app.refresh_logs()
+
+        self.assertEqual(2, len(app.history_rows_by_item))
+        self.assertIn("2 shown", app.history_summary_var.get())
+
     def test_history_refresh_is_rescheduled_after_an_unexpected_error(self):
         app = DroidAlertsApp.__new__(DroidAlertsApp)
         app._shutting_down = False

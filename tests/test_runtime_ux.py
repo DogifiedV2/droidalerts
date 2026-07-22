@@ -19,7 +19,16 @@ from droid_alerts import maintenance
 from droid_alerts.capture import format_tk_geometry, monitor_key_from_mapping
 from droid_alerts.config import AppConfig
 from droid_alerts.region import Calibration
-from droid_alerts.timers import DISPLAY_TIMER_ORDER, TIMER_ORDER, seconds_until_next
+from droid_alerts.timers import (
+    BASE_HEIGHT,
+    DISPLAY_TIMER_ORDER,
+    EDIT_BAR_HEIGHT,
+    MAX_SCALE,
+    MIN_SCALE,
+    TIMER_ORDER,
+    _edit_bar_row_bounds,
+    seconds_until_next,
+)
 from droid_alerts.updater import _safe_extract
 from droid_alerts.watcher import _delivery_retryable
 
@@ -32,6 +41,13 @@ def main() -> int:
         or "rainbow" not in TIMER_ORDER
     ):
         failures.append("timer overlay does not show Galactic while preserving hidden Rainbow")
+
+    for scale in (MIN_SCALE, 1.0, MAX_SCALE):
+        card_top = int(BASE_HEIGHT * scale)
+        first_y1, first_y2, reset_y1, reset_y2 = _edit_bar_row_bounds(card_top, scale)
+        window_bottom = card_top + int(EDIT_BAR_HEIGHT * scale)
+        if not (card_top <= first_y1 < first_y2 < reset_y1 < reset_y2 < window_bottom):
+            failures.append(f"timer edit controls are clipped or overlap at scale {scale}")
 
     configured = AppConfig(
         ui_theme="midnight",

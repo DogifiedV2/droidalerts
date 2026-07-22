@@ -240,6 +240,7 @@ READY_SCORE_THRESHOLD = 0.72
 LEVEL_SCORE_THRESHOLD = 0.67
 DEFAULT_SCAN_INTERVAL_SECONDS = 5.0
 DEFAULT_CONFIRMATION_SCANS = 2
+DEFAULT_RELEASE_SCANS = 3
 
 
 @dataclass(frozen=True)
@@ -261,11 +262,25 @@ class RebirthHudDetector:
         self.ready_template = cv2.threshold(template, 127, 255, cv2.THRESH_BINARY)[1]
         self.digit_templates = _build_digit_templates()
 
-    def detect(self, bottom_bgr: np.ndarray, *, screen_height: int) -> RebirthObservation:
+    def detect(
+        self,
+        bottom_bgr: np.ndarray,
+        *,
+        screen_height: int,
+        screen_width: int | None = None,
+    ) -> RebirthObservation:
         if bottom_bgr.size == 0 or screen_height <= 0:
             return RebirthObservation(False, 0.0, None, 0.0)
 
-        scale = REFERENCE_SCREEN_HEIGHT / float(screen_height)
+        # A 1920x1200 display commonly runs the game in a centered 1920x1080
+        # viewport. The capture still reports 1200 pixels, so scaling from the
+        # physical height would unnecessarily shrink the HUD and weaken OCR.
+        effective_height = _effective_screen_height(
+            bottom_bgr,
+            screen_height,
+            screen_width=screen_width,
+        )
+        scale = REFERENCE_SCREEN_HEIGHT / float(effective_height)
         normalized = cv2.resize(
             bottom_bgr,
             (
@@ -335,7 +350,7 @@ class RebirthHudDetector:
             candidates.append(_DigitCandidate(x, y, width, height, 0, 0.0))
 
         candidates.sort(key=lambda item: (item.x, item.y))
-        best: tuple[float, int] | None = None
+        best: tuple[int, float, int] | None = None
         for start in range(len(candidates)):
             if not _has_rebirth_icon(mask, candidates[start]):
                 continue
@@ -378,47 +393,74 @@ class RebirthHudDetector:
                     continue
                 level = int("".join(str(item.digit) for item in digits))
                 score = sum(item.score for item in digits) / len(digits)
-                # Prefer a confident multi-digit reading over a single glyph.
-                ranking = score + 0.03 * (len(digits) - 1)
-                if best is None or ranking > best[0]:
-                    best = (ranking, level)
+                # A recognized adjacent glyph is stronger structural evidence
+                # than a slightly higher-scoring prefix. Without this strict
+                # preference, level 25 can flicker between 2, 0, and 25.
+                ranking = (len(digits), score, level)
+                if best is None or ranking[:2] > best[:2]:
+                    best = ranking
 
         if best is None:
             return None, 0.0
-        return best[1], min(1.0, best[0])
+        return best[2], min(1.0, best[1])
 
 
 class RebirthAlertTracker:
-    """Debounce observations and remember which Rebirth level already alerted."""
+    """Alert once per READY appearance despite fluctuating level OCR."""
 
     def __init__(
         self,
         state_path: Path | None = None,
         *,
         confirmation_scans: int = DEFAULT_CONFIRMATION_SCANS,
+        release_scans: int = DEFAULT_RELEASE_SCANS,
     ) -> None:
         self.state_path = state_path or data_dir() / "rebirth_state.json"
         self.confirmation_scans = max(1, int(confirmation_scans))
+        self.release_scans = max(1, int(release_scans))
         self.last_alerted_level = self._load_last_alerted_level()
-        self._candidate: tuple[bool, int | None] | None = None
+        self._candidate_level: int | None = None
         self._candidate_count = 0
+        self._ready_misses = 0
+        self._ready_episode_alerted = False
 
     def observe(self, observation: RebirthObservation) -> int | None:
-        candidate = (observation.ready, observation.level if observation.ready else None)
-        if candidate == self._candidate:
+        if not observation.ready:
+            self._candidate_level = None
+            self._candidate_count = 0
+            self._ready_misses += 1
+            if self._ready_misses >= self.release_scans:
+                self._ready_episode_alerted = False
+            return None
+
+        self._ready_misses = 0
+        if self._ready_episode_alerted:
+            return None
+        if observation.level is None:
+            self._candidate_level = None
+            self._candidate_count = 0
+            return None
+
+        if observation.level == self._candidate_level:
             self._candidate_count += 1
         else:
-            self._candidate = candidate
+            self._candidate_level = observation.level
             self._candidate_count = 1
 
         if self._candidate_count < self.confirmation_scans:
             return None
-        if not observation.ready or observation.level is None:
-            return None
         if observation.level == self.last_alerted_level:
+            # This is normally an app restart while the same READY indicator
+            # is still present. Latch it without sending the alert again.
+            self._ready_episode_alerted = True
+            return None
+        if self.last_alerted_level is not None and observation.level < self.last_alerted_level:
+            # Rebirth levels only advance. Keep waiting for a stable corrected
+            # read instead of persisting a partial digit such as 0 or 2.
             return None
 
         self.last_alerted_level = observation.level
+        self._ready_episode_alerted = True
         try:
             self._save()
         except OSError:
@@ -460,6 +502,37 @@ class _DigitCandidate:
     @property
     def center_y(self) -> float:
         return self.y + self.height / 2.0
+
+
+def _effective_screen_height(
+    bottom_bgr: np.ndarray,
+    screen_height: int,
+    *,
+    screen_width: int | None,
+) -> int:
+    """Infer a centered viewport height from a full-width bottom letterbox."""
+
+    if bottom_bgr.ndim != 3 or bottom_bgr.shape[0] < 2 or screen_width is None:
+        return screen_height
+    expected_bar = max(0, int(round((screen_height - screen_width * 9 / 16) / 2)))
+    if expected_bar < 8:
+        return screen_height
+    dark_fraction = np.mean(np.max(bottom_bgr[:, :, :3], axis=2) <= 24, axis=1)
+    bottom_bar = 0
+    for fraction in reversed(dark_fraction):
+        if fraction < 0.90:
+            break
+        bottom_bar += 1
+
+    # Ignore a few naturally dark edge rows and implausibly large bars. The
+    # game viewport is centered, so the matching top bar has the same height.
+    if (
+        bottom_bar < 8
+        or bottom_bar * 2 >= screen_height * 0.35
+        or abs(bottom_bar - expected_bar) > max(8, int(round(expected_bar * 0.35)))
+    ):
+        return screen_height
+    return max(1, screen_height - bottom_bar * 2)
 
 
 def _green_hud_mask(image_bgr: np.ndarray) -> np.ndarray:

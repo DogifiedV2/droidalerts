@@ -46,6 +46,16 @@ DEFAULT_CENTER_X_RATIO = 0.5
 DEFAULT_TOP_Y_RATIO = 0.006
 
 
+def _edit_bar_row_bounds(card_top: int, scale: float) -> tuple[int, int, int, int]:
+    """Return the vertical bounds for the edit bar's two button rows."""
+    bar_h = int(EDIT_BAR_HEIGHT * scale)
+    first_y1 = card_top + int(4 * scale)
+    first_y2 = card_top + int(32 * scale)
+    reset_y1 = first_y2 + int(5 * scale)
+    reset_y2 = card_top + bar_h - int(2 * scale)
+    return first_y1, first_y2, reset_y1, reset_y2
+
+
 def seconds_until_next(kind: str, offset_seconds: int = 0) -> int:
     """Seconds until the next spawn mark for a timer, from local wall clock."""
     lt = time.localtime()
@@ -261,10 +271,8 @@ class DroidTimersOverlay:
         """Controls below the card for resizing, saving, and restoring defaults."""
         canvas = self.canvas
         s = self.scale
-        bar_h = int(EDIT_BAR_HEIGHT * s)
         width, _card_h = self._card_size()
-        y1 = card_top + int(4 * s)
-        y2 = card_top + bar_h - int(2 * s)
+        y1, y2, reset_y1, reset_y2 = _edit_bar_row_bounds(card_top, s)
         button_font = tkfont.Font(root=self.window, family="Segoe UI", size=max(8, int(11 * s)), weight="bold")
 
         buttons = (
@@ -287,8 +295,6 @@ class DroidTimersOverlay:
         canvas.tag_bind("size-up", "<Button-1>", lambda _e: self._resize_step(0.1))
         canvas.tag_bind("done", "<Button-1>", lambda _e: self.exit_edit_mode())
 
-        reset_y1 = y2 + int(5 * s)
-        reset_y2 = card_top + bar_h - int(2 * s)
         reset_x = width // 2
         reset_half_w = int(78 * s)
         _rounded_rect(

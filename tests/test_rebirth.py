@@ -50,6 +50,26 @@ class RebirthHudDetectorTests(unittest.TestCase):
         self.assertEqual(25, observation.level)
         self.assertGreater(observation.level_score, 0.75)
 
+    def test_reads_level_25_at_1280x720(self):
+        image = cv2.imread(str(FIXTURES / "rebirth_25_ready.png"))
+        image = cv2.resize(image, None, fx=2 / 3, fy=2 / 3, interpolation=cv2.INTER_AREA)
+
+        observation = self.detector.detect(image, screen_height=720, screen_width=1280)
+
+        self.assertTrue(observation.ready)
+        self.assertEqual(25, observation.level)
+
+    def test_reads_level_25_in_1920x1200_letterboxed_viewport(self):
+        image = cv2.imread(str(FIXTURES / "rebirth_25_ready.png"))
+        # The HUD retains its 1080p pixel size and the centered viewport adds a
+        # 60-pixel black bar at the physical bottom of a 1200-pixel display.
+        image = cv2.copyMakeBorder(image, 0, 60, 0, 0, cv2.BORDER_CONSTANT, value=0)
+
+        observation = self.detector.detect(image, screen_height=1200, screen_width=1920)
+
+        self.assertTrue(observation.ready)
+        self.assertEqual(25, observation.level)
+
     def test_ready_without_level_fails_closed(self):
         image = cv2.imread(str(FIXTURES / "rebirth_22_ready.png"))
         image[:, :150] = 0
@@ -83,9 +103,37 @@ class RebirthAlertTrackerTests(unittest.TestCase):
             self.assertIsNone(restarted.observe(level_22))
             self.assertIsNone(restarted.observe(level_22))
 
+            not_ready = RebirthObservation(False, 0.1, None, 0.0)
+            for _ in range(3):
+                self.assertIsNone(restarted.observe(not_ready))
+
             level_23 = RebirthObservation(True, 0.96, 23, 0.86)
             self.assertIsNone(restarted.observe(level_23))
             self.assertEqual(23, restarted.observe(level_23))
+
+    def test_level_ocr_jitter_cannot_repeat_alert_during_same_ready_period(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tracker = RebirthAlertTracker(Path(directory) / "state.json")
+            level_25 = RebirthObservation(True, 0.95, 25, 0.82)
+
+            self.assertIsNone(tracker.observe(level_25))
+            self.assertEqual(25, tracker.observe(level_25))
+            for level in (2, 2, 0, 0, 25, 25, 2, 2):
+                self.assertIsNone(
+                    tracker.observe(RebirthObservation(True, 0.95, level, 0.72))
+                )
+
+    def test_transient_ready_miss_does_not_rearm_alert(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tracker = RebirthAlertTracker(Path(directory) / "state.json")
+            level_25 = RebirthObservation(True, 0.95, 25, 0.82)
+            not_ready = RebirthObservation(False, 0.1, None, 0.0)
+
+            tracker.observe(level_25)
+            self.assertEqual(25, tracker.observe(level_25))
+            self.assertIsNone(tracker.observe(not_ready))
+            self.assertIsNone(tracker.observe(level_25))
+            self.assertIsNone(tracker.observe(level_25))
 
     def test_does_not_alert_when_level_cannot_be_read(self):
         with tempfile.TemporaryDirectory() as directory:

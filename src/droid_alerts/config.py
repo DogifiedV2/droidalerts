@@ -149,6 +149,9 @@ class AppConfig:
     dedupe_seconds: float = 12.0
     alert_cooldown_seconds: float = 10.0
     sound_enabled: bool = True
+    wake_alarm_enabled: bool = False
+    wake_alarm_beskar_mythic: bool = True
+    wake_alarm_galactic_mythic: bool = True
     popup_enabled: bool = True
     droid_timers_enabled: bool = False
     # Overlay layout, user-adjustable via "Adjust Timers": size factor plus
@@ -306,6 +309,13 @@ class AppConfig:
             dedupe_seconds=float(data.get("dedupe_seconds", 12.0)),
             alert_cooldown_seconds=float(data.get("alert_cooldown_seconds", 10.0)),
             sound_enabled=bool(data.get("sound_enabled", True)),
+            wake_alarm_enabled=bool(data.get("wake_alarm_enabled", False)),
+            wake_alarm_beskar_mythic=bool(
+                data.get("wake_alarm_beskar_mythic", True)
+            ),
+            wake_alarm_galactic_mythic=bool(
+                data.get("wake_alarm_galactic_mythic", True)
+            ),
             popup_enabled=bool(data.get("popup_enabled", True)),
             droid_timers_enabled=bool(data.get("droid_timers_enabled", False)),
             droid_timers_scale=float(data.get("droid_timers_scale", 1.0)),
@@ -456,6 +466,9 @@ class AppConfig:
             "dedupe_seconds": self.dedupe_seconds,
             "alert_cooldown_seconds": self.alert_cooldown_seconds,
             "sound_enabled": self.sound_enabled,
+            "wake_alarm_enabled": self.wake_alarm_enabled,
+            "wake_alarm_beskar_mythic": self.wake_alarm_beskar_mythic,
+            "wake_alarm_galactic_mythic": self.wake_alarm_galactic_mythic,
             "popup_enabled": self.popup_enabled,
             "droid_timers_enabled": self.droid_timers_enabled,
             "droid_timers_scale": self.droid_timers_scale,
@@ -543,6 +556,16 @@ class AppConfig:
     @property
     def targets(self) -> set[tuple[str, str]]:
         return {(droid, rarity) for droid, rarity in self.alert_targets}
+
+    def wake_alarm_matches(self, droid: str, rarity: str) -> bool:
+        """Return whether a priority chat alert should start the wake alarm."""
+        if not self.wake_alarm_enabled or rarity != "Mythic":
+            return False
+        return (
+            droid == "Beskar" and self.wake_alarm_beskar_mythic
+        ) or (
+            droid == "Galactic" and self.wake_alarm_galactic_mythic
+        )
 
     def channel_allows_alert(self, channel: str, alert_id: str) -> bool:
         """Return whether a remote channel should receive this alert type."""

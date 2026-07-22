@@ -146,6 +146,7 @@ def run_watch(
     popup_parent=None,
     status_callback: Callable[[dict[str, object]], None] | None = None,
     capture_factory: Callable[[AppConfig], object] | None = None,
+    local_sound_allowed: Callable[[], bool] | None = None,
 ) -> None:
     def emit(event_type: str, **data: object) -> None:
         if status_callback is None:
@@ -154,6 +155,14 @@ def run_watch(
             status_callback({"type": event_type, **data})
         except Exception:
             pass
+
+    def can_play_local_sound() -> bool:
+        if local_sound_allowed is None:
+            return True
+        try:
+            return bool(local_sound_allowed())
+        except Exception:
+            return True
 
     set_dpi_awareness()
     config = config or load_config()
@@ -425,11 +434,12 @@ def run_watch(
         _append_event_safely(event, emit=emit)
         emit("alert", event=event)
         print(f"[ALERT] {event['ts']} Rebirth droid available score={match.score:.2f}")
-        try:
-            policy.notify(detection)
-        except Exception as exc:
-            print(f"[SOUND] Failed to play Rebirth Alert: {exc}")
-            emit("sound_error", message=str(exc))
+        if can_play_local_sound():
+            try:
+                policy.notify(detection)
+            except Exception as exc:
+                print(f"[SOUND] Failed to play Rebirth Alert: {exc}")
+                emit("sound_error", message=str(exc))
         dispatch_alert_channels(detection, event, attachment_path=sample_path)
 
     def fire_rebirth_ready_alert(level: int, ready_score: float) -> None:
@@ -462,11 +472,12 @@ def run_watch(
         _append_event_safely(event, emit=emit)
         emit("alert", event=event)
         print(f"[ALERT] {event['ts']} Rebirth Ready level={level} score={ready_score:.2f}")
-        try:
-            policy.notify(detection)
-        except Exception as exc:
-            print(f"[SOUND] Failed to play Rebirth alert: {exc}")
-            emit("sound_error", message=str(exc))
+        if can_play_local_sound():
+            try:
+                policy.notify(detection)
+            except Exception as exc:
+                print(f"[SOUND] Failed to play Rebirth alert: {exc}")
+                emit("sound_error", message=str(exc))
         dispatch_alert_channels(detection, event, attachment_path=None)
 
     def fire_cb23_mission_alert(
@@ -530,11 +541,12 @@ def run_watch(
         _append_event_safely(event, emit=emit)
         emit("alert", event=event)
         print(f"[ALERT] {event['ts']} CB23 Mission score={match.score:.2f}")
-        try:
-            policy.notify(detection)
-        except Exception as exc:
-            print(f"[SOUND] Failed to play CB23 Mission alert: {exc}")
-            emit("sound_error", message=str(exc))
+        if can_play_local_sound():
+            try:
+                policy.notify(detection)
+            except Exception as exc:
+                print(f"[SOUND] Failed to play CB23 Mission alert: {exc}")
+                emit("sound_error", message=str(exc))
         dispatch_alert_channels(detection, event, attachment_path=sample_path)
 
     # Live settings: the GUI autosaves config.json (and region nudges save
@@ -837,6 +849,7 @@ def run_watch(
                     observation = rebirth_ready_detector.detect(
                         bottom,
                         screen_height=screen_h,
+                        screen_width=screen_w,
                     )
                     alert_level = rebirth_ready_tracker.observe(observation)
                     emit(
@@ -925,11 +938,15 @@ def run_watch(
                 if fire:
                     print(f"[ALERT] {event['ts']} {label} score={detection.score:.2f}")
                     logged_spawn_keys[spawn_key] = now
-                    try:
-                        policy.notify(detection)
-                    except Exception as exc:
-                        print(f"[SOUND] Failed to play alert: {exc}")
-                        emit("sound_error", message=str(exc))
+                    # The persistent wake alarm is started by the GUI from the
+                    # emitted alert event. Once active, do not let a normal
+                    # async sound replace its loop in the OS audio player.
+                    if can_play_local_sound():
+                        try:
+                            policy.notify(detection)
+                        except Exception as exc:
+                            print(f"[SOUND] Failed to play alert: {exc}")
+                            emit("sound_error", message=str(exc))
                     telemetry.submit_alert_detection(detection=detection, detected_at=event["ts"])
                     if debug and config.share_debug_detections:
                         try:
