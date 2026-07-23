@@ -36,6 +36,12 @@ TIMER_COLORS = {
     "mythic": RARITY_COLORS["Mythic"],
     "galactic": RARITY_COLORS["Galactic"],
 }
+TIMER_PERIOD_SECONDS = {
+    "beskar": 900,
+    "rainbow": 600,
+    "mythic": 3600,
+    "galactic": 3600,
+}
 
 BASE_WIDTH = 376
 BASE_HEIGHT = 72

@@ -129,7 +129,7 @@ from .notifications import (
     valid_ntfy_topic,
     valid_discord_webhook_url,
 )
-from .popup import popup_icon_path, show_popup
+from .popup import RAINBOW_LETTERS, popup_icon_path, show_popup
 from .region import Calibration, RegionResolver
 from .settings_service import (
     NUMERIC_SETTING_KEYS,
@@ -141,7 +141,7 @@ from .telemetry import (
     AnonymousBeltTelemetryClient,
     load_or_create_anonymous_install_id,
 )
-from .timers import format_countdown, seconds_until_next
+from .timers import TIMER_PERIOD_SECONDS, format_countdown, seconds_until_next
 from .ui_theme import (
     DEFAULT_THEME_KEY,
     apply_app_theme,
@@ -299,6 +299,24 @@ def centered_window_geometry(
     return format_tk_geometry(width=int(width), height=int(height), x=x, y=y)
 
 
+DASHBOARD_TIMER_NAME_COLORS = {
+    "dark": {
+        "beskar": "#c9cdd9",
+        "mythic": "#ff3fa8",
+        "rainbow": "#ff65d8",
+        "galactic": "#b44df0",
+    },
+    "light": {
+        "beskar": "#5a6170",
+        "mythic": "#d81b8c",
+        "rainbow": "#c2299e",
+        "galactic": "#8a1fd0",
+    },
+}
+DASHBOARD_TIMER_BAR_HEIGHT = 4
+DASHBOARD_TIMER_HOT_SECONDS = 60
+
+
 def make_root(ui_theme: str = DEFAULT_THEME_KEY) -> tk.Tk:
     if BOOTSTRAP:
         root = ttk.Window(themename="darkly")
@@ -446,6 +464,7 @@ class DroidAlertsApp:
         self.session_monitoring_seconds = 0.0
         self._watch_segment_started: float | None = None
         self._dashboard_timer_after_id: str | None = None
+        self._dashboard_timer_rows: dict[str, dict[str, object]] = {}
         self._limited_deal_countdown_after_id: str | None = None
         self._storage_after_id: str | None = None
         self.history_rows_by_item: dict[str, dict[str, object]] = {}
@@ -974,6 +993,7 @@ class DroidAlertsApp:
         for canvas, _scrollbar, _window in self.scrollable_pages.values():
             canvas.configure(background=self.current_theme.colors["bg"])
         self._configure_history_tags()
+        self._restyle_dashboard_timer_rows()
         self._highlight_active_tab()
         self._apply_watcher_status_style(self.status_var.get())
         if announce:
@@ -1123,18 +1143,41 @@ class DroidAlertsApp:
 
         glance_outer, glance = self._labeled_section(right_panel, "NEXT SPAWNS")
         glance_outer.grid(row=0, column=0, sticky="new", pady=(0, 16))
-        glance.columnconfigure(0, weight=1)
+        glance.columnconfigure(1, weight=1)
         timer_labels = (
             ("beskar", "Beskar"),
             ("mythic", "Mythic"),
             ("rainbow", "Rainbow"),
             ("galactic", "Galactic"),
         )
+        self._dashboard_timer_rows = {}
         for row, (key, label) in enumerate(timer_labels, start=1):
-            ttk.Label(glance, text=label).grid(row=row, column=0, sticky="w", pady=3)
-            ttk.Label(glance, textvariable=self.timer_vars[key], font=self._font(12, "bold", mono=True)).grid(
-                row=row, column=1, sticky="e", pady=3
+            name_label = ttk.Label(glance, text=label, font=self._font(10, "bold"))
+            name_label.grid(row=row, column=0, sticky="w", pady=3)
+            bar = tk.Canvas(
+                glance,
+                height=DASHBOARD_TIMER_BAR_HEIGHT,
+                highlightthickness=0,
+                bd=0,
             )
+            bar.grid(row=row, column=1, sticky="ew", padx=10, pady=3)
+            bar.bind(
+                "<Configure>",
+                lambda _event, kind=key: self._redraw_dashboard_timer_bar(kind),
+                add="+",
+            )
+            time_label = ttk.Label(
+                glance, textvariable=self.timer_vars[key], font=self._font(12, "bold", mono=True)
+            )
+            time_label.grid(row=row, column=2, sticky="e", pady=3)
+            self._dashboard_timer_rows[key] = {
+                "name": name_label,
+                "bar": bar,
+                "time": time_label,
+                "remaining": TIMER_PERIOD_SECONDS[key],
+                "hot": False,
+            }
+        self._restyle_dashboard_timer_rows()
         self.setting_vars["droid_timers_enabled"] = BooleanVar(value=False)
         self.setting_vars["timer_reminders_enabled"] = BooleanVar(value=False)
         ttk.Checkbutton(
@@ -1143,9 +1186,9 @@ class DroidAlertsApp:
             variable=self.setting_vars["droid_timers_enabled"],
             command=self.on_droid_timers_toggle,
             **bootstyle("round-toggle"),
-        ).grid(row=5, column=0, sticky="w", pady=(8, 2))
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 2))
         self._link_label(glance, "Adjust Timer Position", self.adjust_droid_timers).grid(
-            row=5, column=1, sticky="e", pady=(8, 2)
+            row=5, column=2, sticky="e", pady=(8, 2)
         )
         self.timer_reminders_check = ttk.Checkbutton(
             glance,
@@ -1153,7 +1196,7 @@ class DroidAlertsApp:
             variable=self.setting_vars["timer_reminders_enabled"],
             **bootstyle("round-toggle"),
         )
-        self.timer_reminders_check.grid(row=6, column=0, columnspan=2, sticky="w", padx=(18, 0), pady=(2, 0))
+        self.timer_reminders_check.grid(row=6, column=0, columnspan=3, sticky="w", padx=(18, 0), pady=(2, 0))
         self.timer_reminders_check.grid_remove()
 
         session_outer, session = self._labeled_section(right_panel, "SESSION")
@@ -4743,7 +4786,9 @@ class DroidAlertsApp:
     def _update_dashboard_timers(self) -> None:
         offset = int(getattr(self.config, "timer_offset_seconds", 0))
         for kind, var in self.timer_vars.items():
-            var.set(format_countdown(seconds_until_next(kind, offset)))
+            remaining = seconds_until_next(kind, offset)
+            var.set(format_countdown(remaining))
+            self._update_dashboard_timer_row(kind, remaining)
         monitoring = self.session_monitoring_seconds
         if self._watch_segment_started is not None:
             monitoring += time.monotonic() - self._watch_segment_started
@@ -4753,6 +4798,58 @@ class DroidAlertsApp:
             f"{minutes // 60:02d}:{minutes % 60:02d} watching"
         )
         self._dashboard_timer_after_id = self.root.after(500, self._update_dashboard_timers)
+
+    def _update_dashboard_timer_row(self, kind: str, remaining: int) -> None:
+        row = self._dashboard_timer_rows.get(kind)
+        if row is None:
+            return
+        row["remaining"] = remaining
+        hot = remaining <= DASHBOARD_TIMER_HOT_SECONDS
+        if hot != row["hot"]:
+            row["hot"] = hot
+            colors = self.current_theme.colors
+            row["time"].configure(foreground=colors["warning"] if hot else colors["fg"])
+        self._redraw_dashboard_timer_bar(kind)
+
+    def _redraw_dashboard_timer_bar(self, kind: str) -> None:
+        row = self._dashboard_timer_rows.get(kind)
+        if row is None:
+            return
+        bar = row["bar"]
+        width = bar.winfo_width()
+        if width <= 1:
+            return
+        bar.delete("all")
+        fraction = max(0.0, min(1.0, row["remaining"] / TIMER_PERIOD_SECONDS[kind]))
+        fill_width = int(width * fraction)
+        if fill_width <= 0:
+            return
+        left = width - fill_width
+        if kind == "rainbow":
+            segment = fill_width / len(RAINBOW_LETTERS)
+            for index, color in enumerate(RAINBOW_LETTERS):
+                bar.create_rectangle(
+                    left + segment * index,
+                    0,
+                    left + segment * (index + 1),
+                    DASHBOARD_TIMER_BAR_HEIGHT,
+                    fill=color,
+                    outline="",
+                )
+        else:
+            name_colors = DASHBOARD_TIMER_NAME_COLORS[self.current_theme.theme_type]
+            bar.create_rectangle(
+                left, 0, width, DASHBOARD_TIMER_BAR_HEIGHT, fill=name_colors[kind], outline=""
+            )
+
+    def _restyle_dashboard_timer_rows(self) -> None:
+        colors = self.current_theme.colors
+        name_colors = DASHBOARD_TIMER_NAME_COLORS[self.current_theme.theme_type]
+        for kind, row in self._dashboard_timer_rows.items():
+            row["name"].configure(foreground=name_colors[kind])
+            row["time"].configure(foreground=colors["warning"] if row["hot"] else colors["fg"])
+            row["bar"].configure(bg=colors["active"])
+            self._redraw_dashboard_timer_bar(kind)
 
     def _on_timer_reminder(self, kind: str, remaining: int) -> None:
         try:
