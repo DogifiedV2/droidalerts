@@ -62,6 +62,12 @@ from .rebirth import (
     RebirthPresenceGate,
     rebirth_region,
 )
+from .scrap_alert import (
+    CreditHudDetector,
+    ScrapIncomeTracker,
+    ScrapVisibilityTracker,
+    scrap_debug_detail,
+)
 from .telemetry import AnonymousTelemetryClient
 
 
@@ -137,6 +143,10 @@ def run_watch(
 
     set_dpi_awareness()
     config = config or load_config()
+    if config.droid_timers_enabled:
+        from .timer_sync import start_timer_schedule_sync
+
+        start_timer_schedule_sync(config.timer_schedule_url, stop_event=stop_event)
 
     def open_capture(target_config: AppConfig):
         if capture_factory is None:
@@ -267,6 +277,9 @@ def run_watch(
     rebirth_available_gate = RebirthPresenceGate()
     rebirth_ready_detector: RebirthHudDetector | None = None
     rebirth_ready_tracker = RebirthAlertTracker()
+    credit_hud_detector: CreditHudDetector | None = None
+    scrap_income_tracker = ScrapIncomeTracker(stall_seconds=30.0)
+    scrap_visibility_tracker = ScrapVisibilityTracker(inactive_seconds=300.0)
     cb23_mission_detector: CB23MissionDetector | None = None
     cb23_mission_detector_failed = False
     cb23_mission_gate = CB23MissionGate()
@@ -435,6 +448,81 @@ def run_watch(
                 emit("sound_error", message=str(exc))
         dispatch_alert_channels(detection, event, attachment_path=None)
 
+    def fire_scrap_alert(icon_score: float) -> None:
+        detection = Detection(
+            droid="Scrap",
+            rarity="Stalled",
+            row_box=(0, 0, 0, 0),
+            droid_score=icon_score,
+            rarity_score=1.0,
+            rarity_margin=1.0,
+            score=icon_score,
+            source="scrap-alert",
+        )
+        event: dict[str, object] = {
+            "ts": timestamp(),
+            "event_type": "alert",
+            "source": "scrap_alert",
+            "droid": "Scrap",
+            "rarity": "Stalled",
+            "detail": "Your income is no longer increasing",
+            "alerted": True,
+            "is_priority": True,
+            "score": round(icon_score, 4),
+            "screen_width": screen_w,
+            "screen_height": screen_h,
+            "monitor_index": active_capture_config.monitor_index,
+            "capture_source": active_capture_config.capture_source,
+        }
+        log_event(event)
+        emit("alert", event=event)
+        print(f"[ALERT] {event['ts']} Scrap income stopped changing")
+        if can_play_local_sound():
+            try:
+                policy.notify(detection)
+            except Exception as exc:
+                print(f"[SOUND] Failed to play Scrap Alert: {exc}")
+                emit("sound_error", message=str(exc))
+        dispatch_alert_channels(detection, event, attachment_path=None)
+
+    def fire_scrap_inactive_alert(icon_score: float) -> None:
+        detection = Detection(
+            droid="Scrap",
+            rarity="Inactive",
+            row_box=(0, 0, 0, 0),
+            droid_score=icon_score,
+            rarity_score=1.0,
+            rarity_margin=1.0,
+            score=icon_score,
+            source="scrap-inactive",
+        )
+        detail = "Scrap inactive for 5+ min. Possibly kicked from the lobby."
+        event: dict[str, object] = {
+            "ts": timestamp(),
+            "event_type": "alert",
+            "source": "scrap_inactive",
+            "droid": "Scrap",
+            "rarity": "Inactive",
+            "detail": detail,
+            "alerted": True,
+            "is_priority": True,
+            "score": round(icon_score, 4),
+            "screen_width": screen_w,
+            "screen_height": screen_h,
+            "monitor_index": active_capture_config.monitor_index,
+            "capture_source": active_capture_config.capture_source,
+        }
+        log_event(event)
+        emit("alert", event=event)
+        print(f"[ALERT] {event['ts']} {detail}")
+        if can_play_local_sound():
+            try:
+                policy.notify(detection)
+            except Exception as exc:
+                print(f"[SOUND] Failed to play Scrap inactive alert: {exc}")
+                emit("sound_error", message=str(exc))
+        dispatch_alert_channels(detection, event, attachment_path=None)
+
     def fire_cb23_mission_alert(
         match: CB23MissionMatch,
         mission_band,
@@ -587,6 +675,9 @@ def run_watch(
                         rebirth_available_gate.reset()
                     if not config.cb23_mission_alert_enabled:
                         cb23_mission_gate.reset()
+                    if not config.scrap_alert_enabled:
+                        scrap_income_tracker.reset()
+                        scrap_visibility_tracker.reset()
                     webhook_url = None
                     if config.discord_enabled:
                         try:
@@ -791,36 +882,117 @@ def run_watch(
                     scale=round(result.scale, 4),
                 )
 
-            if config.rebirth_ready_alert_enabled and auxiliary_schedule.rebirth_ready_due(
+            hud_alert_enabled = (
+                config.rebirth_ready_alert_enabled or config.scrap_alert_enabled
+            )
+            if hud_alert_enabled and auxiliary_schedule.rebirth_ready_due(
                 status_now, config.rebirth_scan_interval_seconds
             ):
                 try:
-                    if rebirth_ready_detector is None:
-                        rebirth_ready_detector = RebirthHudDetector()
                     bottom_top = max(0, int(round(screen_h * 0.62)))
                     bottom = capture.grab(
                         PixelBox(0, bottom_top, screen_w, screen_h - bottom_top)
                     )
-                    observation = rebirth_ready_detector.detect(
-                        bottom,
-                        screen_height=screen_h,
-                        screen_width=screen_w,
-                    )
-                    alert_level = rebirth_ready_tracker.observe(observation)
-                    emit(
-                        "rebirth_scan",
-                        ready=observation.ready,
-                        ready_score=round(observation.ready_score, 4),
-                        rebirth_level=observation.level,
-                        level_score=round(observation.level_score, 4),
-                    )
-                    if alert_level is not None:
-                        fire_rebirth_ready_alert(alert_level, observation.ready_score)
+                    if config.rebirth_ready_alert_enabled:
+                        if rebirth_ready_detector is None:
+                            rebirth_ready_detector = RebirthHudDetector()
+                        observation = rebirth_ready_detector.detect(
+                            bottom,
+                            screen_height=screen_h,
+                            screen_width=screen_w,
+                        )
+                        alert_level = rebirth_ready_tracker.observe(observation)
+                        emit(
+                            "rebirth_scan",
+                            ready=observation.ready,
+                            ready_score=round(observation.ready_score, 4),
+                            rebirth_level=observation.level,
+                            level_score=round(observation.level_score, 4),
+                        )
+                        if alert_level is not None:
+                            fire_rebirth_ready_alert(alert_level, observation.ready_score)
+                    if config.scrap_alert_enabled:
+                        if credit_hud_detector is None:
+                            credit_hud_detector = CreditHudDetector()
+                        credit_observation = credit_hud_detector.detect(
+                            bottom,
+                            screen_height=screen_h,
+                            screen_width=screen_w,
+                        )
+                        previous_fingerprint = scrap_income_tracker.fingerprint
+                        should_alert_scrap = scrap_income_tracker.observe(
+                            credit_observation,
+                            now=status_now,
+                        )
+                        should_alert_scrap_inactive = scrap_visibility_tracker.observe(
+                            icon_visible=credit_observation.icon_visible,
+                            now=status_now,
+                        )
+                        display_changed = (
+                            credit_observation.visible
+                            and credit_observation.fingerprint != previous_fingerprint
+                        )
+                        unchanged_seconds = scrap_income_tracker.unchanged_seconds(status_now)
+                        emit(
+                            "scrap_scan",
+                            visible=credit_observation.visible,
+                            changed=display_changed,
+                            unchanged_seconds=round(unchanged_seconds, 1),
+                            icon_missing_seconds=round(
+                                scrap_visibility_tracker.missing_seconds(status_now),
+                                1,
+                            ),
+                            icon_score=round(credit_observation.icon_score, 4),
+                        )
+                        if debug:
+                            debug_detail = scrap_debug_detail(
+                                credit_observation,
+                                changed=display_changed,
+                                unchanged_seconds=unchanged_seconds,
+                            )
+                            log_event(
+                                {
+                                    "ts": timestamp(),
+                                    "event_type": "scrap_scan",
+                                    "source": "scrap_alert",
+                                    "droid": "Scrap",
+                                    "rarity": "Debug",
+                                    "debug": True,
+                                    "visible": credit_observation.visible,
+                                    "changed": display_changed,
+                                    "unchanged_seconds": round(unchanged_seconds, 1),
+                                    "icon_missing_seconds": round(
+                                        scrap_visibility_tracker.missing_seconds(status_now),
+                                        1,
+                                    ),
+                                    "icon_score": round(credit_observation.icon_score, 4),
+                                    "detail": debug_detail,
+                                }
+                            )
+                            if not credit_observation.visible:
+                                print(
+                                    f"[SCRAP] {debug_detail} "
+                                    f"(icon score={credit_observation.icon_score:.2f})"
+                                )
+                            elif credit_observation.fingerprint != previous_fingerprint:
+                                print(
+                                    f"[SCRAP] {debug_detail} "
+                                    f"(icon score={credit_observation.icon_score:.2f})"
+                                )
+                            else:
+                                print(
+                                    f"[SCRAP] {debug_detail} "
+                                    f"(icon score={credit_observation.icon_score:.2f})"
+                                )
+                        if should_alert_scrap:
+                            fire_scrap_alert(credit_observation.icon_score)
+                        if should_alert_scrap_inactive:
+                            fire_scrap_inactive_alert(credit_observation.icon_score)
                 except Exception as exc:
                     # This optional low-frequency detector must never stop the
                     # normal priority-spawn watcher.
-                    print(f"[REBIRTH] Scan failed: {exc}")
-                    emit("rebirth_error", message=str(exc))
+                    print(f"[HUD] Scan failed: {exc}")
+                    emit("hud_error", message=str(exc))
 
             # Region-health tracking: alert-free stretches are normal (spawns
             # are random), so only frames with phrase-like rows that still

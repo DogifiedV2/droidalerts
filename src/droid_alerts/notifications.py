@@ -65,6 +65,10 @@ def _is_cb23_mission_detection(detection: Detection) -> bool:
     return detection.source == "cb23-mission"
 
 
+def _is_scrap_alert_detection(detection: Detection) -> bool:
+    return detection.source in {"scrap-alert", "scrap-inactive"}
+
+
 def alert_type_id(detection: Detection) -> str:
     """Stable ID used by per-channel alert filters."""
     if detection.source == "rebirth-alert":
@@ -73,6 +77,8 @@ def alert_type_id(detection: Detection) -> str:
         return "rebirth_ready"
     if detection.source == "cb23-mission":
         return "cb23_mission"
+    if detection.source in {"scrap-alert", "scrap-inactive"}:
+        return "scrap_alert"
     if detection.source == "belt-tracker":
         return "belt_tracker"
     if detection.source == "limited-deal":
@@ -85,6 +91,12 @@ def _is_rebirth_detection(detection: Detection) -> bool:
 
 
 def event_text(detection: Detection) -> str:
+    if _is_scrap_alert_detection(detection):
+        return (
+            "Scrap inactive for 5+ min. Possibly kicked from the lobby."
+            if detection.source == "scrap-inactive"
+            else "Your income is no longer increasing"
+        )
     if _is_cb23_mission_detection(detection):
         return "CB23 Mission"
     if _is_rebirth_detection(detection):
@@ -102,6 +114,8 @@ def event_text(detection: Detection) -> str:
 
 
 def alert_title(detection: Detection) -> str:
+    if _is_scrap_alert_detection(detection):
+        return "Droid Alerts Scrap Alert"
     if _is_cb23_mission_detection(detection):
         return "Droid Alerts CB23 Mission"
     if _is_rebirth_detection(detection):
@@ -163,6 +177,8 @@ def discord_webhook_configured(config: AppConfig) -> bool:
 
 
 def discord_color(detection: Detection) -> int:
+    if _is_scrap_alert_detection(detection):
+        return 0xE7A72F
     if _is_cb23_mission_detection(detection):
         return 0xF04444
     if _is_rebirth_detection(detection):

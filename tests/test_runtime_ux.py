@@ -8,6 +8,7 @@ import tempfile
 import time
 import unittest
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,8 +29,10 @@ from droid_alerts.timers import (
     MIN_SCALE,
     TIMER_ORDER,
     _edit_bar_row_bounds,
+    next_timer_refresh_delay_ms,
     seconds_until_next,
 )
+from droid_alerts.timer_sync import SyncedTimerSchedule
 from droid_alerts.updater import _safe_extract
 from droid_alerts.watcher import _delivery_retryable
 
@@ -50,12 +53,18 @@ def main() -> int:
         if not (card_top <= first_y1 < first_y2 < reset_y1 < reset_y2 < window_bottom):
             failures.append(f"timer edit controls are clipped or overlap at scale {scale}")
 
+    if next_timer_refresh_delay_ms(now_seconds=100.25) != 758:
+        failures.append("timer refresh is not aligned just after the next epoch second")
+    if not 8 <= next_timer_refresh_delay_ms(now_seconds=100.999) <= 10:
+        failures.append("timer refresh keeps the former half-second visual lag")
+
     configured = AppConfig(
         ui_theme="midnight",
         popup_position="bottom_right",
         popup_scale=1.25,
         retention_days=7,
         timer_reminders_enabled=True,
+        timer_schedule_url="https://example.test/spawn-schedule",
         alert_targets=[["Beskar", "Mythic"]],
     )
     restored = AppConfig.from_dict(configured.to_dict())
@@ -63,6 +72,7 @@ def main() -> int:
         restored.ui_theme != "midnight"
         or restored.popup_position != "bottom_right"
         or restored.retention_days != 7
+        or restored.timer_schedule_url != "https://example.test/spawn-schedule"
     ):
         failures.append("new AppConfig fields did not round-trip")
     if restored.targets != {("Beskar", "Mythic")}:
@@ -146,24 +156,22 @@ def main() -> int:
     if format_tk_geometry(x=-1920, y=-1080) != "+-1920+-1080":
         failures.append("position-only Tk geometry did not preserve negative coordinates")
 
-    noon = time.struct_time((2026, 7, 10, 12, 0, 0, 3, 191, -1))
-    with patch("droid_alerts.timers.time.localtime", return_value=noon):
+    current_time = [datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc).timestamp()]
+    timer_schedule = SyncedTimerSchedule(wall_clock=lambda: current_time[0])
+    with patch("droid_alerts.timers.TIMER_SCHEDULE_CLOCK", timer_schedule):
         if seconds_until_next("beskar") != 900 or seconds_until_next("rainbow") != 600:
             failures.append("timer boundaries are incorrect at the hour")
         if seconds_until_next("mythic") != 3300:
             failures.append("mythic countdown is incorrect at the hour")
         if seconds_until_next("galactic") != 2700:
             failures.append("galactic countdown is incorrect at the hour")
-    between_beskar_spawns = time.struct_time((2026, 7, 10, 12, 7, 30, 3, 191, -1))
-    with patch("droid_alerts.timers.time.localtime", return_value=between_beskar_spawns):
+        current_time[0] = datetime(2026, 7, 10, 12, 7, 30, tzinfo=timezone.utc).timestamp()
         if seconds_until_next("beskar") != 450:
             failures.append("Beskar timer does not use 15-minute spawn intervals")
-    before_galactic = time.struct_time((2026, 7, 10, 12, 44, 30, 3, 191, -1))
-    with patch("droid_alerts.timers.time.localtime", return_value=before_galactic):
+        current_time[0] = datetime(2026, 7, 10, 12, 44, 30, tzinfo=timezone.utc).timestamp()
         if seconds_until_next("galactic") != 30:
             failures.append("Galactic timer does not count down to xx:45")
-    at_galactic = time.struct_time((2026, 7, 10, 12, 45, 0, 3, 191, -1))
-    with patch("droid_alerts.timers.time.localtime", return_value=at_galactic):
+        current_time[0] = datetime(2026, 7, 10, 12, 45, tzinfo=timezone.utc).timestamp()
         if seconds_until_next("galactic") != 3600:
             failures.append("Galactic timer does not roll forward after xx:45")
 

@@ -195,11 +195,17 @@ def _is_cb23_mission_detection(detection: Detection) -> bool:
     return detection.source == "cb23-mission"
 
 
+def _is_scrap_alert_detection(detection: Detection) -> bool:
+    return detection.source in {"scrap-alert", "scrap-inactive"}
+
+
 def _uses_attribute_rarity(detection: Detection) -> bool:
     return _is_belt_detection(detection) or detection.source == "limited-deal"
 
 
 def _caption_text(detection: Detection) -> str:
+    if _is_scrap_alert_detection(detection):
+        return "SCRAP ALERT"
     if _is_cb23_mission_detection(detection):
         return "MISSION READY"
     if _is_rebirth_detection(detection):
@@ -216,6 +222,15 @@ def _caption_text(detection: Detection) -> str:
 
 
 def _title_segments(detection: Detection) -> list[tuple[str, str]]:
+    if _is_scrap_alert_detection(detection):
+        return [
+            (
+                "SCRAP INACTIVE FOR 5+ MIN. POSSIBLY KICKED FROM THE LOBBY."
+                if detection.source == "scrap-inactive"
+                else "YOUR INCOME IS NO LONGER INCREASING",
+                "#e7a72f",
+            )
+        ]
     if _is_cb23_mission_detection(detection):
         return [("CB23 MISSION", "#f04444")]
     if _is_rebirth_detection(detection):
@@ -423,7 +438,9 @@ def show_popup(
         # explicit post-creation configure always wins.
         canvas.configure(bg=canvas_bg, highlightthickness=0)
 
-        if _is_rebirth_ready_detection(detection):
+        if _is_scrap_alert_detection(detection):
+            accent, accent_dim = "#e7a72f", "#6f4b12"
+        elif _is_rebirth_ready_detection(detection):
             accent, accent_dim = "#20f070", "#126b3c"
         else:
             accent_key = (

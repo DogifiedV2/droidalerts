@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import ctypes
+import math
 import sys
 import threading
-import time
 from collections.abc import Callable
 
 from .capture import MonitorInfo, format_tk_geometry
 from .popup import CARD_BG, CARD_BG_SOFT, RAINBOW_LETTERS, RARITY_COLORS, _rounded_rect
+from .timer_sync import TIMER_SCHEDULE_CLOCK
 
 try:
     import tkinter as tk
@@ -18,7 +19,7 @@ except Exception:  # pragma: no cover - tkinter availability is platform depende
 
 
 # "Droid Timers" overlay: a small always-on-top, click-through strip showing
-# when the next droids are due (wall-clock schedule). Beskar spawns every
+# when the next droids are due (server-synchronized UTC schedule). Beskar spawns every
 # 15 minutes (xx:00/15/30/45), Galactic at xx:45 every hour, Mythic at
 # xx:55 every hour, and Rainbow every 10 minutes (xx:00/10/...). Rainbow
 # timing stays available on the Dashboard, while the overlay shows Beskar,
@@ -50,6 +51,7 @@ MIN_SCALE = 0.6
 MAX_SCALE = 2.0
 DEFAULT_CENTER_X_RATIO = 0.5
 DEFAULT_TOP_Y_RATIO = 0.006
+TIMER_REFRESH_GUARD_MS = 8
 
 
 def _edit_bar_row_bounds(card_top: int, scale: float) -> tuple[int, int, int, int]:
@@ -63,27 +65,28 @@ def _edit_bar_row_bounds(card_top: int, scale: float) -> tuple[int, int, int, in
 
 
 def seconds_until_next(kind: str, offset_seconds: int = 0) -> int:
-    """Seconds until the next spawn mark for a timer, from local wall clock."""
-    lt = time.localtime()
-    sec_into_hour = (lt.tm_min * 60 + lt.tm_sec + int(offset_seconds)) % 3600
-    if kind == "beskar":
-        return 900 - (sec_into_hour % 900)
-    if kind == "rainbow":
-        return 600 - (sec_into_hour % 600)
-    if kind == "galactic":
-        delta = 45 * 60 - sec_into_hour
-        if delta <= 0:
-            delta += 3600
-        return delta
-    # Mythic: xx:55 every hour.
-    delta = 55 * 60 - sec_into_hour
-    if delta <= 0:
-        delta += 3600
-    return delta
+    """Seconds until the authoritative UTC spawn mark."""
+    return TIMER_SCHEDULE_CLOCK.seconds_until_next(kind, offset_seconds)
 
 
 def format_countdown(seconds: int) -> str:
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+
+def next_timer_refresh_delay_ms(
+    offset_seconds: int = 0,
+    *,
+    now_seconds: float | None = None,
+) -> int:
+    """Delay until just after the next authoritative epoch-second boundary."""
+    now = (
+        TIMER_SCHEDULE_CLOCK.current_time_seconds()
+        if now_seconds is None
+        else float(now_seconds)
+    ) + int(offset_seconds)
+    fractional_second = now - math.floor(now)
+    until_next_second = 1.0 - fractional_second
+    return math.ceil(until_next_second * 1000) + TIMER_REFRESH_GUARD_MS
 
 
 def _apply_overlay_window_styles(window: "tk.Misc", color_hex: str, *, click_through: bool) -> None:
@@ -333,7 +336,14 @@ class DroidTimersOverlay:
     def _maybe_remind(self, kind: str, remaining: int) -> None:
         if not self._reminders_enabled or remaining > self._reminder_seconds:
             return
-        target = int((time.time() + self._offset_seconds + remaining) // 60)
+        target = int(
+            (
+                TIMER_SCHEDULE_CLOCK.current_time_seconds()
+                + self._offset_seconds
+                + remaining
+            )
+            // 60
+        )
         if self._reminded_targets.get(kind) == target:
             return
         self._reminded_targets[kind] = target
@@ -428,7 +438,10 @@ class DroidTimersOverlay:
         try:
             self._refresh_times()
             self.window.attributes("-topmost", True)
-            self._after_id = self.window.after(500, self._tick)
+            self._after_id = self.window.after(
+                next_timer_refresh_delay_ms(self._offset_seconds),
+                self._tick,
+            )
         except Exception:
             pass
 

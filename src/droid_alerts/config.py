@@ -144,6 +144,7 @@ class AppConfig:
     capture_device_backend: int = 0
     capture_interval_seconds: float = 0.25
     rebirth_ready_alert_enabled: bool = False
+    scrap_alert_enabled: bool = False
     rebirth_scan_interval_seconds: float = 5.0
     cb23_mission_alert_enabled: bool = False
     dedupe_seconds: float = 12.0
@@ -199,6 +200,7 @@ class AppConfig:
     anonymous_belt_stats_url: str = "https://gonk.tools/api/droid-alerts/belt-heartbeat"
     anonymous_belt_counts_url: str = "https://gonk.tools/api/droid-alerts/belt-counts"
     limited_deal_url: str = "https://gonk.tools/api/droid-alerts/limited-deal"
+    timer_schedule_url: str = "https://gonk.tools/api/droid-alerts/spawn-schedule"
     share_debug_detections: bool = False
     debug_detection_upload_url: str = "https://gonk.tools/api/droid-alerts/debug-detections"
     update_repo: str = "DogifiedV2/droidalerts"
@@ -296,6 +298,7 @@ class AppConfig:
             rebirth_ready_alert_enabled=bool(
                 data.get("rebirth_ready_alert_enabled", False)
             ),
+            scrap_alert_enabled=bool(data.get("scrap_alert_enabled", False)),
             cb23_mission_alert_enabled=bool(
                 data.get("cb23_mission_alert_enabled", False)
             ),
@@ -388,6 +391,12 @@ class AppConfig:
                     "https://gonk.tools/api/droid-alerts/limited-deal",
                 )
             ),
+            timer_schedule_url=str(
+                data.get(
+                    "timer_schedule_url",
+                    "https://gonk.tools/api/droid-alerts/spawn-schedule",
+                )
+            ),
             share_debug_detections=bool(data.get("share_debug_detections", False)),
             debug_detection_upload_url=str(
                 data.get("debug_detection_upload_url", "https://gonk.tools/api/droid-alerts/debug-detections")
@@ -457,6 +466,7 @@ class AppConfig:
             "capture_device_backend": int(self.capture_device_backend),
             "capture_interval_seconds": self.capture_interval_seconds,
             "rebirth_ready_alert_enabled": self.rebirth_ready_alert_enabled,
+            "scrap_alert_enabled": self.scrap_alert_enabled,
             "cb23_mission_alert_enabled": self.cb23_mission_alert_enabled,
             "rebirth_scan_interval_seconds": self.rebirth_scan_interval_seconds,
             "dedupe_seconds": self.dedupe_seconds,
@@ -512,6 +522,7 @@ class AppConfig:
             "anonymous_belt_stats_url": self.anonymous_belt_stats_url,
             "anonymous_belt_counts_url": self.anonymous_belt_counts_url,
             "limited_deal_url": self.limited_deal_url,
+            "timer_schedule_url": self.timer_schedule_url,
             "share_debug_detections": self.share_debug_detections,
             "debug_detection_upload_url": self.debug_detection_upload_url,
             "update_repo": self.update_repo,

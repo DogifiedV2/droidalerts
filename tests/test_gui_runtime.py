@@ -123,6 +123,35 @@ class GuiQueueTests(unittest.TestCase):
         execute.assert_called_once()
         self.assertEqual(1, execute.call_args.kwargs["max_attempts"])
 
+    def test_scrap_debug_scan_is_visible_in_watcher_detail(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.config = AppConfig(save_debug_screenshots=True)
+        app.watcher_detail_var = ValueVar()
+
+        app._handle_watcher_status(
+            {
+                "type": "scrap_scan",
+                "visible": True,
+                "changed": False,
+                "unchanged_seconds": 15.0,
+                "icon_score": 0.94,
+            }
+        )
+
+        self.assertEqual(
+            "Scrap Alert debug: credits unchanged for 15s · icon score 0.94",
+            app.watcher_detail_var.value,
+        )
+        self.assertTrue(
+            app._log_row_is_debug(
+                {
+                    "event_type": "scrap_scan",
+                    "debug": True,
+                    "detail": "Credits display unchanged for 15s",
+                }
+            )
+        )
+
 
 class SchedulerRoot:
     def __init__(self):

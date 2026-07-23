@@ -141,7 +141,15 @@ from .telemetry import (
     AnonymousBeltTelemetryClient,
     load_or_create_anonymous_install_id,
 )
-from .timers import TIMER_PERIOD_SECONDS, format_countdown, seconds_until_next
+from .timers import (
+    DISPLAY_TIMER_ORDER,
+    TIMER_COLORS,
+    TIMER_PERIOD_SECONDS,
+    format_countdown,
+    next_timer_refresh_delay_ms,
+    seconds_until_next,
+)
+from .timer_sync import start_timer_schedule_sync
 from .ui_theme import (
     DEFAULT_THEME_KEY,
     apply_app_theme,
@@ -192,11 +200,18 @@ LIMITED_DEAL_DIALOG_HEIGHT = 820
 REBIRTH_ALERT_TOOLTIP = (
     "Receive a notification when a droid you need for rebirth spawns"
 )
+SCRAP_ALERT_TOOLTIP = (
+    "Notifies you when your credits stop increasing. Useful for when afk."
+)
 WHATS_NEW_ITEMS = (
-    "Updated Galactic detection.",
-    "Added a Stats button.",
-    "Added config options for alerts.",
-    "Added a CB23 Mission alert.",
+    "Detection is more reliable overall.",
+    "The timers in the app now look much nicer.",
+    "Rebirth Ready alerts are more reliable.",
+    "CB23 Mission alerts now work on more screen resolutions.",
+    'Added "Scrap Alert". It lets you know when your credits stop increasing, which is useful while AFK.',
+    'Added a "Nuclear" alert option at the bottom of Advanced Settings. It is made to wake '
+    "you up while you are asleep, so make sure your speakers are at maximum volume. Use it "
+    "with caution. I am not responsible for any side effects. Only available for Mythic alerts.",
 )
 BELT_REGION_INSTRUCTIONS = (
     "Officially supported setup: stand at the start of the belt and match the guide with two "
@@ -299,20 +314,6 @@ def centered_window_geometry(
     return format_tk_geometry(width=int(width), height=int(height), x=x, y=y)
 
 
-DASHBOARD_TIMER_NAME_COLORS = {
-    "dark": {
-        "beskar": "#c9cdd9",
-        "mythic": "#ff3fa8",
-        "rainbow": "#ff65d8",
-        "galactic": "#b44df0",
-    },
-    "light": {
-        "beskar": "#5a6170",
-        "mythic": "#d81b8c",
-        "rainbow": "#c2299e",
-        "galactic": "#8a1fd0",
-    },
-}
 DASHBOARD_TIMER_BAR_HEIGHT = 4
 DASHBOARD_TIMER_HOT_SECONDS = 60
 
@@ -539,6 +540,7 @@ class DroidAlertsApp:
         self._build_ui()
         self._ui_poll_after_id = self.root.after(25, self._drain_ui_queue)
         self.app_telemetry.start()
+        start_timer_schedule_sync(self.config.timer_schedule_url)
         self.load_settings()
         self._display_geometry_signature = self._read_display_geometry_signature()
         self._schedule_display_geometry_poll()
@@ -1144,12 +1146,9 @@ class DroidAlertsApp:
         glance_outer, glance = self._labeled_section(right_panel, "NEXT SPAWNS")
         glance_outer.grid(row=0, column=0, sticky="new", pady=(0, 16))
         glance.columnconfigure(1, weight=1)
-        timer_labels = (
-            ("beskar", "Beskar"),
-            ("mythic", "Mythic"),
-            ("rainbow", "Rainbow"),
-            ("galactic", "Galactic"),
-        )
+        # Keep this in sync with the in-game overlay. Rainbow remains in the
+        # timer model, but is intentionally hidden from both timer surfaces.
+        timer_labels = tuple((key, key.title()) for key in DISPLAY_TIMER_ORDER)
         self._dashboard_timer_rows = {}
         for row, (key, label) in enumerate(timer_labels, start=1):
             name_label = ttk.Label(glance, text=label, font=self._font(10, "bold"))
@@ -1270,6 +1269,19 @@ class DroidAlertsApp:
             **bootstyle("round-toggle"),
         ).grid(row=0, column=0, sticky="w", pady=3)
 
+        self.setting_vars["scrap_alert_enabled"] = BooleanVar(value=False)
+        self.scrap_alert_check = ttk.Checkbutton(
+            special_alerts,
+            text="Scrap Alert",
+            variable=self.setting_vars["scrap_alert_enabled"],
+            **bootstyle("round-toggle"),
+        )
+        self.scrap_alert_check.grid(row=0, column=1, sticky="w", pady=3)
+        self.scrap_alert_tooltip = HoverTooltip(
+            self.scrap_alert_check,
+            SCRAP_ALERT_TOOLTIP,
+        )
+
         self.setting_vars["rebirth_alert_enabled"] = BooleanVar(value=False)
         self.rebirth_alert_check = ttk.Checkbutton(
             special_alerts,
@@ -1277,7 +1289,7 @@ class DroidAlertsApp:
             variable=self.setting_vars["rebirth_alert_enabled"],
             **bootstyle("round-toggle"),
         )
-        self.rebirth_alert_check.grid(row=0, column=1, sticky="w", pady=3)
+        self.rebirth_alert_check.grid(row=1, column=0, sticky="w", pady=3)
         self.rebirth_alert_tooltip = HoverTooltip(
             self.rebirth_alert_check,
             REBIRTH_ALERT_TOOLTIP,
@@ -1288,7 +1300,7 @@ class DroidAlertsApp:
             text="CB23 Mission",
             variable=self.setting_vars["cb23_mission_alert_enabled"],
             **bootstyle("round-toggle"),
-        ).grid(row=1, column=0, sticky="w", pady=3)
+        ).grid(row=1, column=1, sticky="w", pady=3)
         self._refresh_priority_alert_summary()
 
     def _refresh_priority_alert_summary(self) -> None:
@@ -1531,6 +1543,8 @@ class DroidAlertsApp:
         ]
         if bool(self._value("rebirth_ready_alert_enabled")):
             options.append(("rebirth_ready", "Rebirth Ready"))
+        if bool(self._value("scrap_alert_enabled")):
+            options.append(("scrap_alert", "Scrap Alert"))
         if bool(self._value("rebirth_alert_enabled")):
             options.append(("rebirth_available", "Rebirth Alert"))
         if bool(self._value("cb23_mission_alert_enabled")):
@@ -2939,6 +2953,7 @@ class DroidAlertsApp:
                 "wake_alarm_beskar_mythic",
                 "wake_alarm_galactic_mythic",
                 "rebirth_ready_alert_enabled",
+                "scrap_alert_enabled",
                 "cb23_mission_alert_enabled",
                 "droid_timers_enabled",
                 "save_alert_samples",
@@ -4797,7 +4812,10 @@ class DroidAlertsApp:
             f"{self.session_detection_count} detections · {self.session_alert_count} alerts · "
             f"{minutes // 60:02d}:{minutes % 60:02d} watching"
         )
-        self._dashboard_timer_after_id = self.root.after(500, self._update_dashboard_timers)
+        self._dashboard_timer_after_id = self.root.after(
+            next_timer_refresh_delay_ms(offset),
+            self._update_dashboard_timers,
+        )
 
     def _update_dashboard_timer_row(self, kind: str, remaining: int) -> None:
         row = self._dashboard_timer_rows.get(kind)
@@ -4825,6 +4843,7 @@ class DroidAlertsApp:
         if fill_width <= 0:
             return
         left = width - fill_width
+        # Keep Rainbow's renderer ready for when that timer is shown again.
         if kind == "rainbow":
             segment = fill_width / len(RAINBOW_LETTERS)
             for index, color in enumerate(RAINBOW_LETTERS):
@@ -4837,16 +4856,17 @@ class DroidAlertsApp:
                     outline="",
                 )
         else:
-            name_colors = DASHBOARD_TIMER_NAME_COLORS[self.current_theme.theme_type]
             bar.create_rectangle(
-                left, 0, width, DASHBOARD_TIMER_BAR_HEIGHT, fill=name_colors[kind], outline=""
+                left, 0, width, DASHBOARD_TIMER_BAR_HEIGHT, fill=TIMER_COLORS[kind], outline=""
             )
 
     def _restyle_dashboard_timer_rows(self) -> None:
         colors = self.current_theme.colors
-        name_colors = DASHBOARD_TIMER_NAME_COLORS[self.current_theme.theme_type]
         for kind, row in self._dashboard_timer_rows.items():
-            row["name"].configure(foreground=name_colors[kind])
+            name_color = (
+                RAINBOW_LETTERS[-1] if kind == "rainbow" else TIMER_COLORS[kind]
+            )
+            row["name"].configure(foreground=name_color)
             row["time"].configure(foreground=colors["warning"] if row["hot"] else colors["fg"])
             row["bar"].configure(bg=colors["active"])
             self._redraw_dashboard_timer_bar(kind)
@@ -5769,11 +5789,31 @@ class DroidAlertsApp:
         elif event_type == "scan":
             stamp = str(event.get("scanned_at") or "")
             self.last_scan_var.set(f"Last successful scan: {self._display_timestamp(stamp)}")
+        elif event_type == "scrap_scan" and self.config.save_debug_screenshots:
+            score = float(event.get("icon_score") or 0.0)
+            if not bool(event.get("visible")):
+                self.watcher_detail_var.set(
+                    f"Scrap Alert debug: credits display not found · icon score {score:.2f}"
+                )
+            elif bool(event.get("changed")):
+                self.watcher_detail_var.set(
+                    f"Scrap Alert debug: credits changed · 30-second timer reset · icon score {score:.2f}"
+                )
+            else:
+                unchanged = float(event.get("unchanged_seconds") or 0.0)
+                self.watcher_detail_var.set(
+                    f"Scrap Alert debug: credits unchanged for {unchanged:.0f}s · icon score {score:.2f}"
+                )
         elif event_type in {"detection", "alert"}:
             row = event.get("event")
             if isinstance(row, dict):
                 source_name = str(row.get("source") or "")
-                if source_name not in {"rebirth-alert", "rebirth_ready"}:
+                if source_name not in {
+                    "rebirth-alert",
+                    "rebirth_ready",
+                    "scrap_alert",
+                    "scrap_inactive",
+                }:
                     self.session_detection_count += 1
                 if event_type == "alert":
                     self.session_alert_count += 1
@@ -5782,6 +5822,10 @@ class DroidAlertsApp:
                         label = "Rebirth droid available"
                     elif source_name == "rebirth_ready":
                         label = "Rebirth Ready"
+                    elif source_name == "scrap_alert":
+                        label = "Scrap Alert"
+                    elif source_name == "scrap_inactive":
+                        label = "Scrap inactive"
                     else:
                         label = f"{row.get('rarity', '')} {row.get('droid', '')}".strip()
                     self.last_alert_var.set(f"Last alert: {label} · {detected_at}")
@@ -5808,6 +5852,12 @@ class DroidAlertsApp:
             self._set_watcher_state("Warning")
             self.watcher_detail_var.set(
                 f"Rebirth detection failed; normal spawn watching continues: {message}"
+            )
+        elif event_type == "hud_error":
+            message = str(event.get("message") or "Unknown HUD detector error")
+            self._set_watcher_state("Warning")
+            self.watcher_detail_var.set(
+                f"HUD detection failed; normal spawn watching continues: {message}"
             )
         elif event_type == "sound_error":
             message = str(event.get("message") or "Unknown sound error")
@@ -5990,7 +6040,7 @@ class DroidAlertsApp:
             "Droid Timers",
             intro="Do you want a small Droid Timers bar at the top of your screen?\n\n"
             "It counts down "
-            "to the next Beskar, Mythic, Rainbow and Galactic spawns. You can turn it on "
+            "to the next Beskar, Mythic and Galactic spawns. You can turn it on "
             "or off any time in Settings.",
             ok_text="Show Timers",
             cancel_text="No Thanks",
@@ -6076,6 +6126,7 @@ class DroidAlertsApp:
             interactive
             and not selected
             and not bool(self._value("rebirth_ready_alert_enabled"))
+            and not bool(self._value("scrap_alert_enabled"))
             and not bool(self._value("rebirth_alert_enabled"))
             and not bool(self._value("cb23_mission_alert_enabled"))
             and not self._confirm_message(
