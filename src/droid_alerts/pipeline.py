@@ -164,7 +164,11 @@ class Pipeline:
                     else candidate_method
                 )
         extra_ys = phrase_row_seeds(normalized, analysis=phrase_analysis)
-        detections = self.detector.detect(normalized, extra_row_ys=extra_ys)
+        detections = self.detector.detect(
+            normalized,
+            extra_row_ys=extra_ys,
+            source_scale=scale,
+        )
         h, w = normalized.shape[:2]
         candidate_row_boxes = [
             (0, max(0, int(round(candidate.y0 / scale))), w, min(h, int(round(candidate.y1 / scale))))

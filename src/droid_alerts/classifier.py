@@ -123,6 +123,7 @@ class DroidWordTemplate:
 
 
 DROID_WORD_SCALE_FACTORS = (0.70, 0.80, 0.90, 1.0, 1.10, 1.20, 1.35, 1.50, 1.70)
+COMPACT_TEMPLATE_SCALES = (0.50, 0.53, 0.56, 0.625, 0.675, 0.75)
 
 
 @dataclass(frozen=True)
@@ -132,6 +133,7 @@ class ScaledDroidWordTemplate:
 
 
 ScaledDroidWordTemplateBank = dict[str, list[ScaledDroidWordTemplate]]
+ScaleAwareRarityTemplateBank = dict[float, list[Template]]
 
 
 @dataclass(frozen=True)
@@ -489,7 +491,11 @@ def build_scaled_droid_word_templates(
 ) -> ScaledDroidWordTemplateBank:
     bank: ScaledDroidWordTemplateBank = {}
     for droid, templates in templates_by_droid.items():
-        factors = DROID_WORD_SCALE_FACTORS if droid == "Galactic" else (1.0,)
+        factors = (
+            DROID_WORD_SCALE_FACTORS
+            if droid in {"Beskar", "Galactic"}
+            else (1.0,)
+        )
         bank[droid] = [
             ScaledDroidWordTemplate(
                 template=template,
@@ -508,6 +514,49 @@ def build_scaled_droid_word_templates(
             )
             for template in templates
         ]
+    return bank
+
+
+def build_scale_aware_rarity_templates(
+    templates: list[Template],
+) -> ScaleAwareRarityTemplateBank:
+    """Simulate compact HUD rasterization before reference normalization.
+
+    Normalization restores geometry, but it cannot restore thin glyph edges
+    lost when Fortnite rendered the HUD below reference scale. These variants
+    are additive: compact runs search both the original templates and the
+    matching down/up-sampled forms, while reference-scale behavior remains
+    unchanged.
+    """
+
+    bank: ScaleAwareRarityTemplateBank = {}
+    for scale in COMPACT_TEMPLATE_SCALES:
+        variants: list[Template] = []
+        for template in templates:
+            height, width = template.image.shape[:2]
+            compact = cv2.resize(
+                template.image,
+                (
+                    max(1, int(round(width * scale))),
+                    max(1, int(round(height * scale))),
+                ),
+                interpolation=cv2.INTER_AREA,
+            )
+            normalized = cv2.resize(
+                compact,
+                (width, height),
+                interpolation=cv2.INTER_CUBIC,
+            )
+            variants.append(
+                Template(
+                    rarity=template.rarity,
+                    path=template.path.with_name(
+                        f"{template.path.stem}__compact_{scale:.3f}{template.path.suffix}"
+                    ),
+                    image=normalized,
+                )
+            )
+        bank[scale] = variants
     return bank
 
 
@@ -556,7 +605,7 @@ def classify_beskar_droid_word(
     templates_by_droid: dict[str, list[DroidWordTemplate]],
     *,
     shape_threshold: float = 0.50,
-    minimum_gray_pixels: int = 550,
+    minimum_gray_pixels: int = 530,
     scaled_templates: ScaledDroidWordTemplateBank | None = None,
     evidence: _DroidWordEvidence | None = None,
 ) -> tuple[str, float] | None:
@@ -1295,7 +1344,21 @@ def rescue_weak_color_rarity(
     shape_rarity, shape_score, _margin, shape_source = classify_rarity_word_shape(
         image, y, shape_templates, row_height=row_height, word_matches=word_matches
     )
-    if shape_rarity != best_rarity or shape_score < 0.50:
+    if shape_rarity != best_rarity:
+        # Additive compact templates can make a broad Common edge match rank
+        # first even when the compact Galactic Rare word itself is stronger
+        # than the proven rescue floor. Keep the rescue tied to its own word
+        # rather than requiring it to win against unrelated rarity shapes.
+        if droid != "Galactic" or best_rarity != "Rare":
+            return None
+        shape_score = rarity_word_shape_score_from_matches(
+            word_matches or [],
+            y,
+            best_rarity,
+            row_height=row_height,
+        )
+        shape_source = f"shape:{best_rarity}"
+    if shape_score < 0.50:
         return None
     score = min(0.99, 0.60 + shape_score * 0.5)
     margin = min(0.99, 1.0 - best_second / best_count)
@@ -1432,6 +1495,27 @@ def classify_rarity_roi(
                     text_margin,
                     f"galactic-text-over-background:{text_source}",
                 )
+        if (
+            droid == "Galactic"
+            and verdict[0] == "Common"
+            and text_counts["Rare"] >= 250
+        ):
+            # A compact cyan Rare word can fragment below the normal Rare
+            # floor while the white spawn phrase makes Common dominate the
+            # broad crop. Reviewed genuine Common rows contain no cyan
+            # text-shaped pixels; preserve this narrow partial-Rare recovery.
+            rare_count = text_counts["Rare"]
+            return (
+                "Rare",
+                float(min(0.99, rare_count / RARITY_COLOR_THRESHOLDS["Rare"])),
+                float(
+                    min(
+                        0.99,
+                        rare_count / max(1, text_counts["Common"]),
+                    )
+                ),
+                f"galactic-partial-rare-over-common:{rare_count}",
+            )
         if verdict[0] != "Unknown" or droid != "Galactic":
             return verdict
 
@@ -1446,22 +1530,20 @@ def classify_rarity_roi(
         text_counts = rarity_text_color_counts(
             image, y, droid, row_height=row_height, evidence=evidence
         )
-        shape_rarity, shape_score, _shape_margin, _shape_source = classify_rarity_word_shape(
-            image,
-            y,
-            shape_templates or [],
-            row_height=row_height,
-            word_matches=word_matches,
-        )
         rare_count = counts["Rare"]
         other_colored = max(counts[name] for name in ("Epic", "Legendary", "Mythic"))
+        rare_shape = rarity_word_shape_score_from_matches(
+            word_matches or [],
+            y,
+            "Rare",
+            row_height=row_height,
+        )
         if (
             rare_count >= int(RARITY_COLOR_THRESHOLDS["Rare"] * 0.80)
             and rare_count >= other_colored * 1.5
             and counts["Common"] <= rare_count * 1.25
             and text_counts["Rare"] >= 300
-            and shape_rarity == "Rare"
-            and shape_score >= 0.35
+            and rare_shape >= 0.47
         ):
             score = min(0.99, rare_count / RARITY_COLOR_THRESHOLDS["Rare"])
             margin = min(0.99, (rare_count - other_colored) / RARITY_COLOR_THRESHOLDS["Rare"])
@@ -1587,6 +1669,36 @@ def classify_rarity_roi(
         and shape_score >= 0.40
     ):
         return text_rarity, text_score, text_margin, f"{text_source};{shape_source}"
+
+    # Family ROI prototypes can lock onto background scenery while the actual
+    # outlined rarity word remains readable. Prefer a conflicting text-shaped
+    # rarity only when it clears its normal floor and the ROI winner does not.
+    # Genuine priority rows keep their own text count above that floor.
+    if color_rarity != "Unknown":
+        supported_conflicts = [
+            candidate
+            for candidate in RARITIES
+            if candidate != color_rarity
+            and text_counts[candidate] >= RARITY_COLOR_THRESHOLDS[candidate]
+        ]
+        if (
+            text_counts[color_rarity] < RARITY_COLOR_THRESHOLDS[color_rarity]
+            and supported_conflicts
+        ):
+            strongest = max(supported_conflicts, key=lambda candidate: text_counts[candidate])
+            count = text_counts[strongest]
+            threshold = RARITY_COLOR_THRESHOLDS[strongest]
+            return (
+                strongest,
+                float(min(0.99, count / threshold)),
+                float(
+                    min(
+                        0.99,
+                        max(0, count - text_counts[color_rarity]) / threshold,
+                    )
+                ),
+                f"supported-text-over-roi:{text_source}",
+            )
 
     # Raw color counts inflate Common on bright low-saturation backgrounds
     # (sand) when the alert backdrop is faint; the text-shaped analysis
@@ -1871,6 +1983,87 @@ def row_positions_from_rarity_candidates(
     return [y for y, _score in sorted(selected)]
 
 
+def rescue_compact_priority_rarity(
+    image: np.ndarray,
+    y: int,
+    droid: str,
+    current_rarity: str,
+    *,
+    source_scale: float,
+    row_height: int,
+    word_matches: list[RarityCandidate],
+    evidence: _RarityEvidence,
+) -> tuple[str, float, float, str] | None:
+    """Add a priority verdict when compact rendering weakened existing proof.
+
+    This never replaces an existing Epic/Legendary/Mythic verdict. It only
+    upgrades a lower/unknown result when the target's text-shaped color is
+    dominant and its own compact-aware word template independently agrees.
+    """
+
+    if (
+        source_scale >= 0.80
+        or droid not in {"Beskar", "Galactic"}
+        or current_rarity != "Unknown"
+    ):
+        return None
+
+    priorities = ("Epic", "Legendary", "Mythic")
+    text_counts = rarity_text_color_counts(
+        image,
+        y,
+        droid,
+        row_height=row_height,
+        evidence=evidence,
+    )
+    shapes = {
+        rarity: rarity_word_shape_score_from_matches(
+            word_matches,
+            y,
+            rarity,
+            row_height=row_height,
+        )
+        for rarity in priorities
+    }
+    if source_scale <= 0.56:
+        floor_factor = 0.60
+    elif source_scale <= 0.68:
+        floor_factor = 0.70
+    else:
+        floor_factor = 0.80
+
+    ranked = sorted(
+        priorities,
+        key=lambda rarity: (
+            text_counts[rarity] / RARITY_COLOR_THRESHOLDS[rarity],
+            shapes[rarity],
+        ),
+        reverse=True,
+    )
+    rarity = ranked[0]
+    count = text_counts[rarity]
+    second_count = text_counts[ranked[1]]
+    shape = shapes[rarity]
+    shape_floor = 0.32 if droid == "Beskar" else 0.38
+    if (
+        count < RARITY_COLOR_THRESHOLDS[rarity] * floor_factor
+        or count < second_count * 1.25
+        or text_counts["Rare"] > count * 1.10
+        or text_counts["Common"] > count * 3.0
+        or shape < shape_floor
+    ):
+        return None
+
+    threshold = RARITY_COLOR_THRESHOLDS[rarity]
+    return (
+        rarity,
+        float(min(0.99, count / threshold)),
+        float(min(0.99, max(0, count - second_count) / threshold)),
+        f"compact-priority:{current_rarity}->{rarity}:text={count};shape={shape:.2f};"
+        f"scale={source_scale:.3f}",
+    )
+
+
 class DroidVisualDetector:
     def __init__(
         self,
@@ -1882,6 +2075,9 @@ class DroidVisualDetector:
         extra_checks: bool = False,
     ) -> None:
         self.templates = load_templates(template_dir)
+        self.scale_aware_rarity_templates = build_scale_aware_rarity_templates(
+            self.templates
+        )
         self.rarity_roi_templates = load_rarity_roi_templates(Path(template_dir) / "rarity_rois")
         self.rarity_correlation_bank = build_rarity_correlation_bank(
             self.rarity_roi_templates
@@ -1900,15 +2096,31 @@ class DroidVisualDetector:
         # detect() call; the watcher surfaces these in debug mode.
         self.last_rejections: list[dict] = []
 
-    def detect(self, image: np.ndarray, extra_row_ys: list[int] | None = None) -> list[Detection]:
+    def detect(
+        self,
+        image: np.ndarray,
+        extra_row_ys: list[int] | None = None,
+        *,
+        source_scale: float = 1.0,
+    ) -> list[Detection]:
         h, w = image.shape[:2]
         self.last_rejections = []
+        active_templates = self.templates
+        if source_scale < 0.80 and self.scale_aware_rarity_templates:
+            compact_scale = min(
+                self.scale_aware_rarity_templates,
+                key=lambda candidate: abs(candidate - source_scale),
+            )
+            active_templates = [
+                *self.templates,
+                *self.scale_aware_rarity_templates[compact_scale],
+            ]
         # Single template pass per frame; every downstream consumer filters
         # this list. min_score 0.20 covers the lowest threshold in use.
-        word_matches = collect_word_matches(image, self.templates, min_score=0.20)
+        word_matches = collect_word_matches(image, active_templates, min_score=0.20)
         row_ys = row_positions_from_rarity_candidates(
             image,
-            self.templates,
+            active_templates,
             threshold=self.rarity_threshold,
             row_height=self.row_height,
             matches=word_matches,
@@ -2017,7 +2229,7 @@ class DroidVisualDetector:
                 y,
                 droid,
                 self.rarity_roi_templates,
-                self.templates,
+                active_templates,
                 row_height=self.row_height,
                 word_matches=word_matches,
                 evidence=rarity_evidence,
@@ -2033,16 +2245,71 @@ class DroidVisualDetector:
                     image,
                     y,
                     droid,
-                    self.templates,
+                    active_templates,
                     row_height=self.row_height,
                     word_matches=word_matches,
                     evidence=rarity_evidence,
                 )
                 if rescued is not None:
                     rarity, rarity_score, rarity_margin, template_name = rescued
+            compact_rescue = rescue_compact_priority_rarity(
+                image,
+                y,
+                droid,
+                rarity,
+                source_scale=source_scale,
+                row_height=self.row_height,
+                word_matches=word_matches,
+                evidence=rarity_evidence,
+            )
+            if compact_rescue is not None:
+                rarity, rarity_score, rarity_margin, template_name = compact_rescue
             if rarity == "Unknown":
                 reject(y, "unknown-rarity", droid, template_name)
                 continue
+
+            if (droid, rarity) in PRIORITY_ALERTS:
+                # Custom droid names still produce "<name> Droid (Rarity)
+                # spawned..." and can therefore satisfy every phrase/rarity
+                # gate. Require literal family evidence before turning those
+                # rows into priority alerts.
+                if droid == "Beskar":
+                    # This is a literal-family safety gate, not a recall path:
+                    # score only the native Beskar word templates. The wider
+                    # compact matching bank can also fit arbitrary player
+                    # names and must not weaken the custom-name veto.
+                    droid_shape = droid_word_shape_score(
+                        row,
+                        droid,
+                        self.droid_word_templates,
+                    )
+                    profile = droid_word_text_profile(row, evidence=word_evidence)
+                    weak_named_row = (
+                        droid_shape < 0.48
+                        and (
+                            profile["gray"] >= 600
+                            or profile["colored_total"] >= 1000
+                        )
+                    )
+                    if weak_named_row:
+                        reject(
+                            y,
+                            "unconfirmed-priority-droid-word",
+                            droid,
+                            f"shape={droid_shape:.2f};gray={profile['gray']};"
+                            f"colored={profile['colored_total']}",
+                        )
+                        continue
+                elif droid == "Rainbow":
+                    icon_droid, icon_score = best_droid_type(row)
+                    if icon_droid != "Rainbow" and icon_score >= 0.75:
+                        reject(
+                            y,
+                            "conflicting-priority-droid-word",
+                            droid,
+                            f"icon={icon_droid}:{icon_score:.2f}",
+                        )
+                        continue
 
             # A priority word must be bound to a phrase-derived row seed. A
             # 44px candidate window overlaps the next 32-33px chat line, so the
