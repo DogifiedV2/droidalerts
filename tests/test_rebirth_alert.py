@@ -17,6 +17,7 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 from droid_alerts.capture import MonitorInfo, PixelBox
 from droid_alerts.classifier import Detection
 from droid_alerts.config import AppConfig
+from droid_alerts.auxiliary_alerts import AuxiliaryAlertSchedule
 from droid_alerts.gui import REBIRTH_ALERT_TOOLTIP
 from droid_alerts.notifications import alert_title, event_text
 from droid_alerts.rebirth import (
@@ -152,7 +153,7 @@ class RebirthWatcherTests(unittest.TestCase):
             patch.object(watcher, "AlertPolicy", return_value=policy),
             patch.object(watcher, "RebirthAlertDetector", return_value=detector),
             patch.object(watcher, "AnonymousTelemetryClient", return_value=telemetry),
-            patch.object(watcher, "append_event") as append_event,
+            patch("droid_alerts.logging_io.append_event") as append_event,
             patch.object(watcher, "show_popup") as show_popup,
             patch.object(watcher, "REBIRTH_SCAN_INTERVAL_SECONDS", 0.0),
         ):
@@ -196,6 +197,18 @@ class RebirthConfigTests(unittest.TestCase):
         self.assertFalse(AppConfig.from_dict({}).rebirth_alert_enabled)
         restored = AppConfig.from_dict(AppConfig(rebirth_alert_enabled=True).to_dict())
         self.assertTrue(restored.rebirth_alert_enabled)
+
+
+class AuxiliaryAlertScheduleTests(unittest.TestCase):
+    def test_scan_gates_and_cooldowns_keep_independent_state(self):
+        schedule = AuxiliaryAlertSchedule()
+        self.assertTrue(schedule.rebirth_available_due(10.0, 0.4))
+        self.assertFalse(schedule.rebirth_available_due(10.2, 0.4))
+        self.assertTrue(schedule.cb23_due(10.2, 0.5))
+        self.assertTrue(schedule.rebirth_ready_due(10.2, 5.0))
+        self.assertTrue(schedule.can_alert_rebirth_available(10.2, 12.0))
+        self.assertFalse(schedule.can_alert_rebirth_available(20.0, 12.0))
+        self.assertTrue(schedule.can_alert_cb23(10.2, 12.0))
 
 
 if __name__ == "__main__":

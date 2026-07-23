@@ -204,7 +204,7 @@ class BeltConfigAndRegionTests(unittest.TestCase):
         )
         event = SimpleNamespace(kind="entered", track=track)
 
-        with patch("droid_alerts.belt.events.append_event") as append:
+        with patch("droid_alerts.logging_io.append_event") as append:
             record = log_track_event(event, alerted=True)
 
         self.assertEqual("belt_entered", record["event_type"])
@@ -214,7 +214,7 @@ class BeltConfigAndRegionTests(unittest.TestCase):
         self.assertEqual("Common", record["card_rarity"])
         self.assertEqual(0.91, record["rarity_confidence"])
         self.assertTrue(record["alerted"])
-        append.assert_called_once_with(record)
+        append.assert_called_once_with(record, filename="events.jsonl")
 
     def test_regions_are_saved_independently_for_each_monitor(self):
         first = MonitorDescriptor(
@@ -622,7 +622,7 @@ class BeltAlertDeliveryTests(unittest.TestCase):
             patch("droid_alerts.gui.send_discord_alert", return_value=delivered) as discord,
             patch("droid_alerts.gui.send_ntfy_alert", return_value=delivered) as ntfy,
             patch("droid_alerts.gui.send_phone_alert", return_value=delivered) as phone,
-            patch("droid_alerts.gui.append_event") as append,
+            patch("droid_alerts.logging_io.append_event") as append,
             patch("droid_alerts.gui.threading.Thread", ImmediateThread),
         ):
             DroidAlertsApp._send_belt_alert(

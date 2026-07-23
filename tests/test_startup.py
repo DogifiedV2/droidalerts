@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -9,8 +12,12 @@ from unittest.mock import Mock, patch
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BASE_DIR))
 sys.path.insert(0, str(BASE_DIR / "src"))
+sys.path.insert(0, str(BASE_DIR / "tests"))
 
+import main as app_main
+import run_eval
 from droid_alerts.startup_splash import StartupSplash
 from droid_alerts import gui
 
@@ -82,9 +89,29 @@ class StartupSplashTests(unittest.TestCase):
         splash.close.assert_called_once_with()
         app.schedule_startup_prompts.assert_called_once_with(
             first_delay_ms=100,
-            discord_delay_ms=500,
         )
         root.mainloop.assert_called_once_with()
+
+
+class CommandExitStatusTests(unittest.TestCase):
+    def test_test_command_propagates_evaluation_status(self):
+        for status in (0, 1):
+            with self.subTest(status=status), patch.object(
+                sys, "argv", ["main.py", "test"]
+            ), patch.object(run_eval, "main", return_value=status):
+                self.assertEqual(status, app_main.main())
+
+    def test_evaluation_fails_when_a_manifest_fixture_is_missing(self):
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch.object(run_eval, "FIXTURES_DIR", Path(folder) / "fixtures"),
+            patch.object(run_eval, "RESULTS_DIR", Path(folder) / "results"),
+            patch.object(run_eval, "load_manifest", return_value={"missing.png": {"rows": []}}),
+            patch.object(run_eval, "Pipeline"),
+            patch.object(run_eval, "templates_dir", return_value=Path(folder)),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(1, run_eval.main())
 
 
 if __name__ == "__main__":

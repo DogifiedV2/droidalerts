@@ -544,16 +544,11 @@ def show_popup(
             print(f"[POPUP] Failed to show alert: {exc}")
 
     if parent is not None:
-        def parent_popup() -> None:
-            try:
-                create_popup(tk.Toplevel(parent), owns_mainloop=False)
-            except Exception as exc:
-                print(f"[POPUP] Failed to show GUI popup: {exc}")
-
         try:
-            parent.after(0, parent_popup)
+            create_popup(tk.Toplevel(parent), owns_mainloop=False)
             return
         except Exception as exc:
-            print(f"[POPUP] Failed to schedule GUI popup, using standalone popup: {exc}")
+            print(f"[POPUP] Failed to show GUI popup: {exc}")
+            return
 
     threading.Thread(target=popup_thread, daemon=True).start()

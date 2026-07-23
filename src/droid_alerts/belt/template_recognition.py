@@ -9,13 +9,8 @@ import numpy as np
 
 from ..config import templates_dir
 from .names import DROID_NAMES, droid_class
-from .recognition import (
-    CARD_FAMILIES,
-    CardCandidate,
-    CardContext,
-    CardFrameResult,
-    classify_card_family_border,
-)
+from .card_family import CARD_FAMILIES, classify_card_family_border
+from .models import CardCandidate, CardContext, CardFrameResult
 
 
 INDEX_VERSION = 1
@@ -332,7 +327,24 @@ class TemplateCardRecognizer:
             return self._analyze_aligned(frame_bgr)
 
         if self._geometry is None:
-            return self._search_geometry(frame_bgr, started=started)
+            initial_result = self._analyze_aligned(frame_bgr)
+            if not self._has_card_like_evidence(initial_result):
+                self._geometry = (1.0, 0.0)
+                self._geometry_misses = 0
+                return self._geometry_result(
+                    initial_result,
+                    frame_bgr,
+                    crop_top=0,
+                    ratio=1.0,
+                    top_ratio=0.0,
+                    searched=False,
+                    started=started,
+                )
+            return self._search_geometry(
+                frame_bgr,
+                started=started,
+                initial_result=initial_result,
+            )
 
         requested_ratio, vertical_anchor = self._geometry
         crop, crop_top, actual_ratio, actual_top_ratio = self._geometry_crop(
@@ -347,6 +359,8 @@ class TemplateCardRecognizer:
             full_height=frame_height,
         )
         if accepted_count:
+            self._geometry_misses = 0
+        elif not self._has_card_like_evidence(result):
             self._geometry_misses = 0
         else:
             self._geometry_misses += 1
@@ -370,11 +384,20 @@ class TemplateCardRecognizer:
         frame_bgr: np.ndarray,
         *,
         started: float,
+        initial_result: CardFrameResult | None = None,
     ) -> CardFrameResult:
         attempts: dict[
             tuple[int, int],
             tuple[float, float, int, float, CardFrameResult],
         ] = {}
+        if initial_result is not None:
+            attempts[(frame_bgr.shape[0], 0)] = (
+                1.0,
+                0.0,
+                0,
+                0.0,
+                initial_result,
+            )
         for requested_ratio in _GEOMETRY_HEIGHT_RATIOS:
             for vertical_anchor in _GEOMETRY_VERTICAL_ANCHORS:
                 crop, crop_top, actual_ratio, actual_top_ratio = self._geometry_crop(
@@ -463,7 +486,7 @@ class TemplateCardRecognizer:
                     "candidate_count": len(attempt_result.candidates),
                     "accepted_confidence": round(
                         sum(
-                            candidate.ocr_confidence
+                            candidate.identity_confidence
                             for candidate in attempt_result.candidates
                             if candidate.accepted
                         ),
@@ -480,6 +503,16 @@ class TemplateCardRecognizer:
             searched=True,
             started=started,
             attempts=summaries,
+        )
+
+    @staticmethod
+    def _has_card_like_evidence(result: CardFrameResult) -> bool:
+        diagnostics = result.diagnostics
+        return bool(
+            int(diagnostics.get("card_window_count", 0) or 0)
+            or int(diagnostics.get("proposal_count", 0) or 0)
+            or int(diagnostics.get("descriptor_evidence_count", 0) or 0)
+            or result.candidates
         )
 
     @staticmethod
@@ -601,7 +634,7 @@ class TemplateCardRecognizer:
         )
         if attempts is not None:
             diagnostics["geometry_attempts"] = attempts
-        return CardFrameResult(result.text_observations, candidates, diagnostics)
+        return CardFrameResult(candidates, diagnostics)
 
     def _analyze_aligned(self, frame_bgr: np.ndarray) -> CardFrameResult:
         started = time.perf_counter()
@@ -617,7 +650,6 @@ class TemplateCardRecognizer:
         if frame_height < 80 or frame_width < 80:
             return CardFrameResult(
                 (),
-                (),
                 {
                     "detector": self.detector_name,
                     "frame_shape": list(frame_bgr.shape),
@@ -632,12 +664,12 @@ class TemplateCardRecognizer:
         if not len(x_positions):
             return CardFrameResult(
                 (),
-                (),
                 {
                     "detector": self.detector_name,
                     "frame_shape": list(frame_bgr.shape),
                     "window_count": 0,
                     "card_window_count": 0,
+                    "descriptor_evidence_count": 0,
                     "accepted_count": 0,
                     "geometry_seconds": geometry_at - started,
                     "descriptor_seconds": descriptors_at - geometry_at,
@@ -710,6 +742,9 @@ class TemplateCardRecognizer:
             "frame_shape": list(frame_bgr.shape),
             "window_count": len(x_positions),
             "card_window_count": int(evidence_mask.sum()),
+            "descriptor_evidence_count": int(
+                np.count_nonzero(np.any(query_hog != 0.0, axis=1))
+            ),
             "proposal_count": len(proposals),
             "accepted_count": accepted_count,
             "ambiguous_count": sum(
@@ -722,7 +757,7 @@ class TemplateCardRecognizer:
             "attribute_seconds": completed_at - matched_at,
             "total_seconds": completed_at - started,
         }
-        return CardFrameResult((), candidates, diagnostics)
+        return CardFrameResult(candidates, diagnostics)
 
     def recognize(self, frame_bgr: np.ndarray):
         return self.analyze(frame_bgr).observations
@@ -900,7 +935,7 @@ class TemplateCardRecognizer:
         return CardCandidate(
             canonical_name=proposal.name,
             raw_text=f"template:{proposal.name}",
-            ocr_confidence=confidence,
+            identity_confidence=confidence,
             name_box=name_box,
             context=context,
             accepted=proposal.accepted,

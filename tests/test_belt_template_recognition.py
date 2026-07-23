@@ -4,7 +4,7 @@ import sys
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
@@ -14,6 +14,8 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.belt.names import DROID_CLASS_BY_NAME, DROID_NAMES, droid_class
+from droid_alerts.belt.card_family import classify_card_family_border
+from droid_alerts.belt.models import CardFrameResult
 from droid_alerts.belt.template_recognition import (
     BeltTemplateIndex,
     TemplateCardRecognizer,
@@ -30,6 +32,23 @@ ART_X = 43
 ART_Y = 21
 ART_WIDTH = 154
 ART_HEIGHT = 144
+
+
+def blank_frame(*, width: int = 400, height: int = 240) -> np.ndarray:
+    return np.zeros((height, width, 3), dtype=np.uint8)
+
+
+def paint_segments(frame, name_box, card_box, segments) -> None:
+    y1 = round(name_box[1] + 1.20 * name_box[3])
+    y2 = round(name_box[1] + 1.70 * name_box[3])
+    for left_ratio, right_ratio, hsv_color in segments:
+        bgr = tuple(
+            int(value)
+            for value in cv2.cvtColor(np.uint8([[hsv_color]]), cv2.COLOR_HSV2BGR)[0, 0]
+        )
+        x1 = card_box[0] + round(card_box[2] * left_ratio)
+        x2 = card_box[0] + round(card_box[2] * right_ratio)
+        frame[y1:y2, x1:x2] = bgr
 
 
 def patterned_art(seed: int) -> np.ndarray:
@@ -78,6 +97,74 @@ def synthetic_index() -> BeltTemplateIndex:
     )
 
 
+class CardFamilyBorderTests(unittest.TestCase):
+    def test_border_fallback_recognizes_only_distinctive_card_families(self):
+        name_box = (100, 100, 100, 20)
+        card_box = (80, 40, 200, 100)
+        families = {
+            "Gold": [(18, 220, 220)],
+            "Diamond": [(90, 220, 220)],
+            "Rainbow": [(18, 220, 220), (90, 220, 220), (135, 220, 220)],
+            "Default": [(0, 0, 180)],
+            "Beskar": [(90, 30, 180)],
+        }
+        for expected, colors in families.items():
+            with self.subTest(family=expected):
+                frame = blank_frame()
+                segment_width = 1.0 / len(colors)
+                paint_segments(
+                    frame,
+                    name_box,
+                    card_box,
+                    [
+                        (index * segment_width, (index + 1) * segment_width, color)
+                        for index, color in enumerate(colors)
+                    ],
+                )
+                family, confidence = classify_card_family_border(frame, name_box, card_box)
+                if expected in {"Gold", "Diamond", "Rainbow"}:
+                    self.assertEqual(expected, family)
+                    self.assertGreater(confidence, 0.5)
+                else:
+                    self.assertEqual(("", 0.0), (family, confidence))
+
+    def test_gold_border_with_small_multihue_highlights_stays_gold(self):
+        name_box = (100, 100, 100, 20)
+        card_box = (80, 40, 200, 100)
+        frame = blank_frame()
+        paint_segments(
+            frame,
+            name_box,
+            card_box,
+            (
+                (0.00, 0.70, (18, 220, 220)),
+                (0.70, 0.85, (2, 220, 220)),
+                (0.85, 1.00, (170, 220, 220)),
+            ),
+        )
+        family, confidence = classify_card_family_border(frame, name_box, card_box)
+        self.assertEqual("Gold", family)
+        self.assertGreater(confidence, 0.8)
+
+    def test_rainbow_border_can_have_one_dominant_hue_section(self):
+        name_box = (100, 100, 100, 20)
+        card_box = (80, 40, 200, 100)
+        frame = blank_frame()
+        paint_segments(
+            frame,
+            name_box,
+            card_box,
+            (
+                (0.00, 0.60, (18, 220, 220)),
+                (0.60, 0.80, (90, 220, 220)),
+                (0.80, 1.00, (135, 220, 220)),
+            ),
+        )
+        family, confidence = classify_card_family_border(frame, name_box, card_box)
+        self.assertEqual("Rainbow", family)
+        self.assertGreater(confidence, 0.8)
+
+
 class BeltTemplateIndexTests(unittest.TestCase):
     def test_every_template_identity_has_one_fixed_droid_class(self):
         self.assertEqual(set(DROID_NAMES), set(DROID_CLASS_BY_NAME))
@@ -94,6 +181,41 @@ class BeltTemplateIndexTests(unittest.TestCase):
 
 
 class TemplateCardRecognizerTests(unittest.TestCase):
+    def test_empty_frames_never_trigger_periodic_geometry_search(self):
+        frame = np.full((405, 900, 3), (110, 95, 80), dtype=np.uint8)
+        recognizer = TemplateCardRecognizer(synthetic_index())
+        original = recognizer._analyze_aligned
+        recognizer._analyze_aligned = MagicMock(wraps=original)
+
+        results = [recognizer.analyze(frame) for _ in range(16)]
+
+        self.assertEqual(16, recognizer._analyze_aligned.call_count)
+        self.assertEqual(0, recognizer._geometry_misses)
+        self.assertTrue(all(not result.diagnostics["geometry_searched"] for result in results))
+        self.assertTrue(all("geometry_attempts" not in result.diagnostics for result in results))
+
+    def test_rejected_card_evidence_still_retries_geometry(self):
+        frame = np.full((405, 900, 3), (110, 95, 80), dtype=np.uint8)
+        rejected = CardFrameResult(
+            (),
+            {
+                "frame_shape": list(frame.shape),
+                "card_window_count": 1,
+                "proposal_count": 0,
+                "accepted_count": 0,
+            },
+        )
+        recognizer = TemplateCardRecognizer(synthetic_index())
+        recognizer._geometry = (1.0, 0.0)
+        recognizer._analyze_aligned = MagicMock(return_value=rejected)
+        searched = MagicMock(return_value=rejected)
+        recognizer._search_geometry = searched
+
+        for _ in range(8):
+            recognizer.analyze(frame)
+
+        searched.assert_called_once()
+
     def test_finds_multiple_cards_without_ocr(self):
         frame_height = 405
         crop_top = 71
@@ -113,7 +235,6 @@ class TemplateCardRecognizerTests(unittest.TestCase):
         self.assertEqual([1.0, 1.0], [item.rarity_confidence for item in result.observations])
         self.assertEqual("templates", result.diagnostics["detector"])
         self.assertEqual(2, result.diagnostics["accepted_count"])
-        self.assertEqual((), result.text_observations)
         self.assertTrue(all(item.raw_best_similarity > 0.8 for item in result.candidates))
         self.assertTrue(all(item.runner_up_identity for item in result.candidates))
         self.assertTrue(all(item.identity_margin > 0.01 for item in result.candidates))

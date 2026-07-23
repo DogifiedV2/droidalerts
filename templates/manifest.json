@@ -7,9 +7,7 @@
     410
   ],
   "note": "All templates are at reference scale; normalize inputs before matching.",
-  "known_gaps": [
-    "Beskar Mythic has no real full-row capture yet (template from synthetic stack only)."
-  ],
+  "known_gaps": [],
   "templates": [
     {
       "kind": "rarity_word",

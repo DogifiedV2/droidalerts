@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from ..logging_io import append_event, timestamp
+from ..logging_io import append_event_safely, timestamp
 from .tracking import TrackEvent
 
 
@@ -48,5 +48,11 @@ def log_track_event(event: TrackEvent, *, alerted: bool = False) -> dict[str, ob
             f"{track.confidence:.0%} confidence"
         ),
     }
-    append_event(record)
+    append_event_safely(
+        record,
+        on_error=lambda exc: print(
+            f"[LOG] Failed to write {record['event_type']}: {exc}",
+            flush=True,
+        ),
+    )
     return record

@@ -1,15 +1,10 @@
-"""Rebuild ToolV2 templates from training_data/current_ui screenshots.
+"""Build detector templates and their manifest from labeled training images.
 
-Template builder using the project's crop geometry and preprocessing. Additions:
-  - crops from the five real annotated captures (IMG_6604-6608), which fill
-    the Rainbow/Diamond Mythic and Beskar Legendary gaps;
-  - overlay-line cleanup for those captures (the old run drew vivid debug
-    rectangles exactly on the row bounds);
-  - templates/manifest.json recording reference-scale metadata.
-
-All sources are at reference scale (44px rows / 2560x1440 capture); this was
-verified by measuring text-band heights (15-20px) and row spacing (~33px)
-against the original training crops.
+Inputs are reference-scale 2560x1440 captures with 44px rows. The configured
+crop geometry is preprocessed into rarity-word and full rarity-ROI templates;
+sources known to contain review overlays are cleaned before cropping. Existing
+unrelated template assets are preserved and the output manifest records every
+generated file with its source geometry.
 """
 
 from __future__ import annotations
@@ -176,7 +171,7 @@ def build_templates(source_root: Path, out_dir: Path) -> None:
         "reference_screen_height": REFERENCE_SCREEN_HEIGHT,
         "rarity_roi_x": [RARITY_ROI_X1, RARITY_ROI_X2],
         "note": "All templates are at reference scale; normalize inputs before matching.",
-        "known_gaps": ["Beskar Mythic has no real full-row capture yet (template from synthetic stack only)."],
+        "known_gaps": [],
         "templates": written,
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

@@ -7,6 +7,7 @@ paths outside the project root.
 from __future__ import annotations
 
 import sys
+import unittest
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -47,5 +48,10 @@ def main() -> int:
     return 0
 
 
+class PathGuardTests(unittest.TestCase):
+    def test_project_paths_stay_self_contained(self):
+        self.assertEqual(0, main())
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    unittest.main()

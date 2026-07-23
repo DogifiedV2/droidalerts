@@ -16,7 +16,7 @@ import numpy as np
 from .. import __version__
 from ..config import data_dir
 from ..image_io import write_cv_image
-from .recognition import CardCandidate
+from .models import CardCandidate
 
 
 MAX_SAMPLES_PER_DROID = 20
@@ -190,7 +190,7 @@ class BeltTemplateSampleCollector:
                 self._appearances[track_id] = appearance
             appearance.last_seen_at = float(now)
             appearance.names[name] += 1
-            confidence = min(1.0, max(0.0, float(candidate.ocr_confidence)))
+            confidence = min(1.0, max(0.0, float(candidate.identity_confidence)))
             appearance.confidences.setdefault(name, []).append(confidence)
             if confidence >= self.minimum_identity_confidence:
                 appearance.strong_names[name] += 1
@@ -505,7 +505,7 @@ def _build_best_crop(
     frame_number: int,
 ) -> _BestCrop | None:
     frame_height, frame_width = frame_bgr.shape[:2]
-    x, y, name_width, name_height = (int(value) for value in candidate.name_box)
+    x, y, _name_width, name_height = (int(value) for value in candidate.name_box)
     if name_height <= 0:
         return None
     # The recognizer may align a price-inclusive belt selection to a smaller,
@@ -556,7 +556,7 @@ def _build_best_crop(
         + min(1.0, candidate.context.art_edge_density / 0.10)
         + min(1.0, candidate.context.frame_line_ratio)
     ) / 3.0
-    confidence = min(1.0, max(0.0, float(candidate.ocr_confidence)))
+    confidence = min(1.0, max(0.0, float(candidate.identity_confidence)))
     quality_components = {
         "identity_confidence": confidence,
         "centrality": centrality,

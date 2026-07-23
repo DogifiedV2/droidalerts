@@ -17,6 +17,13 @@ class RowCandidate:
         return self.y1 - self.y0
 
 
+@dataclass(frozen=True)
+class PhraseAnalysis:
+    text_bands: tuple[tuple[int, int], ...]
+    row_seeds: tuple[int, ...]
+    has_evidence: bool
+
+
 def find_candidate_rows(image_bgr: np.ndarray) -> list[RowCandidate]:
     """Locate likely alert rows inside a captured band.
 
@@ -47,35 +54,35 @@ def find_candidate_rows(image_bgr: np.ndarray) -> list[RowCandidate]:
     return merged[:24]
 
 
-def phrase_text_bands(image_bgr: np.ndarray) -> list[tuple[int, int]]:
-    """(start_y, height) of each white 'spawned at the ...' text band.
+def analyze_phrase(
+    image_bgr: np.ndarray,
+    *,
+    min_window_pixels: int = 600,
+) -> PhraseAnalysis:
+    """Compute strict phrase bands and the deliberately looser fast gate once."""
 
-    Runs on a reference-scale (normalized) band: scans the spawn-phrase
-    columns (330-720) for white-text bands with dark outlines. At correct
-    scale the bands measure ~13px tall with ~32-33px pitch between rows;
-    deviations from that are the scale-refinement signal.
-    """
     h, w = image_bgr.shape[:2]
     if w <= 340 or h < 20:
-        return []
+        return PhraseAnalysis((), (), False)
     x2 = min(w, 720)
     strip = image_bgr[:, 330:x2]
     b, g, r = cv2.split(strip)
     maxc = np.maximum.reduce([r, g, b])
     minc = np.minimum.reduce([r, g, b])
-    white = (r > 180) & (g > 180) & (b > 180) & ((maxc - minc) < 60)
     gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY)
-    dark_near = cv2.dilate((gray < 100).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
-    profile = (white & dark_near).sum(axis=1)
-    # Threshold above the inter-row floor (backdrop edges/dilation bleed) but
-    # well below glyph-core counts; relative to strip width for narrow bands.
+
+    strict_white = (r > 180) & (g > 180) & (b > 180) & ((maxc - minc) < 60)
+    strict_dark_near = (
+        cv2.dilate((gray < 100).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    )
+    strict_profile = (strict_white & strict_dark_near).sum(axis=1)
     threshold = max(20, int((x2 - 330) * 0.09))
 
     bands: list[tuple[int, int]] = []
     in_run = False
     start = 0
     for y in range(h):
-        active = profile[y] >= threshold
+        active = strict_profile[y] >= threshold
         if active and not in_run:
             start = y
             in_run = True
@@ -86,17 +93,59 @@ def phrase_text_bands(image_bgr: np.ndarray) -> list[tuple[int, int]]:
                 bands.append((start, band_h))
     if in_run and 8 <= h - start <= 30:
         bands.append((start, h - start))
-    return bands
+
+    loose_white = (r > 165) & (g > 165) & (b > 165) & ((maxc - minc) < 90)
+    loose_dark_near = (
+        cv2.dilate((gray < 115).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    )
+    loose_profile = (loose_white & loose_dark_near).sum(axis=1)
+    has_evidence = False
+    if int(loose_profile.sum()) >= min_window_pixels:
+        window = min(44, h)
+        cumulative = np.concatenate([[0], np.cumsum(loose_profile)])
+        windowed = cumulative[window:] - cumulative[:-window]
+        has_evidence = bool(
+            windowed.size == 0 or windowed.max() >= min_window_pixels
+        )
+    return PhraseAnalysis(
+        tuple(bands),
+        tuple(max(0, start - 13) for start, _height in bands),
+        has_evidence,
+    )
 
 
-def phrase_row_seeds(image_bgr: np.ndarray) -> list[int]:
+def phrase_text_bands(
+    image_bgr: np.ndarray,
+    *,
+    analysis: PhraseAnalysis | None = None,
+) -> list[tuple[int, int]]:
+    """(start_y, height) of each white 'spawned at the ...' text band.
+
+    Runs on a reference-scale (normalized) band: scans the spawn-phrase
+    columns (330-720) for white-text bands with dark outlines. At correct
+    scale the bands measure ~13px tall with ~32-33px pitch between rows;
+    deviations from that are the scale-refinement signal.
+    """
+    return list((analysis or analyze_phrase(image_bgr)).text_bands)
+
+
+def phrase_row_seeds(
+    image_bgr: np.ndarray,
+    *,
+    analysis: PhraseAnalysis | None = None,
+) -> list[int]:
     """Precise row-top seeds from the spawn-phrase text bands: each band
     marks a row top 13px above it (measured offset at reference scale). Far
     more position-accurate than projection candidates."""
-    return [max(0, start - 13) for start, _height in phrase_text_bands(image_bgr)]
+    return list((analysis or analyze_phrase(image_bgr)).row_seeds)
 
 
-def band_has_phrase_evidence(image_bgr: np.ndarray, *, min_window_pixels: int = 600) -> bool:
+def band_has_phrase_evidence(
+    image_bgr: np.ndarray,
+    *,
+    min_window_pixels: int = 600,
+    analysis: PhraseAnalysis | None = None,
+) -> bool:
     """Cheap whole-band pre-gate (~2ms): does any 44px-tall window in the
     spawn-phrase columns hold enough white outlined text to possibly be an
     alert row? Frames without alerts skip the expensive template pipeline.
@@ -104,23 +153,12 @@ def band_has_phrase_evidence(image_bgr: np.ndarray, *, min_window_pixels: int = 
     Deliberately laxer than the per-row gate (600 vs 700). This must never
     veto a real alert, only skip obviously empty frames.
     """
-    h, w = image_bgr.shape[:2]
-    if w <= 340 or h < 20:
-        return False
-    strip = image_bgr[:, 330 : min(w, 720)]
-    b, g, r = cv2.split(strip)
-    maxc = np.maximum.reduce([r, g, b])
-    minc = np.minimum.reduce([r, g, b])
-    white = (r > 165) & (g > 165) & (b > 165) & ((maxc - minc) < 90)
-    gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY)
-    dark_near = cv2.dilate((gray < 115).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
-    profile = (white & dark_near).sum(axis=1)
-    if int(profile.sum()) < min_window_pixels:
-        return False
-    window = min(44, h)
-    cumulative = np.concatenate([[0], np.cumsum(profile)])
-    windowed = cumulative[window:] - cumulative[:-window]
-    return bool(windowed.size == 0 or windowed.max() >= min_window_pixels)
+    if analysis is not None and min_window_pixels == 600:
+        return analysis.has_evidence
+    return analyze_phrase(
+        image_bgr,
+        min_window_pixels=min_window_pixels,
+    ).has_evidence
 
 
 def measured_row_heights(candidates: list[RowCandidate]) -> list[int]:

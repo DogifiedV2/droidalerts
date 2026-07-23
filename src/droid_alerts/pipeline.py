@@ -10,6 +10,7 @@ from .classifier import Detection, DroidVisualDetector, column_drift_report
 from .config import Thresholds
 from .normalize import estimate_scale, normalize_band
 from .row_finder import (
+    analyze_phrase,
     band_has_phrase_evidence,
     find_candidate_rows,
     phrase_row_seeds,
@@ -107,25 +108,35 @@ class Pipeline:
                 scale_max=self.thresholds.scale_max,
             )
         normalized = normalize_band(image_bgr, scale)
+        phrase_analysis = analyze_phrase(normalized)
         # Self-calibration: if the phrase rows measure noticeably smaller or
         # larger than reference, the screen-size scale formula is wrong for
         # this machine, renormalize at the measured scale. Kept only when
         # the corrected band re-measures at ~reference size.
         if known_scale is None:
-            ratio = _row_scale_ratio(phrase_text_bands(normalized.image))
+            ratio = _row_scale_ratio(
+                phrase_text_bands(normalized, analysis=phrase_analysis)
+            )
             if ratio is not None and 0.5 <= ratio <= 1.5 and not (0.90 < ratio < 1.10):
                 candidate_scale = scale * ratio
                 renormalized = normalize_band(image_bgr, candidate_scale)
-                check_ratio = _row_scale_ratio(phrase_text_bands(renormalized.image))
+                renormalized_phrase_analysis = analyze_phrase(renormalized)
+                check_ratio = _row_scale_ratio(
+                    phrase_text_bands(
+                        renormalized,
+                        analysis=renormalized_phrase_analysis,
+                    )
+                )
                 if check_ratio is not None and 0.90 <= check_ratio <= 1.10:
                     scale = candidate_scale
                     normalized = renormalized
+                    phrase_analysis = renormalized_phrase_analysis
                     method = f"{method}+row-pitch"
         # Fast path: most live frames have no alerts at all. Every accepted
         # row must pass the spawn-phrase gate anyway, so a band without any
         # phrase-like white text can skip the expensive template pipeline.
-        if not band_has_phrase_evidence(normalized.image):
-            h, w = normalized.image.shape[:2]
+        if not band_has_phrase_evidence(normalized, analysis=phrase_analysis):
+            h, w = normalized.shape[:2]
             return PipelineResult(
                 detections=[],
                 scale=scale,
@@ -133,7 +144,7 @@ class Pipeline:
                 candidate_rows=len(candidates),
                 normalized_shape=(h, w),
                 meta={"skipped": "no-phrase-evidence"},
-                normalized_image=normalized.image if keep_normalized else None,
+                normalized_image=normalized if keep_normalized else None,
             )
         if not candidates:
             candidates = find_candidate_rows(image_bgr)
@@ -152,9 +163,9 @@ class Pipeline:
                     if method.endswith("+row-pitch")
                     else candidate_method
                 )
-        extra_ys = phrase_row_seeds(normalized.image)
-        detections = self.detector.detect(normalized.image, extra_row_ys=extra_ys)
-        h, w = normalized.image.shape[:2]
+        extra_ys = phrase_row_seeds(normalized, analysis=phrase_analysis)
+        detections = self.detector.detect(normalized, extra_row_ys=extra_ys)
+        h, w = normalized.shape[:2]
         candidate_row_boxes = [
             (0, max(0, int(round(candidate.y0 / scale))), w, min(h, int(round(candidate.y1 / scale))))
             for candidate in candidates
@@ -172,6 +183,6 @@ class Pipeline:
             meta={"column_drift": column_drift_report(w)},
             candidate_row_boxes=candidate_row_boxes,
             phrase_row_boxes=phrase_row_boxes,
-            normalized_image=normalized.image if keep_normalized else None,
+            normalized_image=normalized if keep_normalized else None,
             rejections=list(self.detector.last_rejections),
         )

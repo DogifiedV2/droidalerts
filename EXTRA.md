@@ -95,9 +95,9 @@ to alter the live index automatically.
 
 ## Testing
 
-`python main.py test` runs every fixture in `tests/fixtures/` and writes a
-scored report to `tests/results/`. The current manifest contains **65 labeled
-fixtures plus one unlabeled review fixture**, including
+`python main.py test` runs the manifest-driven labeled fixture suite and writes
+a scored report to `tests/results/`. Check `tests/fixture_manifest.json` or the
+test command summary for the current fixture count. The suite includes
 synthetic 1920x1080 / 2560x1440 / 3440x1440 stress renders and real 4:3
 (1440x1040) captures.
 

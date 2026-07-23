@@ -9,7 +9,7 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 import unittest
 
 from droid_alerts.belt.matching import NameMatch
-from droid_alerts.belt.ocr import DroidObservation
+from droid_alerts.belt.models import DroidObservation
 from droid_alerts.belt.tracking import BeltTracker
 
 

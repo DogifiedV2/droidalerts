@@ -203,7 +203,10 @@ class RuntimeResilienceTests(unittest.TestCase):
             patch.object(watcher, "Pipeline", return_value=pipeline),
             patch.object(watcher, "AlertPolicy", return_value=policy),
             patch.object(watcher, "AnonymousTelemetryClient", return_value=telemetry_client),
-            patch.object(watcher, "append_event", side_effect=OSError("disk full")),
+            patch(
+                "droid_alerts.logging_io.append_event",
+                side_effect=OSError("disk full"),
+            ),
             patch.object(watcher, "show_popup") as show_popup,
         ):
             resolver_type.return_value.resolve.return_value = (PixelBox(0, 0, 800, 80), "auto")

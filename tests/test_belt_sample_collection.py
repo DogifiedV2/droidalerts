@@ -15,7 +15,7 @@ import numpy as np
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from droid_alerts.belt.recognition import CardCandidate, CardContext
+from droid_alerts.belt.models import CardCandidate, CardContext
 from droid_alerts.belt.names import droid_class
 from droid_alerts.belt.sample_collection import BeltTemplateSampleCollector
 
@@ -72,7 +72,7 @@ def card_candidate(
     return CardCandidate(
         canonical_name=name,
         raw_text=name,
-        ocr_confidence=0.99,
+        identity_confidence=0.99,
         name_box=(x, y, name_width, name_height),
         context=context,
         accepted=True,

@@ -28,10 +28,6 @@ ULTRAWIDE_ASPECT_MIN = 2.20
 ULTRAWIDE_AUTO_BOX_PERCENT = {"left": 0.0, "top": 0.40, "width": 0.33, "height": 0.16}
 
 
-class NeedsCalibration(Exception):
-    """Raised when auto/manual region placement has repeatedly failed validation."""
-
-
 def auto_box_percent(screen_width: int, screen_height: int) -> PixelBox:
     ratios = auto_box_ratios(screen_width, screen_height)
     return PixelBox(
@@ -170,15 +166,12 @@ class RegionResolver:
         screen_width: int,
         screen_height: int,
         *,
-        max_failures: int = 30,
         monitor_key: str | None = None,
     ) -> None:
         self.screen_width = screen_width
         self.screen_height = screen_height
-        self.max_failures = max_failures
         self.monitor_key = monitor_key
         self.calibration = Calibration.load(monitor_key)
-        self.consecutive_failures = 0
         self.signature_changed = self._signature_changed()
 
     def _signature_changed(self) -> bool:
@@ -202,21 +195,13 @@ class RegionResolver:
         source = "auto" if profile == "wide" else f"auto({profile})"
         return auto_box_percent(self.screen_width, self.screen_height), source
 
-    def record_validation(self, ok: bool) -> None:
-        """Call only on frames that actually contained candidate rows."""
-        if ok:
-            self.consecutive_failures = 0
-            if self.signature_changed:
-                self.calibration.monitor_signature = {
-                    "width": self.screen_width,
-                    "height": self.screen_height,
-                }
-                self.calibration.save(self.monitor_key)
-                self.signature_changed = False
+    def mark_validated(self) -> None:
+        """Persist a changed monitor signature after a confirmed detection."""
+        if not self.signature_changed:
             return
-        self.consecutive_failures += 1
-        if self.consecutive_failures >= self.max_failures:
-            raise NeedsCalibration(
-                f"{self.consecutive_failures} consecutive row-bearing frames failed validation; "
-                "run: python main.py calibrate"
-            )
+        self.calibration.monitor_signature = {
+            "width": self.screen_width,
+            "height": self.screen_height,
+        }
+        self.calibration.save(self.monitor_key)
+        self.signature_changed = False

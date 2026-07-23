@@ -461,7 +461,7 @@ class LimitedDealAlertDeliveryTests(unittest.TestCase):
             patch("droid_alerts.gui.send_discord_alert", return_value=delivered) as discord,
             patch("droid_alerts.gui.send_ntfy_alert", return_value=delivered) as ntfy,
             patch("droid_alerts.gui.send_phone_alert", return_value=delivered) as phone,
-            patch("droid_alerts.gui.append_event") as append,
+            patch("droid_alerts.logging_io.append_event") as append,
             patch("droid_alerts.gui.threading.Thread", ImmediateThread),
         ):
             DroidAlertsApp._send_limited_deal_alert(app, current_deal(), config)
@@ -477,6 +477,50 @@ class LimitedDealAlertDeliveryTests(unittest.TestCase):
         self.assertEqual(4, append.call_count)
         self.assertTrue(
             all(call.args[0]["source"] == "limited_deal" for call in append.call_args_list)
+        )
+
+    def test_log_failures_do_not_block_limited_deal_or_delivery_completion(self):
+        app = DroidAlertsApp.__new__(DroidAlertsApp)
+        app.root = object()
+        app.detail_var = FakeVar()
+        app.channel_status_vars = {
+            label: FakeVar()
+            for label in ("Popup", "Sound", "Discord", "ntfy", "Pushover")
+        }
+        app._current_monitor_info = lambda: None
+        app._post_to_ui = lambda callback: callback()
+        app.refresh_logs = Mock()
+        config = AppConfig(
+            popup_enabled=True,
+            sound_enabled=True,
+            discord_enabled=True,
+        )
+        policy = SimpleNamespace(notify=Mock())
+        delivered = SimpleNamespace(success=True, message="Delivered")
+
+        with (
+            patch("droid_alerts.gui.AlertPolicy", return_value=policy),
+            patch("droid_alerts.gui.show_popup") as popup,
+            patch(
+                "droid_alerts.gui.load_discord_webhook",
+                return_value=("https://example.test", "test"),
+            ),
+            patch("droid_alerts.gui.send_discord_alert", return_value=delivered) as discord,
+            patch(
+                "droid_alerts.logging_io.append_event",
+                side_effect=OSError("disk full"),
+            ),
+            patch("droid_alerts.gui.threading.Thread", ImmediateThread),
+        ):
+            DroidAlertsApp._send_limited_deal_alert(app, current_deal(), config)
+
+        policy.notify.assert_called_once()
+        popup.assert_called_once()
+        discord.assert_called_once()
+        self.assertEqual("Delivered just now", app.channel_status_vars["Discord"].get())
+        self.assertEqual(2, app.refresh_logs.call_count)
+        self.assertTrue(
+            all(call.kwargs == {"update_detail": False} for call in app.refresh_logs.call_args_list)
         )
 
 

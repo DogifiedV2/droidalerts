@@ -14,7 +14,7 @@ import webbrowser
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from queue import Empty as QueueEmpty
+from queue import Empty as QueueEmpty, SimpleQueue
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, filedialog
 
 import tkinter as tk
@@ -31,6 +31,7 @@ except Exception:
 
 from . import __version__
 from .alerts import AlertPolicy, WAKE_ALARM_FILE, WakeAlarm
+from .alert_delivery import build_delivery_event, execute_alert_delivery, persist_delivery_event
 from .belt.names import DROID_NAMES as BELT_DROID_NAMES
 from .belt.dev_logging import belt_dev_dir
 from .belt.overlay import BeltOverlay
@@ -77,7 +78,13 @@ from .device_capture import (
     list_capture_devices,
     session_from_config,
 )
-from .logging_io import alert_samples_dir, append_event, debug_dir, logs_dir, timestamp
+from .logging_io import (
+    alert_samples_dir,
+    append_event_safely,
+    debug_dir,
+    logs_dir,
+    timestamp,
+)
 from .limited_deals import (
     LIMITED_DEAL_DROIDS,
     LIMITED_DEAL_FAMILY_ORDER,
@@ -124,6 +131,11 @@ from .notifications import (
 )
 from .popup import popup_icon_path, show_popup
 from .region import Calibration, RegionResolver
+from .settings_service import (
+    NUMERIC_SETTING_KEYS,
+    SettingsValidationError,
+    build_settings_update,
+)
 from .telemetry import (
     AnonymousAppTelemetryClient,
     AnonymousBeltTelemetryClient,
@@ -352,6 +364,9 @@ class DroidAlertsApp:
         defer_startup_prompts: bool = False,
     ) -> None:
         self.root = root
+        self._ui_queue: SimpleQueue[Callable[[], None]] = SimpleQueue()
+        self._ui_queue_closed = False
+        self._ui_poll_after_id: str | None = None
         self.root.title("Droid Alerts")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -413,7 +428,6 @@ class DroidAlertsApp:
         self.available_update: dict[str, str] | None = None
         self._update_poll_after_id: str | None = None
         self._first_time_intro_after_id: str | None = None
-        self._discord_offer_after_id: str | None = None
         self._display_geometry_after_id: str | None = None
         self._display_geometry_signature: tuple[tuple[int, int, int, int, int], ...] | None = None
         self._log_file_signature: tuple[int, int] | None = None
@@ -504,6 +518,7 @@ class DroidAlertsApp:
         self.scrollable_pages: dict[object, tuple[tk.Canvas, object, int]] = {}
 
         self._build_ui()
+        self._ui_poll_after_id = self.root.after(25, self._drain_ui_queue)
         self.app_telemetry.start()
         self.load_settings()
         self._display_geometry_signature = self._read_display_geometry_signature()
@@ -527,7 +542,6 @@ class DroidAlertsApp:
         self,
         *,
         first_delay_ms: int = 700,
-        discord_delay_ms: int = 1100,
     ) -> None:
         """Schedule modal startup notices only after the dashboard is revealed."""
 
@@ -539,15 +553,6 @@ class DroidAlertsApp:
             self._first_time_intro_after_id = self.root.after(
                 max(0, int(first_delay_ms)),
                 run_intro,
-            )
-        if self._discord_offer_after_id is None:
-            def offer_discord() -> None:
-                self._discord_offer_after_id = None
-                self.offer_discord_community()
-
-            self._discord_offer_after_id = self.root.after(
-                max(0, int(discord_delay_ms)),
-                offer_discord,
             )
 
     def _apply_initial_geometry(self) -> None:
@@ -5174,11 +5179,25 @@ class DroidAlertsApp:
         if config.sound_enabled and not (
             wake_alarm is not None and wake_alarm.active
         ):
-            try:
-                AlertPolicy(config).notify(detection)
-            except Exception as exc:
-                self.channel_status_vars["Sound"].set("Failed to play")
-                self.detail_var.set(f"{sound_error_prefix}: {exc}")
+            def play_sound() -> None:
+                try:
+                    AlertPolicy(config).notify(detection)
+                except Exception as exc:
+                    self._post_to_ui(
+                        lambda exc=exc: self._gui_sound_finished(
+                            False, sound_error_prefix, str(exc)
+                        )
+                    )
+                else:
+                    self._post_to_ui(
+                        lambda: self._gui_sound_finished(True, sound_error_prefix, "")
+                    )
+
+            threading.Thread(
+                target=play_sound,
+                name=f"{thread_name_prefix}Sound",
+                daemon=True,
+            ).start()
 
         if config.popup_enabled:
             popup_kwargs = {
@@ -5244,6 +5263,13 @@ class DroidAlertsApp:
                 daemon=True,
             ).start()
 
+    def _gui_sound_finished(self, success: bool, error_prefix: str, detail: str) -> None:
+        if success:
+            self.channel_status_vars["Sound"].set("Played just now")
+            return
+        self.channel_status_vars["Sound"].set("Failed to play")
+        self.detail_var.set(f"{error_prefix}: {detail}")
+
     def _deliver_gui_alert(
         self,
         delivery: AlertDelivery,
@@ -5252,28 +5278,33 @@ class DroidAlertsApp:
         delivery_rarity: str,
         extra_delivery_fields: Mapping[str, object],
     ) -> None:
-        try:
-            result = delivery.target(*delivery.args, **delivery.kwargs)
-            success = bool(getattr(result, "success", False))
-            detail = str(getattr(result, "message", "") or "")
-        except Exception as exc:
-            success = False
-            detail = str(exc)
-        delivery_event: dict[str, object] = {
-            "ts": timestamp(),
-            "event_type": "delivery",
-            "source": delivery_source,
-            "channel": delivery.label,
-            "success": success,
-            "detail": detail,
-            "droid": detection.droid,
-            "rarity": delivery_rarity,
-            "alerted": True,
-            "is_priority": True,
-            "score": detection.score,
-            **extra_delivery_fields,
-        }
-        append_event(delivery_event)
+        def wait_before_retry(seconds: float) -> bool:
+            time.sleep(seconds)
+            return False
+
+        execution = execute_alert_delivery(
+            delivery,
+            wait_before_retry=wait_before_retry,
+            max_attempts=1,
+        )
+        delivery_event = build_delivery_event(
+            execution,
+            {
+                "droid": detection.droid,
+                "score": detection.score,
+            },
+            channel=delivery.label,
+            source=delivery_source,
+            rarity=delivery_rarity,
+            extra_fields=extra_delivery_fields,
+        )
+        persist_delivery_event(
+            delivery_event,
+            on_error=lambda exc: print(
+                f"[LOG] Failed to write delivery: {exc}",
+                flush=True,
+            ),
+        )
         self._post_to_ui(
             lambda label=delivery.label, event=delivery_event: self._gui_delivery_finished(
                 label, event
@@ -5431,12 +5462,28 @@ class DroidAlertsApp:
         self._belt_worker_ready = False
 
     def _post_to_ui(self, callback) -> None:
-        # Worker threads must not touch Tk directly; after() is the marshal
-        # point and raises once the main loop is gone, so drop late callbacks.
-        try:
-            self.root.after(0, callback)
-        except (RuntimeError, tk.TclError):
-            pass
+        if getattr(self, "_ui_queue_closed", False):
+            return
+        queue = getattr(self, "_ui_queue", None)
+        if queue is None:
+            queue = self._ui_queue = SimpleQueue()
+        queue.put(callback)
+
+    def _drain_ui_queue(self) -> None:
+        self._ui_poll_after_id = None
+        if self._ui_queue_closed:
+            return
+        for _index in range(100):
+            try:
+                callback = self._ui_queue.get_nowait()
+            except QueueEmpty:
+                break
+            try:
+                callback()
+            except Exception as exc:
+                print(f"[GUI] Queued callback failed: {exc}", flush=True)
+        if not self._ui_queue_closed:
+            self._ui_poll_after_id = self.root.after(25, self._drain_ui_queue)
 
     def _start_limited_deals(self) -> None:
         self._limited_deal_countdown_tick()
@@ -5574,7 +5621,13 @@ class DroidAlertsApp:
             "is_priority": True,
             "detail": "Matched Limited Deal alert rules",
         }
-        append_event(alert_event)
+        append_event_safely(
+            alert_event,
+            on_error=lambda exc: print(
+                f"[LOG] Failed to write limited_deal: {exc}",
+                flush=True,
+            ),
+        )
         self.detail_var.set(event_text(detection))
 
         self._dispatch_gui_alert(
@@ -5756,12 +5809,12 @@ class DroidAlertsApp:
         self._autosave_ready = True
 
     def _on_setting_changed(self, *_args) -> None:
-        if self._loading_settings:
+        if self._loading_settings or self._shutting_down:
             return
         self._schedule_auto_save()
 
     def _schedule_auto_save(self, delay_ms: int = 600) -> None:
-        if not self._autosave_ready:
+        if not self._autosave_ready or self._shutting_down:
             return
         if self._autosave_after_id is not None:
             try:
@@ -5880,25 +5933,6 @@ class DroidAlertsApp:
         save_config(config)
         self.config = config
 
-    def offer_discord_community(self) -> None:
-        """Offer the community link once to installs carrying a pre-1.3 config."""
-        config = load_config()
-        if __version__ != "1.3.0" or config.discord_community_prompted:
-            return
-
-        # Save before opening the modal/browser so either answer is one-time.
-        config.discord_community_prompted = True
-        save_config(config)
-        self.config = config
-        join = self._confirm_message(
-            "Join the Droid Alerts Discord?",
-            "Would you like to join the Discord for update alerts, support, and game leaks?",
-            confirm_text="Join Discord",
-            cancel_text="Not now",
-        )
-        if join:
-            webbrowser.open(DISCORD_COMMUNITY_URL)
-
     def prompt_notification_setup_if_needed(self) -> None:
         config = load_config()
         if config.notification_setup_prompted:
@@ -5956,117 +5990,43 @@ class DroidAlertsApp:
         ):
             return None
 
-        config = load_config()
-        config.capture_source = previous_config.capture_source
-        config.capture_window_title = previous_config.capture_window_title
-        config.capture_window_process = previous_config.capture_window_process
-        config.capture_window_class = previous_config.capture_window_class
-        config.capture_device_name = previous_config.capture_device_name
-        config.capture_device_path = previous_config.capture_device_path
-        config.capture_device_vid = previous_config.capture_device_vid
-        config.capture_device_pid = previous_config.capture_device_pid
-        config.capture_device_backend = previous_config.capture_device_backend
         try:
-            config.monitor_index = max(1, int(self._value("monitor_index")))
-            config.capture_interval_seconds = max(0.05, float(self._value("capture_interval_seconds")))
-            config.rebirth_scan_interval_seconds = min(
-                30.0,
-                max(2.0, float(self._value("rebirth_scan_interval_seconds"))),
+            value_keys = set(self.setting_vars) | set(NUMERIC_SETTING_KEYS)
+            values = {key: self._value(key) for key in value_keys}
+            persisted = load_config()
+            update = build_settings_update(
+                persisted,
+                previous_config,
+                values,
+                selected,
+                selected_limited_deal_priorities,
+                configured_channels={
+                    "discord": discord_webhook_configured(persisted),
+                    "pushover": phone_alerts_configured(persisted),
+                },
             )
-            config.dedupe_seconds = max(0.0, float(self._value("dedupe_seconds")))
-            config.alert_cooldown_seconds = max(0.0, float(self._value("alert_cooldown_seconds")))
-            config.validation_failures_before_calibration_prompt = max(
-                1, int(self._value("validation_failures_before_calibration_prompt"))
-            )
-            config.popup_seconds = max(0.5, float(self._value("popup_seconds")))
-            config.popup_scale = min(1.5, max(0.7, float(self._value("popup_scale"))))
-            config.popup_opacity = min(1.0, max(0.55, float(self._value("popup_opacity"))))
-            config.retention_days = max(0, int(self._value("retention_days")))
-            config.max_storage_mb = max(0, int(self._value("max_storage_mb")))
-            config.timer_reminder_seconds = max(1, int(self._value("timer_reminder_seconds")))
-            config.timer_offset_seconds = max(-3600, min(3600, int(self._value("timer_offset_seconds"))))
-            (
-                config.belt_idle_scan_fps,
-                config.belt_active_scan_fps,
-            ) = normalize_belt_scan_fps(
-                self._value("belt_idle_scan_fps"),
-                self._value("belt_active_scan_fps"),
-            )
-            self._set_var("belt_idle_scan_fps", config.belt_idle_scan_fps)
-            self._set_var("belt_active_scan_fps", config.belt_active_scan_fps)
-        except (TypeError, ValueError, tk.TclError) as exc:
+        except (SettingsValidationError, TypeError, ValueError, tk.TclError) as exc:
             if interactive:
-                self._show_message(
-                    "Settings",
-                    f"Invalid numeric setting: {exc}",
-                    tone="danger",
-                )
+                self._show_message("Settings", str(exc), tone="danger")
             elif update_detail:
                 self.detail_var.set("Settings not saved: invalid numeric value")
             return None
 
-        config.sound_enabled = bool(self._value("sound_enabled"))
-        config.wake_alarm_enabled = bool(self._value("wake_alarm_enabled"))
-        config.wake_alarm_beskar_mythic = bool(
-            self._value("wake_alarm_beskar_mythic")
-        )
-        config.wake_alarm_galactic_mythic = bool(
-            self._value("wake_alarm_galactic_mythic")
-        )
-        config.popup_enabled = bool(self._value("popup_enabled"))
-        config.rebirth_ready_alert_enabled = bool(
-            self._value("rebirth_ready_alert_enabled")
-        )
-        config.droid_timers_enabled = bool(self._value("droid_timers_enabled"))
-        config.save_alert_samples = bool(self._value("save_alert_samples"))
-        config.save_debug_screenshots = bool(self._value("save_debug_screenshots"))
-        config.share_debug_detections = config.save_debug_screenshots and bool(self._value("share_debug_detections"))
-        config.ntfy_enabled = bool(self._value("ntfy_enabled"))
-        config.discord_enabled = bool(self._value("discord_enabled"))
-        config.phone_alerts_enabled = bool(self._value("phone_alerts_enabled"))
-        config.ntfy_include_attachment = bool(self._value("ntfy_include_attachment"))
-        config.phone_include_attachment = bool(self._value("phone_include_attachment"))
-        config.update_check_enabled = bool(self._value("update_check_enabled"))
-        config.extra_checks = bool(self._value("extra_checks"))
-        config.start_watcher_on_launch = bool(self._value("start_watcher_on_launch"))
-        config.rebirth_alert_enabled = bool(self._value("rebirth_alert_enabled"))
-        config.cb23_mission_alert_enabled = bool(
-            self._value("cb23_mission_alert_enabled")
-        )
-        config.ui_theme = normalize_theme_key(self._value("ui_theme"))
-        config.belt_overlay_enabled = bool(self._value("belt_overlay_enabled"))
-        config.belt_dev_mode = bool(self._value("belt_dev_mode"))
-        config.belt_template_collection_enabled = bool(
-            self._value("belt_template_collection_enabled")
-        )
-        config.timer_reminders_enabled = config.droid_timers_enabled and bool(
-            self._value("timer_reminders_enabled")
-        )
-        config.popup_position = str(self._value("popup_position")).strip().lower().replace(" ", "_")
-        if config.popup_position not in {"top_center", "top_left", "top_right", "bottom_left", "bottom_right"}:
-            config.popup_position = "top_center"
-        config.sound_file = str(self._value("sound_file")).strip()
-        config.ntfy_server_url = str(self._value("ntfy_server_url")).strip() or "https://ntfy.sh"
-        config.ntfy_topic = str(self._value("ntfy_topic")).strip()
-        config.ntfy_priority = str(self._value("ntfy_priority")).strip() or "5"
-        config.ntfy_tags = str(self._value("ntfy_tags")).strip() or "rotating_light"
-        config.phone_sound = str(self._value("phone_sound")).strip() or "siren"
-        config.update_repo = str(self._value("update_repo")).strip() or "DogifiedV2/droidalerts"
-        config.advanced_mode = bool(self._value("advanced_mode"))
-        config.alert_targets = [list(combo) for combo in selected]
-        config.limited_deal_priority_alerts = [
-            list(combo) for combo in selected_limited_deal_priorities
-        ]
-
-        # Channels that are on but not configured yet simply stay quiet until
-        # their Set Up button is used, with no wizard nagging on every save.
-        needs_setup = []
-        if config.ntfy_enabled and not ntfy_configured(config):
-            needs_setup.append("ntfy")
-        if config.discord_enabled and not discord_webhook_configured(config):
-            needs_setup.append("Discord")
-        if config.phone_alerts_enabled and not phone_alerts_configured(config):
-            needs_setup.append("Pushover")
+        config = update.config
+        previous_loading_state = self._loading_settings
+        self._loading_settings = True
+        try:
+            for key, value in update.normalized_values.items():
+                if key not in self.setting_vars:
+                    continue
+                if key == "popup_position":
+                    value = str(value).replace("_", " ").capitalize()
+                elif key == "ui_theme":
+                    value = theme_label(value)
+                self._set_var(key, value)
+        finally:
+            self._loading_settings = previous_loading_state
+        needs_setup = list(update.unconfigured_channels)
 
         save_config(config)
         self.config = config
@@ -6722,6 +6682,18 @@ class DroidAlertsApp:
                 config=config,
                 stop_event=stop_event,
                 popup_parent=self.root,
+                popup_callback=lambda detection: self._post_to_ui(
+                    lambda detection=detection: show_popup(
+                        detection,
+                        config.popup_seconds,
+                        icon_path=popup_icon_path(config),
+                        parent=self.root,
+                        monitor=self._current_monitor_info(),
+                        position=config.popup_position,
+                        scale=config.popup_scale,
+                        opacity=config.popup_opacity,
+                    )
+                ),
                 status_callback=self._queue_watcher_status,
                 capture_factory=self._create_runtime_capture,
                 local_sound_allowed=lambda: not self.wake_alarm.active,
@@ -7008,19 +6980,6 @@ class DroidAlertsApp:
             return f"{channel}: {detail}"
         return reason or detail or channel or str(row.get("scale_method", "") or "")
 
-    def _log_row_key(self, row: dict[str, object]) -> str:
-        row_box = row.get("row_box")
-        y_bucket = ""
-        if isinstance(row_box, list) and len(row_box) >= 4:
-            try:
-                y_bucket = str(((int(row_box[1]) + int(row_box[3])) // 2) // 32)
-            except (TypeError, ValueError):
-                y_bucket = ""
-        return (
-            f"{row.get('droid', '')}|{row.get('rarity', '')}|"
-            f"{y_bucket}|{bool(row.get('alerted'))}"
-        )
-
     def open_path(self, path: Path) -> None:
         try:
             if path.suffix:
@@ -7216,7 +7175,6 @@ class DroidAlertsApp:
             box, source = RegionResolver(
                 screen_w,
                 screen_h,
-                max_failures=self.config.validation_failures_before_calibration_prompt,
                 monitor_key=getattr(capture_area, "key", None),
             ).resolve()
             if self.config.capture_source == "device":
@@ -7600,6 +7558,13 @@ class DroidAlertsApp:
 
     def on_close(self) -> None:
         self._shutting_down = True
+        self._ui_queue_closed = True
+        if self._ui_poll_after_id is not None:
+            try:
+                self.root.after_cancel(self._ui_poll_after_id)
+            except Exception:
+                pass
+            self._ui_poll_after_id = None
         self._watch_restart_after_stop = False
         self._belt_restart_after_stop = False
         self.wake_alarm.stop()
@@ -7612,6 +7577,7 @@ class DroidAlertsApp:
             except Exception:
                 pass
             self._autosave_after_id = None
+            self._autosave_ready = False
             self.save_settings(interactive=False, update_detail=False)
         for after_id in (
             self._log_refresh_after_id,
@@ -7620,7 +7586,6 @@ class DroidAlertsApp:
             self._storage_after_id,
             self._update_poll_after_id,
             self._first_time_intro_after_id,
-            self._discord_offer_after_id,
             self._display_geometry_after_id,
             self._belt_poll_after_id,
             self._options_scrollregion_after_id,
@@ -7675,16 +7640,16 @@ def run_gui(*, startup_splash=None) -> None:
             except tk.TclError:
                 pass
             root.deiconify()
-            # Modal startup prompts were deferred above, so this full update
-            # can paint every dashboard widget behind the splash without a
-            # What's New dialog interrupting splash cleanup.
+            # Page widget trees are built eagerly, but mapping and painting are
+            # deferred so the dashboard can render behind the splash before
+            # What's New interrupts splash cleanup.
             root.update()
             if transparent:
                 root.attributes("-alpha", 1.0)
             root.update_idletasks()
             startup_splash.close()
             root.lift()
-            app.schedule_startup_prompts(first_delay_ms=100, discord_delay_ms=500)
+            app.schedule_startup_prompts(first_delay_ms=100)
             if app._unprimed_tabs:
                 app._page_prime_after_id = root.after_idle(app._prime_next_tab)
     except BaseException:

@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 import math
 
-from .ocr import DroidObservation
+from .models import DroidObservation
 
 Box = tuple[float, float, float, float]
 
@@ -273,7 +273,7 @@ class BeltTracker:
                     continue
                 confidence = min(
                     1.0,
-                    max(0.0, float(observation.ocr_confidence) * float(observation.match.score)),
+                    max(0.0, float(observation.identity_confidence) * float(observation.match.score)),
                 )
                 raw_text = str(observation.match.raw_text)
                 family = str(getattr(observation, "family", "")).strip()

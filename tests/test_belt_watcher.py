@@ -15,7 +15,8 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.belt.matching import NameMatch
-from droid_alerts.belt.ocr import DroidObservation
+from droid_alerts.belt.models import DroidObservation
+from droid_alerts.belt.runtime import AdaptiveScanScheduler, build_tracks_payload
 from droid_alerts.belt.watcher import (
     TEMPLATE_MINIMUM_DISPLACEMENT_RATIO,
     adaptive_template_interval,
@@ -81,7 +82,6 @@ def template_result(*, observations=(), candidates=(), card_window_count=0):
     return SimpleNamespace(
         observations=list(observations),
         candidates=tuple(candidates),
-        text_observations=(),
         diagnostics={
             "detector": "templates",
             "card_window_count": card_window_count,
@@ -95,6 +95,43 @@ class RecordingQueue:
 
     def put(self, event):
         self.events.append(event)
+
+
+class BeltRuntimeTests(unittest.TestCase):
+    def test_scheduler_backs_off_after_empty_threshold_and_resets(self):
+        scheduler = AdaptiveScanScheduler(4, 8)
+        timing = None
+        for index in range(12):
+            timing = scheduler.record(
+                card_window_count=0,
+                captured_at=float(index),
+                completed_at=float(index) + 0.05,
+            )
+        self.assertEqual(0.25, timing["next_scan_interval_seconds"])
+        timing = scheduler.record(card_window_count=1, captured_at=20.0, completed_at=20.05)
+        self.assertEqual(0.125, timing["next_scan_interval_seconds"])
+        self.assertEqual(0, timing["empty_candidate_scans"])
+
+    def test_track_payload_rounds_geometry_and_preserves_attributes(self):
+        track = SimpleNamespace(
+            id=3,
+            name="R2",
+            family="Gold",
+            rarity="Common",
+            box=(1.4, 2.6, 10.2, 20.8),
+            confidence=0.93,
+        )
+        self.assertEqual(
+            [{
+                "id": 3,
+                "name": "R2",
+                "family": "Gold",
+                "rarity": "Common",
+                "box": (1, 3, 10, 21),
+                "confidence": 0.93,
+            }],
+            build_tracks_payload([track]),
+        )
 
 
 class WorkerProcessEntryTests(unittest.TestCase):
@@ -211,6 +248,37 @@ class LatencyRecordingTracker:
         return SimpleNamespace(events=[], tracks=[])
 
 
+def belt_track(track_id=1, *, left=10.0):
+    return SimpleNamespace(
+        id=track_id,
+        name="R2",
+        family="Gold",
+        rarity="Common",
+        confidence=0.93,
+        family_confidence=0.92,
+        rarity_confidence=0.91,
+        confirmation_mode="normal",
+        raw_text="template:R2",
+        box=(left, 20.0, 180.0, 260.0),
+    )
+
+
+class ScriptedTracker:
+    def __init__(self, predictions, *, events=()):
+        self.predictions = list(predictions)
+        self.events = list(events)
+        self.timeout_seconds = 3.5
+
+    def update(self, _observations, _now, _frame_width):
+        return SimpleNamespace(events=list(self.events), tracks=[])
+
+    def predict(self, _now, _frame_width):
+        if len(self.predictions) > 1:
+            tracks = self.predictions.pop(0)
+        else:
+            tracks = self.predictions[0]
+        return SimpleNamespace(events=[], tracks=list(tracks))
+
 def card_frame():
     frame = np.full((520, 900, 3), (105, 115, 125), dtype=np.uint8)
     x, y, width, height = (130, 270, 55, 30)
@@ -234,6 +302,129 @@ def card_frame():
 
 
 class WatcherTests(unittest.TestCase):
+    def _run_payload_sequence(self, predictions, *, loops=4):
+        frame, _ = card_frame()
+        stop_event = LoopLimitedStopEvent(loops)
+        tracker = ScriptedTracker(predictions)
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = template_result()
+        events = []
+        with (
+            patch(
+                "droid_alerts.belt.watcher.create_capture",
+                return_value=CountingCapture(frame),
+            ),
+            patch("droid_alerts.belt.watcher.BeltTracker", return_value=tracker),
+            patch(
+                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                return_value=recognizer,
+            ),
+        ):
+            run_belt_watcher(
+                1,
+                PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                stop_event=stop_event,
+                status_callback=events.append,
+            )
+        return [event["tracks"] for event in events if event["type"] == "tracks"]
+
+    def test_unchanged_empty_tracks_are_published_once(self):
+        self.assertEqual([[]], self._run_payload_sequence([[], [], [], []]))
+
+    def test_visible_tracks_publish_one_clearing_empty_payload(self):
+        visible = [belt_track()]
+        payloads = self._run_payload_sequence([visible, [], [], []])
+
+        self.assertEqual(2, len(payloads))
+        self.assertEqual(1, len(payloads[0]))
+        self.assertEqual([], payloads[1])
+
+    def test_moving_tracks_continue_to_publish_changed_boxes(self):
+        payloads = self._run_payload_sequence(
+            [[belt_track(left=10.0)], [belt_track(left=25.0)], [belt_track(left=25.0)]]
+        )
+
+        self.assertEqual(2, len(payloads))
+        self.assertNotEqual(payloads[0][0]["box"], payloads[1][0]["box"])
+
+    def test_exited_alert_id_is_released_for_reuse(self):
+        frame, _ = card_frame()
+        stop_event = threading.Event()
+        capture = OneFrameCapture(frame, stop_event)
+        track = belt_track()
+        tracker = ScriptedTracker(
+            [[]],
+            events=(
+                SimpleNamespace(kind="entered", track=track),
+                SimpleNamespace(kind="exited", track=track),
+                SimpleNamespace(kind="entered", track=track),
+            ),
+        )
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = template_result()
+        with (
+            patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
+            patch("droid_alerts.belt.watcher.BeltTracker", return_value=tracker),
+            patch(
+                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                return_value=recognizer,
+            ),
+            patch(
+                "droid_alerts.belt.watcher.log_track_event",
+                side_effect=lambda event, *, alerted: {
+                    "event": event.kind,
+                    "alerted": alerted,
+                },
+            ) as log_event,
+        ):
+            run_belt_watcher(
+                1,
+                PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                target_tiers={"R2": "Gold"},
+                stop_event=stop_event,
+            )
+
+        self.assertEqual(
+            [True, False, True],
+            [call.kwargs["alerted"] for call in log_event.call_args_list],
+        )
+
+    def test_log_failure_does_not_stop_track_event_delivery(self):
+        frame, _ = card_frame()
+        stop_event = threading.Event()
+        capture = OneFrameCapture(frame, stop_event)
+        track = belt_track()
+        tracker = ScriptedTracker(
+            [[]],
+            events=(SimpleNamespace(kind="entered", track=track),),
+        )
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = template_result()
+        events = []
+        with (
+            patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
+            patch("droid_alerts.belt.watcher.BeltTracker", return_value=tracker),
+            patch(
+                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                return_value=recognizer,
+            ),
+            patch(
+                "droid_alerts.logging_io.append_event",
+                side_effect=OSError("disk full"),
+            ),
+        ):
+            run_belt_watcher(
+                1,
+                PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                target_tiers={"R2": "Gold"},
+                stop_event=stop_event,
+                status_callback=events.append,
+            )
+
+        self.assertTrue(capture.closed)
+        self.assertIn("track_event", [event["type"] for event in events])
+        self.assertEqual("stopped", events[-1]["type"])
+
     def test_empty_template_scans_back_off_to_four_fps(self):
         self.assertAlmostEqual(1.0 / 8.0, adaptive_template_interval(0))
         self.assertAlmostEqual(1.0 / 8.0, adaptive_template_interval(11))
@@ -400,7 +591,6 @@ class WatcherTests(unittest.TestCase):
         recognizer.analyze.return_value = SimpleNamespace(
             observations=[],
             candidates=(),
-            text_observations=(),
             diagnostics={"detector": "templates", "card_window_count": 0},
         )
         events = []

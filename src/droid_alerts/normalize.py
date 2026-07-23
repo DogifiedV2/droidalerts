@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from statistics import median
 
 import cv2
@@ -14,13 +13,6 @@ from .row_finder import RowCandidate, measured_row_heights
 # shorter than the full 44px classifier row. Calibrated against Tool V1's
 # live roi dumps; used only when the source screen height is unknown.
 REFERENCE_CANDIDATE_HEIGHT_PX = 40.0
-
-
-@dataclass
-class NormalizedBand:
-    image: np.ndarray
-    scale: float  # source pixels per reference pixel; y_src = y_norm * scale
-    method: str
 
 
 def scale_from_screen(screen_height: int, screen_width: int | None = None) -> float:
@@ -73,14 +65,14 @@ def estimate_scale(
     return float(min(scale_max, max(scale_min, scale))), method
 
 
-def normalize_band(band: np.ndarray, scale: float) -> NormalizedBand:
+def normalize_band(band: np.ndarray, scale: float) -> np.ndarray:
     """Resize a captured band back to reference scale (44px rows) so the
     fixed-column classifier's constants are valid again."""
     if abs(scale - 1.0) < 0.02:
-        return NormalizedBand(image=band, scale=1.0, method="identity")
+        return band
     h, w = band.shape[:2]
     new_w = max(1, int(round(w / scale)))
     new_h = max(1, int(round(h / scale)))
     interpolation = cv2.INTER_AREA if scale > 1.0 else cv2.INTER_CUBIC
     resized = cv2.resize(band, (new_w, new_h), interpolation=interpolation)
-    return NormalizedBand(image=resized, scale=scale, method="resize")
+    return resized

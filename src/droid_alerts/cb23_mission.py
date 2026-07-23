@@ -215,7 +215,7 @@ class CB23MissionDetector:
 
         hsv = cv2.cvtColor(neighborhood, cv2.COLOR_BGR2HSV)
         yellow = cv2.inRange(hsv, (18, 145, 145), (42, 255, 255))
-        ys, xs = np.where(yellow > 0)
+        _ys, xs = np.where(yellow > 0)
         if len(xs) < max(20, int(neighborhood.size / 3 * 0.018)):
             return 0.0
         horizontal_span = int(xs.max() - xs.min() + 1)

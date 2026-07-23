@@ -7,7 +7,7 @@ reference scale. Inputs MUST be normalized via droid_alerts.normalize first.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import cv2
@@ -99,6 +99,17 @@ class RarityRoiTemplate:
 
 
 @dataclass(frozen=True)
+class _RarityCorrelationGroup:
+    shape: tuple[int, int]
+    templates: tuple[RarityRoiTemplate, ...]
+    normalized_vectors: np.ndarray
+    zero_variance: np.ndarray
+
+
+RarityCorrelationBank = dict[str, tuple[_RarityCorrelationGroup, ...]]
+
+
+@dataclass(frozen=True)
 class EdgeTemplate:
     path: Path
     image: np.ndarray
@@ -109,6 +120,18 @@ class DroidWordTemplate:
     droid: str
     path: Path
     image: np.ndarray
+
+
+DROID_WORD_SCALE_FACTORS = (0.70, 0.80, 0.90, 1.0, 1.10, 1.20, 1.35, 1.50, 1.70)
+
+
+@dataclass(frozen=True)
+class ScaledDroidWordTemplate:
+    template: DroidWordTemplate
+    images: tuple[np.ndarray, ...]
+
+
+ScaledDroidWordTemplateBank = dict[str, list[ScaledDroidWordTemplate]]
 
 
 @dataclass(frozen=True)
@@ -275,7 +298,14 @@ def color_scores(row: np.ndarray) -> dict[str, float]:
     }
 
 
-def droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
+@dataclass
+class _DroidWordEvidence:
+    row: np.ndarray
+    profile: dict[str, int] | None = None
+    shape_scores: dict[str, float] = field(default_factory=dict)
+
+
+def _compute_droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
     """Dark-outlined, glyph-sized text components in the droid-word columns.
 
     The droid NAME ('Diamond'/'Rainbow'/'Beskar'/'Galactic' + 'Droid') is rendered in the
@@ -328,6 +358,18 @@ def droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
         "colored_total": sum(counts.values()),
         "strong_families": sum(1 for v in counts.values() if v >= 60),
     }
+
+
+def droid_word_text_profile(
+    row: np.ndarray,
+    *,
+    evidence: _DroidWordEvidence | None = None,
+) -> dict[str, int]:
+    if evidence is None:
+        return _compute_droid_word_text_profile(row)
+    if evidence.profile is None:
+        evidence.profile = _compute_droid_word_text_profile(evidence.row)
+    return evidence.profile
 
 
 def droid_word_color_mask(row: np.ndarray, droid: str) -> np.ndarray:
@@ -396,37 +438,77 @@ def droid_word_shape_score(
     row: np.ndarray,
     droid: str,
     templates_by_droid: dict[str, list[DroidWordTemplate]],
+    *,
+    scaled_templates: ScaledDroidWordTemplateBank | None = None,
+    evidence: _DroidWordEvidence | None = None,
 ) -> float:
+    if evidence is not None and droid in evidence.shape_scores:
+        return evidence.shape_scores[droid]
     mask = droid_word_color_mask(row, droid)
     if mask.size == 0:
         return 0.0
     best = 0.0
-    for template in templates_by_droid.get(droid, []):
-        # Fortnite now renders Galactic chat text at multiple horizontal/UI
-        # sizes that are not fully predicted by the screen-resolution scale.
-        # Multi-scale matching is restricted to the Galactic literal-word
-        # path; legacy family behavior and thresholds remain unchanged.
-        scale_factors = (
-            (0.70, 0.80, 0.90, 1.0, 1.10, 1.20, 1.35, 1.50, 1.70)
-            if droid == "Galactic"
-            else (1.0,)
-        )
-        for scale_factor in scale_factors:
-            if scale_factor == 1.0:
-                candidate = template.image
-            else:
-                candidate = cv2.resize(
+    bank = scaled_templates.get(droid, []) if scaled_templates is not None else None
+    entries = bank or [
+        ScaledDroidWordTemplate(
+            template=template,
+            images=tuple(
+                template.image
+                if scale_factor == 1.0
+                else cv2.resize(
                     template.image,
                     None,
                     fx=scale_factor,
                     fy=scale_factor,
                     interpolation=cv2.INTER_NEAREST,
                 )
+                for scale_factor in (
+                    DROID_WORD_SCALE_FACTORS if droid == "Galactic" else (1.0,)
+                )
+            ),
+        )
+        for template in templates_by_droid.get(droid, [])
+    ]
+    for entry in entries:
+        # Fortnite now renders Galactic chat text at multiple horizontal/UI
+        # sizes that are not fully predicted by the screen-resolution scale.
+        # Multi-scale matching is restricted to the Galactic literal-word
+        # path; legacy family behavior and thresholds remain unchanged.
+        for candidate in entry.images:
             if candidate.shape[0] > mask.shape[0] or candidate.shape[1] > mask.shape[1]:
                 continue
             result = cv2.matchTemplate(mask, candidate, cv2.TM_CCOEFF_NORMED)
             best = max(best, float(result.max()))
+    if evidence is not None:
+        evidence.shape_scores[droid] = best
     return best
+
+
+def build_scaled_droid_word_templates(
+    templates_by_droid: dict[str, list[DroidWordTemplate]],
+) -> ScaledDroidWordTemplateBank:
+    bank: ScaledDroidWordTemplateBank = {}
+    for droid, templates in templates_by_droid.items():
+        factors = DROID_WORD_SCALE_FACTORS if droid == "Galactic" else (1.0,)
+        bank[droid] = [
+            ScaledDroidWordTemplate(
+                template=template,
+                images=tuple(
+                    template.image
+                    if factor == 1.0
+                    else cv2.resize(
+                        template.image,
+                        None,
+                        fx=factor,
+                        fy=factor,
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                    for factor in factors
+                ),
+            )
+            for template in templates
+        ]
+    return bank
 
 
 def classify_galactic_droid_word(
@@ -435,6 +517,8 @@ def classify_galactic_droid_word(
     *,
     shape_threshold: float = 0.50,
     minimum_purple_pixels: int = 250,
+    scaled_templates: ScaledDroidWordTemplateBank | None = None,
+    evidence: _DroidWordEvidence | None = None,
 ) -> tuple[str, float] | None:
     """Return Galactic only when live colour and literal word shape agree.
 
@@ -444,11 +528,17 @@ def classify_galactic_droid_word(
 
     if not templates_by_droid.get("Galactic"):
         return None
-    profile = droid_word_text_profile(row)
+    profile = droid_word_text_profile(row, evidence=evidence)
     purple = profile["purple"]
     if purple < minimum_purple_pixels:
         return None
-    shape = droid_word_shape_score(row, "Galactic", templates_by_droid)
+    shape = droid_word_shape_score(
+        row,
+        "Galactic",
+        templates_by_droid,
+        scaled_templates=scaled_templates,
+        evidence=evidence,
+    )
     if shape < shape_threshold:
         # Compact/non-reference HUD scales and localized Galactic text retain
         # the distinctive solid-purple word but match the English templates a
@@ -467,6 +557,8 @@ def classify_beskar_droid_word(
     *,
     shape_threshold: float = 0.50,
     minimum_gray_pixels: int = 550,
+    scaled_templates: ScaledDroidWordTemplateBank | None = None,
+    evidence: _DroidWordEvidence | None = None,
 ) -> tuple[str, float] | None:
     """Recover scaled Beskar words when the gray pixel count is just low.
 
@@ -478,23 +570,33 @@ def classify_beskar_droid_word(
 
     if not templates_by_droid.get("Beskar"):
         return None
-    gray = droid_word_text_profile(row)["gray"]
+    gray = droid_word_text_profile(row, evidence=evidence)["gray"]
     if gray < minimum_gray_pixels:
         return None
-    shape = droid_word_shape_score(row, "Beskar", templates_by_droid)
+    shape = droid_word_shape_score(
+        row,
+        "Beskar",
+        templates_by_droid,
+        scaled_templates=scaled_templates,
+        evidence=evidence,
+    )
     if shape < shape_threshold:
         return None
     return "Beskar", min(0.99, max(shape, gray / 900.0))
 
 
-def classify_droid_word(row: np.ndarray) -> tuple[str, float] | None:
+def classify_droid_word(
+    row: np.ndarray,
+    *,
+    evidence: _DroidWordEvidence | None = None,
+) -> tuple[str, float] | None:
     """Droid family from the droid-word text; None when evidence is weak.
 
     The ordering and floors are measured across the 149 valid rows in the
     2026-07-10 1.1.5 batch: Diamond words carry dominant cyan, Rainbow words
     span at least four hue families, and Beskar words carry dominant gray.
     """
-    p = droid_word_text_profile(row)
+    p = droid_word_text_profile(row, evidence=evidence)
     # Resolve the dominant single-colour words before looking at background
     # colour diversity. The old ordering let a multicolour prop behind a real
     # Diamond word turn the row into Rainbow, while unrelated cyan scenery in
@@ -684,7 +786,76 @@ def fixed_rarity_roi(image: np.ndarray, y: int, *, row_height: int, x1: int = 18
     return preprocess_for_template(crop)
 
 
-def rarity_color_counts(image: np.ndarray, y: int, droid: str, *, row_height: int) -> dict[str, int]:
+def build_rarity_correlation_bank(
+    templates_by_droid: dict[str, list[RarityRoiTemplate]],
+) -> RarityCorrelationBank:
+    bank: RarityCorrelationBank = {}
+    for droid, templates in templates_by_droid.items():
+        grouped: dict[tuple[int, int], list[RarityRoiTemplate]] = {}
+        for template in templates:
+            grouped.setdefault(template.image.shape, []).append(template)
+        groups: list[_RarityCorrelationGroup] = []
+        for shape, group_templates in grouped.items():
+            values = np.stack(
+                [template.image.astype(np.float64).reshape(-1) for template in group_templates]
+            )
+            centered = values - values.mean(axis=1, keepdims=True)
+            norms = np.linalg.norm(centered, axis=1)
+            zero_variance = norms == 0.0
+            normalized = np.divide(
+                centered,
+                norms[:, None],
+                out=np.zeros_like(centered),
+                where=~zero_variance[:, None],
+            )
+            groups.append(
+                _RarityCorrelationGroup(
+                    shape=shape,
+                    templates=tuple(group_templates),
+                    normalized_vectors=normalized,
+                    zero_variance=zero_variance,
+                )
+            )
+        bank[droid] = tuple(groups)
+    return bank
+
+
+def _batch_normalized_correlation(
+    candidates: list[np.ndarray],
+    group: _RarityCorrelationGroup,
+) -> np.ndarray:
+    values = np.stack(
+        [candidate.astype(np.float64).reshape(-1) for candidate in candidates]
+    )
+    centered = values - values.mean(axis=1, keepdims=True)
+    norms = np.linalg.norm(centered, axis=1)
+    scores = np.divide(
+        centered @ group.normalized_vectors.T,
+        norms[:, None],
+        out=np.zeros((len(candidates), len(group.templates)), dtype=np.float64),
+        where=norms[:, None] != 0.0,
+    )
+    # OpenCV returns 0.0 for a zero-variance candidate against a normal
+    # template, and 1.0 whenever the template itself has zero variance.
+    scores[:, group.zero_variance] = 1.0
+    return scores
+
+
+@dataclass
+class _RarityEvidence:
+    masks: dict[str, np.ndarray]
+    crop_shape: tuple[int, int]
+    raw_counts: dict[str, int] | None = None
+    text_counts: dict[str, int] | None = None
+
+
+def _build_rarity_evidence(
+    image: np.ndarray,
+    y: int,
+    droid: str,
+    *,
+    row_height: int,
+) -> _RarityEvidence:
     h, w = image.shape[:2]
     y1 = max(0, min(h, y - 3))
     y2 = max(y1 + 1, min(h, y + row_height + 4))
@@ -692,7 +863,13 @@ def rarity_color_counts(image: np.ndarray, y: int, droid: str, *, row_height: in
     x2 = max(x1 + 1, min(w, 470))
     crop = image[y1:y2, x1:x2]
     if crop.size == 0:
-        return {rarity: 0 for rarity in RARITIES}
+        empty = np.zeros(crop.shape[:2], dtype=bool)
+        return _RarityEvidence(
+            masks={rarity: empty for rarity in RARITIES},
+            crop_shape=crop.shape[:2],
+            raw_counts={rarity: 0 for rarity in RARITIES},
+            text_counts={rarity: 0 for rarity in RARITIES},
+        )
 
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
@@ -703,33 +880,6 @@ def rarity_color_counts(image: np.ndarray, y: int, droid: str, *, row_height: in
     # their colored pixels are dark-adjacent; background color floods ~70%).
     dark_near = cv2.dilate((gray < 95).astype(np.uint8), np.ones((5, 5), np.uint8), iterations=1) > 0
     colored_gate = edge_near & dark_near
-
-    return {
-        "Common": int(((sat < 35) & (val >= 145) & (val <= 235) & edge_near).sum()),
-        "Rare": int(((hue >= 86) & (hue <= 102) & (sat >= 160) & (val >= 170) & colored_gate).sum()),
-        "Epic": int(((hue >= 123) & (hue <= 139) & (sat >= 160) & (val >= 170) & colored_gate).sum()),
-        "Legendary": int(((hue >= 10) & (hue <= 23) & (sat >= 160) & (val >= 170) & colored_gate).sum()),
-        "Mythic": int(((hue >= 154) & (hue <= 174) & (sat >= 160) & (val >= 170) & colored_gate).sum()),
-    }
-
-
-def rarity_text_color_counts(image: np.ndarray, y: int, droid: str, *, row_height: int) -> dict[str, int]:
-    h, w = image.shape[:2]
-    y1 = max(0, min(h, y - 3))
-    y2 = max(y1 + 1, min(h, y + row_height + 4))
-    x1 = max(0, min(w - 1, RARITY_COLOR_X_START.get(droid, 225)))
-    x2 = max(x1 + 1, min(w, 470))
-    crop = image[y1:y2, x1:x2]
-    if crop.size == 0:
-        return {rarity: 0 for rarity in RARITIES}
-
-    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    hue, sat, val = cv2.split(hsv)
-    edges = cv2.Canny(gray, 35, 125)
-    edge_near = cv2.dilate(edges, np.ones((5, 5), np.uint8), iterations=1) > 0
-    dark_near = cv2.dilate((gray < 95).astype(np.uint8), np.ones((5, 5), np.uint8), iterations=1) > 0
-    colored_gate = edge_near & dark_near
     masks = {
         "Common": (sat < 35) & (val >= 145) & (val <= 235) & edge_near,
         "Rare": (hue >= 86) & (hue <= 102) & (sat >= 160) & (val >= 170) & colored_gate,
@@ -737,10 +887,44 @@ def rarity_text_color_counts(image: np.ndarray, y: int, droid: str, *, row_heigh
         "Legendary": (hue >= 10) & (hue <= 23) & (sat >= 160) & (val >= 170) & colored_gate,
         "Mythic": (hue >= 154) & (hue <= 174) & (sat >= 160) & (val >= 170) & colored_gate,
     }
+    return _RarityEvidence(masks=masks, crop_shape=crop.shape[:2])
 
-    crop_h, crop_w = crop.shape[:2]
+
+def rarity_color_counts(
+    image: np.ndarray,
+    y: int,
+    droid: str,
+    *,
+    row_height: int,
+    evidence: _RarityEvidence | None = None,
+) -> dict[str, int]:
+    evidence = evidence or _build_rarity_evidence(
+        image, y, droid, row_height=row_height
+    )
+    if evidence.raw_counts is None:
+        evidence.raw_counts = {
+            rarity: int(mask.sum()) for rarity, mask in evidence.masks.items()
+        }
+    return evidence.raw_counts
+
+
+def rarity_text_color_counts(
+    image: np.ndarray,
+    y: int,
+    droid: str,
+    *,
+    row_height: int,
+    evidence: _RarityEvidence | None = None,
+) -> dict[str, int]:
+    evidence = evidence or _build_rarity_evidence(
+        image, y, droid, row_height=row_height
+    )
+    if evidence.text_counts is not None:
+        return evidence.text_counts
+
+    crop_h, crop_w = evidence.crop_shape
     counts: dict[str, int] = {}
-    for rarity, mask in masks.items():
+    for rarity, mask in evidence.masks.items():
         component_mask = mask.astype("uint8")
         label_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(component_mask, 8)
         text_mask = np.zeros_like(component_mask, dtype=bool)
@@ -777,7 +961,8 @@ def rarity_text_color_counts(image: np.ndarray, y: int, droid: str, *, row_heigh
             if text_shaped:
                 text_mask |= labels == label
         counts[rarity] = int((mask & text_mask).sum())
-    return counts
+    evidence.text_counts = counts
+    return evidence.text_counts
 
 
 def classify_rarity_text_color(
@@ -786,8 +971,11 @@ def classify_rarity_text_color(
     droid: str,
     *,
     row_height: int,
+    evidence: _RarityEvidence | None = None,
 ) -> tuple[str, float, float, str]:
-    counts = rarity_text_color_counts(image, y, droid, row_height=row_height)
+    counts = rarity_text_color_counts(
+        image, y, droid, row_height=row_height, evidence=evidence
+    )
     best_rarity = max(RARITIES, key=lambda rarity: counts[rarity])
     best_count = counts[best_rarity]
     threshold = RARITY_COLOR_THRESHOLDS[best_rarity]
@@ -974,8 +1162,11 @@ def classify_rarity_color(
     droid: str,
     *,
     row_height: int,
+    evidence: _RarityEvidence | None = None,
 ) -> tuple[str, float, float, str]:
-    counts = rarity_color_counts(image, y, droid, row_height=row_height)
+    counts = rarity_color_counts(
+        image, y, droid, row_height=row_height, evidence=evidence
+    )
     colored_rarities = ("Rare", "Epic", "Legendary", "Mythic")
     best_colored = max(colored_rarities, key=lambda rarity: counts[rarity])
     best_colored_count = counts[best_colored]
@@ -1067,6 +1258,7 @@ def rescue_weak_color_rarity(
     *,
     row_height: int,
     word_matches: list["RarityCandidate"] | None = None,
+    evidence: _RarityEvidence | None = None,
 ) -> tuple[str, float, float, str] | None:
     """Optional "Extra checks" fallback for washed-out colors (Windows HDR,
     night-light, driver vibrance filters): tone mapping clips bright rarity
@@ -1085,7 +1277,13 @@ def rescue_weak_color_rarity(
     best_count = 0
     best_second = 0
     for dy in (-4, -2, 0, 2, 4):
-        counts = rarity_text_color_counts(image, y + dy, droid, row_height=row_height)
+        counts = rarity_text_color_counts(
+            image,
+            y + dy,
+            droid,
+            row_height=row_height,
+            evidence=evidence if dy == 0 else None,
+        )
         colored = {rarity: count for rarity, count in counts.items() if rarity != "Common"}
         rarity = max(colored, key=lambda r: colored[r])
         if colored[rarity] > best_count:
@@ -1175,21 +1373,28 @@ def classify_rarity_roi(
     *,
     row_height: int,
     word_matches: list[RarityCandidate] | None = None,
+    evidence: _RarityEvidence | None = None,
+    correlation_bank: RarityCorrelationBank | None = None,
 ) -> tuple[str, float, float, str]:
     templates = templates_by_droid.get(droid, [])
     # Galactic's reviewed ROI prototypes are a fallback, not a replacement
     # for its battle-tested color/text rules. Other families keep the existing
     # ROI-first classifier unchanged.
     if not templates or droid == "Galactic":
-        verdict = classify_rarity_color(image, y, droid, row_height=row_height)
+        verdict = classify_rarity_color(
+            image, y, droid, row_height=row_height, evidence=evidence
+        )
         if droid == "Galactic" and verdict[0] != "Unknown":
             text_verdict = classify_rarity_text_color(
                 image,
                 y,
                 droid,
                 row_height=row_height,
+                evidence=evidence,
             )
-            text_counts = rarity_text_color_counts(image, y, droid, row_height=row_height)
+            text_counts = rarity_text_color_counts(
+                image, y, droid, row_height=row_height, evidence=evidence
+            )
             shape_verdict = classify_rarity_word_shape(
                 image,
                 y,
@@ -1204,14 +1409,13 @@ def classify_rarity_roi(
                 return override
 
         if droid == "Galactic" and verdict[0] not in {"Unknown", "Common"}:
-            # Galactic currently has no family-specific rarity ROI templates,
-            # so its normal verdict comes directly from raw color totals. A
-            # large cyan/blue prop behind a real white "(Common)" word can
-            # therefore clear the Rare floor even though almost none of those
-            # pixels have text-like edges. Prefer a strong Common text verdict
-            # over that unsupported colored-background verdict. Real Galactic
-            # Rare/Epic/Legendary/Mythic rows retain strong text-colored pixels
-            # for their own rarity and do not enter this branch.
+            # Reviewed Galactic ROI prototypes are fallback evidence rather
+            # than the primary verdict. A large cyan/blue prop behind a real
+            # white "(Common)" word can still clear the raw Rare color floor
+            # even when almost none of those pixels have text-like edges.
+            # Prefer a strong Common text verdict over that unsupported
+            # background verdict. Real colored rarity words retain strong
+            # text-edge evidence and do not enter this branch.
             text_rarity, text_score, text_margin, text_source = text_verdict
             colored_word_supported = (
                 text_counts[verdict[0]] >= RARITY_COLOR_THRESHOLDS[verdict[0]]
@@ -1236,8 +1440,12 @@ def classify_rarity_roi(
         # Rescue only when Rare is the dominant saturated color and nearby
         # Common pixels do not outnumber it by more than 25%; that excludes
         # white spawn text and adjacent Common rows from becoming Rare.
-        counts = rarity_color_counts(image, y, droid, row_height=row_height)
-        text_counts = rarity_text_color_counts(image, y, droid, row_height=row_height)
+        counts = rarity_color_counts(
+            image, y, droid, row_height=row_height, evidence=evidence
+        )
+        text_counts = rarity_text_color_counts(
+            image, y, droid, row_height=row_height, evidence=evidence
+        )
         shape_rarity, shape_score, _shape_margin, _shape_source = classify_rarity_word_shape(
             image,
             y,
@@ -1273,15 +1481,42 @@ def classify_rarity_roi(
         return verdict
 
     best_by_rarity: dict[str, tuple[float, str]] = {}
-    for dy in range(-6, 7):
-        roi = fixed_rarity_roi(image, y + dy, row_height=row_height)
-        for template in templates:
-            if roi.shape != template.image.shape:
+    rois = [
+        fixed_rarity_roi(image, y + dy, row_height=row_height)
+        for dy in range(-6, 7)
+    ]
+    groups = correlation_bank.get(droid, ()) if correlation_bank is not None else ()
+    if groups:
+        score_lookup: dict[Path, np.ndarray] = {}
+        for group in groups:
+            matching_rois = [roi for roi in rois if roi.shape == group.shape]
+            if len(matching_rois) != len(rois):
                 continue
-            score = float(cv2.matchTemplate(roi, template.image, cv2.TM_CCOEFF_NORMED)[0, 0])
-            previous = best_by_rarity.get(template.rarity)
-            if previous is None or score > previous[0]:
-                best_by_rarity[template.rarity] = (score, template.path.name)
+            scores = _batch_normalized_correlation(matching_rois, group)
+            for column, template in enumerate(group.templates):
+                score_lookup[template.path] = scores[:, column]
+        for offset_index, roi in enumerate(rois):
+            for template in templates:
+                template_scores = score_lookup.get(template.path)
+                if template_scores is None or roi.shape != template.image.shape:
+                    continue
+                score = float(template_scores[offset_index])
+                previous = best_by_rarity.get(template.rarity)
+                if previous is None or score > previous[0]:
+                    best_by_rarity[template.rarity] = (score, template.path.name)
+    else:
+        for roi in rois:
+            for template in templates:
+                if roi.shape != template.image.shape:
+                    continue
+                score = float(
+                    cv2.matchTemplate(
+                        roi, template.image, cv2.TM_CCOEFF_NORMED
+                    )[0, 0]
+                )
+                previous = best_by_rarity.get(template.rarity)
+                if previous is None or score > previous[0]:
+                    best_by_rarity[template.rarity] = (score, template.path.name)
 
     if not best_by_rarity:
         return "Unknown", 0.0, 0.0, "roi-template-mismatch"
@@ -1296,14 +1531,18 @@ def classify_rarity_roi(
         y,
         droid,
         row_height=row_height,
+        evidence=evidence,
     )
     text_rarity, text_score, text_margin, text_source = classify_rarity_text_color(
         image,
         y,
         droid,
         row_height=row_height,
+        evidence=evidence,
     )
-    text_counts = rarity_text_color_counts(image, y, droid, row_height=row_height)
+    text_counts = rarity_text_color_counts(
+        image, y, droid, row_height=row_height, evidence=evidence
+    )
     shape_rarity, shape_score, _shape_margin, shape_source = classify_rarity_word_shape(
         image,
         y,
@@ -1644,7 +1883,13 @@ class DroidVisualDetector:
     ) -> None:
         self.templates = load_templates(template_dir)
         self.rarity_roi_templates = load_rarity_roi_templates(Path(template_dir) / "rarity_rois")
+        self.rarity_correlation_bank = build_rarity_correlation_bank(
+            self.rarity_roi_templates
+        )
         self.droid_word_templates = load_droid_word_templates(Path(template_dir) / "droid_words")
+        self.scaled_droid_word_templates = build_scaled_droid_word_templates(
+            self.droid_word_templates
+        )
         self.crafted_phrase_templates = load_edge_templates(Path(template_dir) / "crafted_phrases")
         self.spawn_line_templates = load_edge_templates(Path(template_dir) / "spawn_line")
         self.rarity_threshold = rarity_threshold
@@ -1683,6 +1928,7 @@ class DroidVisualDetector:
 
         for y in sorted(row_ys):
             row = image[y : y + self.row_height, :]
+            word_evidence = _DroidWordEvidence(row)
             if has_crafted_phrase(row, self.crafted_phrase_templates):
                 reject(y, "crafted-phrase")
                 continue
@@ -1694,7 +1940,10 @@ class DroidVisualDetector:
                 # recognizer agrees, so other chat/HUD text keeps the stricter
                 # false-positive protection.
                 galactic_word_verdict = classify_galactic_droid_word(
-                    row, self.droid_word_templates
+                    row,
+                    self.droid_word_templates,
+                    scaled_templates=self.scaled_droid_word_templates,
+                    evidence=word_evidence,
                 )
                 if galactic_word_verdict is None or not has_spawn_phrase_structure(
                     row, min_white_edge_pixels=600
@@ -1706,9 +1955,19 @@ class DroidVisualDetector:
             # only for rows without strong word evidence.
             word_verdict = (
                 galactic_word_verdict
-                or classify_galactic_droid_word(row, self.droid_word_templates)
-                or classify_beskar_droid_word(row, self.droid_word_templates)
-                or classify_droid_word(row)
+                or classify_galactic_droid_word(
+                    row,
+                    self.droid_word_templates,
+                    scaled_templates=self.scaled_droid_word_templates,
+                    evidence=word_evidence,
+                )
+                or classify_beskar_droid_word(
+                    row,
+                    self.droid_word_templates,
+                    scaled_templates=self.scaled_droid_word_templates,
+                    evidence=word_evidence,
+                )
+                or classify_droid_word(row, evidence=word_evidence)
             )
             if word_verdict is not None:
                 droid, droid_score = word_verdict
@@ -1721,9 +1980,15 @@ class DroidVisualDetector:
                 # valid report row has a nameplate over most of the word).
                 if droid == "Beskar":
                     icon_droid, icon_score = best_droid_type(row)
-                    profile = droid_word_text_profile(row)
+                    profile = droid_word_text_profile(row, evidence=word_evidence)
                     if icon_droid != "Beskar" and icon_score >= 0.75:
-                        word_shape = droid_word_shape_score(row, droid, self.droid_word_templates)
+                        word_shape = droid_word_shape_score(
+                            row,
+                            droid,
+                            self.droid_word_templates,
+                            scaled_templates=self.scaled_droid_word_templates,
+                            evidence=word_evidence,
+                        )
                         if word_shape < 0.40 and profile["gray"] < 1800:
                             reject(
                                 y,
@@ -1741,6 +2006,12 @@ class DroidVisualDetector:
                     reject(y, "no-icon-structure", droid)
                     continue
 
+            rarity_evidence = _build_rarity_evidence(
+                image,
+                y,
+                droid,
+                row_height=self.row_height,
+            )
             rarity, rarity_score, rarity_margin, template_name = classify_rarity_roi(
                 image,
                 y,
@@ -1749,6 +2020,8 @@ class DroidVisualDetector:
                 self.templates,
                 row_height=self.row_height,
                 word_matches=word_matches,
+                evidence=rarity_evidence,
+                correlation_bank=self.rarity_correlation_bank,
             )
             # Galactic Rare regularly lands just under the global cyan floor
             # after 0.75x normalization. Its rescue already requires both a
@@ -1763,6 +2036,7 @@ class DroidVisualDetector:
                     self.templates,
                     row_height=self.row_height,
                     word_matches=word_matches,
+                    evidence=rarity_evidence,
                 )
                 if rescued is not None:
                     rarity, rarity_score, rarity_margin, template_name = rescued
@@ -1797,10 +2071,18 @@ class DroidVisualDetector:
                 # quest-text false positives that motivated the phrase gate do
                 # not contain a literal Beskar word at this strength.
                 text_counts = rarity_text_color_counts(
-                    image, y, droid, row_height=self.row_height
+                    image,
+                    y,
+                    droid,
+                    row_height=self.row_height,
+                    evidence=rarity_evidence,
                 )
                 droid_shape = droid_word_shape_score(
-                    row, droid, self.droid_word_templates
+                    row,
+                    droid,
+                    self.droid_word_templates,
+                    scaled_templates=self.scaled_droid_word_templates,
+                    evidence=word_evidence,
                 )
                 rarity_shape = rarity_word_shape_score_from_matches(
                     word_matches, y, "Legendary", row_height=self.row_height

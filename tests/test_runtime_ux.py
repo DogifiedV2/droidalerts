@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import time
+import unittest
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
@@ -194,5 +195,10 @@ def main() -> int:
     return 0
 
 
+class RuntimeUxGuardTests(unittest.TestCase):
+    def test_runtime_ux_guard(self):
+        self.assertEqual(0, main())
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    unittest.main()

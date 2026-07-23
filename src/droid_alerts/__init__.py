@@ -1,8 +1,4 @@
-"""Droid Alerts package for the Droid Tycoon alert detector.
-
-Combines portable percent-of-screen region auto-detection with a fixed-column
-classifier made scale-invariant by normalizing each captured band to the
-classifier's reference row height.
-"""
+"""Droid Tycoon chat and Belt Tracker alerts with monitor, window, and device
+capture, Rebirth and CB23 helpers, and local or remote notifications."""
 
 __version__ = "1.3.8"

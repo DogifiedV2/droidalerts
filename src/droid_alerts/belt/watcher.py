@@ -8,6 +8,17 @@ from collections.abc import Callable, Mapping
 from ..capture import PixelBox, create_capture
 from .dev_logging import BeltDevLogger, runtime_snapshot
 from .events import log_track_event
+from .runtime import (
+    AdaptiveScanScheduler,
+    DEFAULT_ACTIVE_SCAN_FPS,
+    DEFAULT_IDLE_SCAN_FPS,
+    MAXIMUM_SCAN_FPS,
+    MINIMUM_SCAN_FPS,
+    TEMPLATE_IDLE_BACKOFF_START,
+    adaptive_template_interval,
+    build_tracks_payload,
+    normalize_scan_fps,
+)
 from .sample_collection import BeltTemplateSampleCollector
 from .targets import is_belt_alert_target, normalize_belt_target_tiers
 from .template_recognition import TemplateCardRecognizer
@@ -15,37 +26,14 @@ from .tracking import BeltTracker
 
 
 OVERLAY_FPS = 12.0
-DEFAULT_IDLE_SCAN_FPS = 4
-DEFAULT_ACTIVE_SCAN_FPS = 8
-MINIMUM_SCAN_FPS = 1
-MAXIMUM_SCAN_FPS = 20
 TRACK_TIMEOUT_SECONDS = 3.5
 CONFIRMATION_HITS = 4
 SLOW_CONFIRMATION_HITS = 3
 SLOW_CADENCE_SECONDS = 4.0 / 3.0
 SLOW_MINIMUM_IDENTITY_CONFIDENCE = 0.78
 TEMPLATE_MINIMUM_DISPLACEMENT_RATIO = 0.10
-TEMPLATE_IDLE_BACKOFF_START = 12
 
 StatusCallback = Callable[[dict[str, object]], None]
-
-
-def normalize_scan_fps(idle_scan_fps: int, active_scan_fps: int) -> tuple[int, int]:
-    idle = min(MAXIMUM_SCAN_FPS, max(MINIMUM_SCAN_FPS, int(idle_scan_fps)))
-    active = min(MAXIMUM_SCAN_FPS, max(MINIMUM_SCAN_FPS, int(active_scan_fps)))
-    return min(idle, active), active
-
-
-def adaptive_template_interval(
-    empty_card_scans: int,
-    idle_scan_fps: int = DEFAULT_IDLE_SCAN_FPS,
-    active_scan_fps: int = DEFAULT_ACTIVE_SCAN_FPS,
-) -> float:
-    """Use the configured active rate, backing off to idle when the belt is empty."""
-
-    if max(0, int(empty_card_scans)) >= TEMPLATE_IDLE_BACKOFF_START:
-        return 1.0 / idle_scan_fps
-    return 1.0 / active_scan_fps
 
 
 def run_belt_watcher(
@@ -85,6 +73,7 @@ def run_belt_watcher(
         idle_scan_fps,
         active_scan_fps,
     )
+    scan_scheduler = AdaptiveScanScheduler(idle_scan_fps, active_scan_fps)
 
     capture_source = str(capture_source).strip().lower()
     if capture_source not in {"monitor", "window", "device"}:
@@ -222,10 +211,9 @@ def run_belt_watcher(
     frame_period = 1.0 / OVERLAY_FPS
     next_scan = 0.0
     last_scan_status = 0.0
-    previous_scan_completed_at: float | None = None
-    empty_candidate_scans = 0
     frame_number = 0
     alerted_track_ids: set[int] = set()
+    last_published_tracks: list[dict[str, object]] | None = None
     emit(
         "ready",
         region=region,
@@ -293,20 +281,7 @@ def run_belt_watcher(
                                 frame_number=frame_number,
                             )
                         completed_at = time.monotonic()
-                        scan_seconds = max(0.001, completed_at - now)
                         tracker.timeout_seconds = TRACK_TIMEOUT_SECONDS
-                        scan_interval_seconds = (
-                            completed_at - previous_scan_completed_at
-                            if previous_scan_completed_at is not None
-                            else None
-                        )
-                        sample_seconds = (
-                            scan_interval_seconds
-                            if scan_interval_seconds is not None
-                            else max(scan_seconds, base_interval)
-                        )
-                        sample_fps = 1.0 / max(0.001, sample_seconds)
-                        throughput_fps = 1.0 / scan_seconds
                         card_window_count = int(
                             result.diagnostics.get(
                                 "card_window_count",
@@ -314,15 +289,18 @@ def run_belt_watcher(
                             )
                             or 0
                         )
-                        empty_candidate_scans = (
-                            0 if card_window_count else empty_candidate_scans + 1
+                        timing = scan_scheduler.record(
+                            card_window_count=card_window_count,
+                            captured_at=now,
+                            completed_at=completed_at,
                         )
-                        scan_interval = adaptive_template_interval(
-                            empty_candidate_scans,
-                            idle_scan_fps,
-                            active_scan_fps,
-                        )
-                        next_scan = now + scan_interval
+                        scan_seconds = float(timing["scan_seconds"])
+                        scan_interval_seconds = timing["scan_interval_seconds"]
+                        sample_fps = float(timing["scan_fps"])
+                        throughput_fps = float(timing["scan_throughput_fps"])
+                        scan_interval = float(timing["next_scan_interval_seconds"])
+                        next_scan = float(timing["next_scan_at"])
+                        empty_candidate_scans = int(timing["empty_candidate_scans"])
                         # The detected boxes belong to the frame captured before
                         # recognition began. Predict them forward by its duration so
                         # the overlay is current when it finally reaches the GUI.
@@ -368,14 +346,7 @@ def run_belt_watcher(
                                 next_scan_interval_seconds=scan_interval,
                                 empty_candidate_scans=empty_candidate_scans,
                                 adaptive_track_timeout_seconds=tracker.timeout_seconds,
-                                raw_observations=[
-                                    {
-                                        "text": item.text,
-                                        "confidence": item.confidence,
-                                        "box": list(item.box),
-                                    }
-                                    for item in result.text_observations
-                                ],
+                                raw_observations=[],
                                 candidates=[
                                     _candidate_diagnostics(item) for item in result.candidates
                                 ],
@@ -394,12 +365,11 @@ def run_belt_watcher(
                                     dev_logger.last_saved_reason if frame_file else ""
                                 ),
                             )
-                        previous_scan_completed_at = completed_at
                         if completed_at - last_scan_status >= 1.0:
                             emit(
                                 "scan",
                                 detector=detector_mode,
-                                raw_count=len(result.text_observations),
+                                raw_count=0,
                                 candidate_count=len(result.candidates),
                                 accepted_count=len(observations),
                                 frame=frame_number,
@@ -437,6 +407,8 @@ def run_belt_watcher(
 
             for event in update.events:
                 track_id = int(event.track.id)
+                if event.kind == "exited":
+                    alerted_track_ids.discard(track_id)
                 alerted = (
                     event.kind in {"entered", "updated"}
                     and track_id not in alerted_track_ids
@@ -465,20 +437,10 @@ def run_belt_watcher(
                     flush=True,
                 )
                 emit("track_event", record=record)
-            emit(
-                "tracks",
-                tracks=[
-                    {
-                        "id": track.id,
-                        "name": track.name,
-                        "family": str(getattr(track, "family", "") or ""),
-                        "rarity": str(getattr(track, "rarity", "") or ""),
-                        "box": tuple(round(value) for value in track.box),
-                        "confidence": track.confidence,
-                    }
-                    for track in update.tracks
-                ],
-            )
+            tracks_payload = build_tracks_payload(update.tracks)
+            if last_published_tracks is None or tracks_payload != last_published_tracks:
+                emit("tracks", tracks=tracks_payload)
+                last_published_tracks = tracks_payload
             loop_completed = time.monotonic()
             overlay_wait = max(0.0, frame_period - (loop_completed - loop_started))
             scan_wait = max(0.0, next_scan - loop_completed)
@@ -505,7 +467,7 @@ def _candidate_diagnostics(candidate) -> dict[str, object]:
     return {
         "name": candidate.canonical_name,
         "raw_text": candidate.raw_text,
-        "identity_confidence": candidate.ocr_confidence,
+        "identity_confidence": candidate.identity_confidence,
         "raw_best_similarity": candidate.raw_best_similarity,
         "runner_up_identity": candidate.runner_up_identity,
         "identity_margin": candidate.identity_margin,

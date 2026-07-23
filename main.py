@@ -28,7 +28,7 @@ def _source_dependencies_ready(splash=None) -> bool:
     return (splash.run_task(callback) if splash is not None else callback()) == 0
 
 
-def main() -> None:
+def main() -> int | None:
     splash = None
     if len(sys.argv) == 1 or sys.argv[1] == "gui":
         from droid_alerts.startup_splash import create_startup_splash
@@ -102,7 +102,7 @@ def main() -> None:
         sys.path.insert(0, str(BASE_DIR / "tests"))
         import run_eval
 
-        run_eval.main(verbose=args.verbose, dump_unlabeled=args.dump_unlabeled)
+        return run_eval.main(verbose=args.verbose, dump_unlabeled=args.dump_unlabeled)
 
 
 def _load_gui():
@@ -113,4 +113,4 @@ def _load_gui():
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    main()
+    raise SystemExit(main())

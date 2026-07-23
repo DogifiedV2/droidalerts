@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.request
 import zipfile
 from collections.abc import Callable
@@ -19,6 +20,19 @@ USER_AGENT = f"DroidAlerts/{__version__}"
 # Never let an update touch the user's own files: settings, credentials,
 # captures, logs, and local training data all live in these folders.
 PROTECTED_TOP_DIRS = {"config", "data", "training_data", ".git", "__pycache__"}
+MANAGED_RELEASE_DIRS = ("src", "assets", "templates", "tools", "release-notes")
+REQUIRED_RELEASE_DIRS = ("src/droid_alerts", "assets", "templates")
+MANAGED_ROOT_FILES = (
+    "main.py",
+    "requirements.txt",
+    "requirements-build.txt",
+    "README.md",
+    "EXTRA.md",
+    "Droid Alerts.spec",
+    "Build EXE.bat",
+    "Start Droid Alerts.bat",
+    "version_info.txt",
+)
 
 
 @dataclass(frozen=True)
@@ -119,23 +133,91 @@ def _safe_extract(archive: zipfile.ZipFile, destination: Path) -> None:
 
 
 def _copy_update_files(source_root: Path, target_root: Path) -> int:
-    updated = 0
-    for path in sorted(source_root.rglob("*")):
-        if path.is_dir():
-            continue
-        relative = path.relative_to(source_root)
-        if relative.parts[0] in PROTECTED_TOP_DIRS or "__pycache__" in relative.parts:
-            continue
-        destination = target_root / relative
-        try:
-            if destination.exists() and destination.read_bytes() == path.read_bytes():
+    """Stage and atomically replace only release-owned source paths."""
+    source_root = source_root.resolve()
+    target_root = target_root.resolve()
+    _validate_source_release(source_root)
+    target_root.mkdir(parents=True, exist_ok=True)
+
+    work_root = Path(tempfile.mkdtemp(prefix=".droid_alerts_update_", dir=target_root))
+    staged_root = work_root / "staged"
+    backup_root = work_root / "backup"
+    installed_paths: list[Path] = []
+    backed_up_paths: list[tuple[Path, Path]] = []
+    installed_files = 0
+    try:
+        for name in MANAGED_RELEASE_DIRS:
+            source = source_root / name
+            if not source.is_dir():
                 continue
-        except OSError:
-            pass
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, destination)
-        updated += 1
-    return updated
+            staged = staged_root / name
+            shutil.copytree(source, staged, ignore=shutil.ignore_patterns("__pycache__"))
+            installed_files += sum(path.is_file() for path in staged.rglob("*"))
+        for name in MANAGED_ROOT_FILES:
+            source = source_root / name
+            if not source.is_file():
+                continue
+            staged = staged_root / name
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, staged)
+            installed_files += 1
+
+        for name in (*MANAGED_RELEASE_DIRS, *MANAGED_ROOT_FILES):
+            staged = staged_root / name
+            if not staged.exists():
+                continue
+            live = target_root / name
+            backup = backup_root / name
+            if live.exists():
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(live), str(backup))
+                backed_up_paths.append((live, backup))
+            shutil.move(str(staged), str(live))
+            installed_paths.append(live)
+    except Exception as exc:
+        for live in reversed(installed_paths):
+            _remove_path(live)
+        for live, backup in reversed(backed_up_paths):
+            if live.exists():
+                _remove_path(live)
+            if backup.exists():
+                live.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(backup), str(live))
+        raise RuntimeError(f"Could not install source update; previous files restored: {exc}") from exc
+    finally:
+        shutil.rmtree(work_root, ignore_errors=True)
+    return installed_files
+
+
+def _validate_source_release(source_root: Path) -> None:
+    required = ("main.py", *REQUIRED_RELEASE_DIRS)
+    for relative in required:
+        path = source_root / relative
+        expected = path.is_file() if relative == "main.py" else path.is_dir()
+        if not expected:
+            raise RuntimeError(f"The source update is missing required path: {relative}")
+        resolved = path.resolve()
+        if resolved != source_root and source_root not in resolved.parents:
+            raise RuntimeError(f"The source update contains an unsafe managed path: {relative}")
+    for name in (*MANAGED_RELEASE_DIRS, *MANAGED_ROOT_FILES):
+        managed = source_root / name
+        if not managed.exists():
+            continue
+        paths = (managed, *managed.rglob("*")) if managed.is_dir() else (managed,)
+        for path in paths:
+            resolved = path.resolve()
+            if resolved != source_root and source_root not in resolved.parents:
+                relative = path.relative_to(source_root)
+                raise RuntimeError(
+                    f"The source update contains an unsafe managed path: {relative}"
+                )
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
 
 
 def _stage_frozen_update(

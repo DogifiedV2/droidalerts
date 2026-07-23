@@ -34,8 +34,6 @@ FIXTURES_DIR = BASE_DIR / "tests" / "fixtures"
 FIXTURE_MANIFEST = BASE_DIR / "tests" / "fixture_manifest.json"
 RESULTS_DIR = BASE_DIR / "tests" / "results"
 
-# 2026-07-06: the Beskar Mythic gap closed. A real full-row capture from the
-# ultrawide user's machine is now fixture uw_beskar_mythic_tp.png.
 KNOWN_GAPS: list[str] = []
 
 
@@ -143,6 +141,8 @@ def main(*, verbose: bool = False, dump_unlabeled: bool = False) -> int:
         path = FIXTURES_DIR / rel_path
         if not path.exists():
             results[rel_path] = {"error": "missing"}
+            failed += 1
+            print(f"[FAIL] {rel_path}: fixture is missing")
             continue
         active_pipeline = pipeline_extra if spec.get("extra_checks") else pipeline
         record = evaluate_fixture(active_pipeline, path, spec)

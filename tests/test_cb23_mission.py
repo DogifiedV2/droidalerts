@@ -276,7 +276,7 @@ class CB23MissionWatcherTests(unittest.TestCase):
             patch.object(watcher, "AlertPolicy", return_value=policy),
             patch.object(watcher, "CB23MissionDetector", return_value=detector),
             patch.object(watcher, "AnonymousTelemetryClient", return_value=telemetry),
-            patch.object(watcher, "append_event") as append_event,
+            patch("droid_alerts.logging_io.append_event") as append_event,
             patch.object(watcher, "show_popup") as show_popup,
             patch.object(watcher, "CB23_MISSION_SCAN_INTERVAL_SECONDS", 0.0),
         ):

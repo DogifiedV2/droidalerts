@@ -9,7 +9,21 @@ from pathlib import Path
 import cv2
 
 from .alerts import AlertPolicy, row_hash
+from .auxiliary_alerts import AuxiliaryAlertSchedule
+from .alert_delivery import (
+    build_delivery_event,
+    delivery_retryable as _delivery_retryable,
+    execute_alert_delivery,
+    persist_delivery_event,
+)
 from .capture import PixelBox, create_capture, set_dpi_awareness
+from .capture_runtime import (
+    capture_area as _capture_area,
+    capture_label as _capture_label,
+    capture_status as _capture_status,
+    capture_target_signature as _capture_target_signature,
+    create_configured_capture as _build_configured_capture,
+)
 from .cb23_mission import (
     CB23MissionDetector,
     CB23MissionGate,
@@ -26,9 +40,9 @@ from .config import (
     templates_dir,
 )
 from .image_io import write_cv_image
-from .logging_io import alert_samples_dir, append_event, debug_dir, timestamp
+from .logging_io import alert_samples_dir, append_event_safely, debug_dir, timestamp
 from .notifications import (
-    DeliveryResult,
+    AlertDelivery,
     enabled_alert_deliveries,
     load_discord_webhook,
     load_phone_alert_credentials,
@@ -55,87 +69,33 @@ REBIRTH_SCAN_INTERVAL_SECONDS = 0.4
 CB23_MISSION_SCAN_INTERVAL_SECONDS = 0.5
 
 
-def _capture_target_signature(config: AppConfig) -> tuple[object, ...]:
-    return (
-        config.monitor_index,
-        config.capture_source,
-        config.capture_window_title,
-        config.capture_window_process,
-        config.capture_window_class,
-        config.capture_device_name,
-        config.capture_device_path,
-        config.capture_device_vid,
-        config.capture_device_pid,
-        config.capture_device_backend,
-    )
-
-
 def _create_configured_capture(config: AppConfig):
-    return create_capture(
-        monitor_index=config.monitor_index,
-        capture_source=config.capture_source,
-        window_title=config.capture_window_title,
-        window_process=config.capture_window_process,
-        window_class=config.capture_window_class,
-        device_name=config.capture_device_name,
-        device_path=config.capture_device_path,
-        device_vid=config.capture_device_vid,
-        device_pid=config.capture_device_pid,
-        device_backend=config.capture_device_backend,
-    )
+    """Compatibility facade that keeps the capture factory patchable."""
+    return _build_configured_capture(config, factory=create_capture)
 
 
 def _open_configured_capture(config: AppConfig):
+    """Compatibility facade around the extracted capture constructor."""
     capture = _create_configured_capture(config)
     try:
-        size = capture.screen_size()
+        return capture, capture.screen_size()
     except Exception:
         try:
             capture.close()
         except Exception:
             pass
         raise
-    return capture, size
 
 
-def _capture_area(capture):
-    return getattr(capture, "capture_area", getattr(capture, "monitor", None))
-
-
-def _capture_label(config: AppConfig) -> str:
-    if config.capture_source == "window":
-        return (
-            config.capture_window_title
-            or config.capture_window_process
-            or "Selected window"
-        )
-    if config.capture_source == "device":
-        return config.capture_device_name or "Capture device"
-    return f"Monitor {config.monitor_index}"
-
-
-def _capture_status(config: AppConfig) -> dict[str, object]:
-    return {
-        "monitor_index": config.monitor_index,
-        "capture_source": config.capture_source,
-        "capture_label": _capture_label(config),
-    }
-
-
-def _append_event_safely(
-    event: dict[str, object],
+def _report_log_error(
+    exc: Exception,
     *,
+    event: dict[str, object],
     emit: Callable[..., None] | None = None,
-) -> bool:
-    """Best-effort logging: notification delivery must not depend on disk I/O."""
-    try:
-        append_event(event)
-        return True
-    except Exception as exc:
-        print(f"[LOG] Failed to write {event.get('event_type', 'event')}: {exc}")
-        if emit is not None:
-            emit("log_error", message=str(exc), failed_event_type=event.get("event_type", ""))
-        return False
+) -> None:
+    print(f"[LOG] Failed to write {event.get('event_type', 'event')}: {exc}")
+    if emit is not None:
+        emit("log_error", message=str(exc), failed_event_type=event.get("event_type", ""))
 
 
 def run_watch(
@@ -144,6 +104,7 @@ def run_watch(
     config: AppConfig | None = None,
     stop_event=None,
     popup_parent=None,
+    popup_callback: Callable[[Detection], None] | None = None,
     status_callback: Callable[[dict[str, object]], None] | None = None,
     capture_factory: Callable[[AppConfig], object] | None = None,
     local_sound_allowed: Callable[[], bool] | None = None,
@@ -155,6 +116,16 @@ def run_watch(
             status_callback({"type": event_type, **data})
         except Exception:
             pass
+
+    def log_event(event: dict[str, object]) -> bool:
+        return append_event_safely(
+            event,
+            on_error=lambda exc: _report_log_error(
+                exc,
+                event=event,
+                emit=emit,
+            ),
+        )
 
     def can_play_local_sound() -> bool:
         if local_sound_allowed is None:
@@ -198,7 +169,6 @@ def run_watch(
     resolver = RegionResolver(
         screen_w,
         screen_h,
-        max_failures=config.validation_failures_before_calibration_prompt,
         monitor_key=getattr(_capture_area(capture), "key", None),
     )
     box, region_source = resolver.resolve()
@@ -295,45 +265,27 @@ def run_watch(
     rebirth_available_detector: RebirthAlertDetector | None = None
     rebirth_available_detector_failed = False
     rebirth_available_gate = RebirthPresenceGate()
-    next_rebirth_available_scan_at = 0.0
-    last_rebirth_available_alert_at = float("-inf")
     rebirth_ready_detector: RebirthHudDetector | None = None
     rebirth_ready_tracker = RebirthAlertTracker()
-    next_rebirth_ready_scan_at = 0.0
     cb23_mission_detector: CB23MissionDetector | None = None
     cb23_mission_detector_failed = False
     cb23_mission_gate = CB23MissionGate()
-    next_cb23_mission_scan_at = 0.0
-    last_cb23_mission_alert_at = float("-inf")
+    auxiliary_schedule = AuxiliaryAlertSchedule()
 
-    def deliver(target, args: tuple, kwargs: dict, event: dict[str, object]) -> None:
-        result = None
-        attempts = 0
-        for attempts in (1, 2):
-            try:
-                result = target(*args, **kwargs)
-            except Exception as exc:
-                result = DeliveryResult(channel=getattr(target, "__name__", "Alert"), success=False, message=str(exc))
-            if result.success or attempts == 2 or not _delivery_retryable(result.message):
-                break
-            if _wait_or_stop(stop_event, 1.5):
-                break
-        assert result is not None
-        delivery_event = {
-            "ts": timestamp(),
-            "event_type": "delivery",
-            "channel": result.channel,
-            "success": result.success,
-            "detail": result.message + (f" after {attempts} attempts" if attempts > 1 else ""),
-            "droid": event.get("droid", ""),
-            "rarity": event.get("rarity", ""),
-            "alerted": True,
-            "is_priority": True,
-            "score": event.get("score"),
-            "source": event.get("source", ""),
-            "rebirth_level": event.get("rebirth_level"),
-        }
-        _append_event_safely(delivery_event, emit=emit)
+    def deliver(delivery: AlertDelivery, event: dict[str, object]) -> None:
+        execution = execute_alert_delivery(
+            delivery,
+            wait_before_retry=lambda seconds: _wait_or_stop(stop_event, seconds),
+        )
+        delivery_event = build_delivery_event(
+            execution,
+            event,
+            extra_fields={"rebirth_level": event.get("rebirth_level")},
+        )
+        persist_delivery_event(
+            delivery_event,
+            on_error=lambda exc: _report_log_error(exc, event=delivery_event, emit=emit),
+        )
         emit("delivery", result=delivery_event)
 
     def dispatch_alert_channels(
@@ -343,16 +295,19 @@ def run_watch(
         attachment_path: Path | None,
     ) -> None:
         if config.popup_enabled:
-            show_popup(
-                detection,
-                config.popup_seconds,
-                icon_path=popup_icon_path(config),
-                parent=popup_parent,
-                monitor=getattr(capture, "monitor", None),
-                position=config.popup_position,
-                scale=config.popup_scale,
-                opacity=config.popup_opacity,
-            )
+            if popup_callback is not None:
+                popup_callback(detection)
+            else:
+                show_popup(
+                    detection,
+                    config.popup_seconds,
+                    icon_path=popup_icon_path(config),
+                    parent=popup_parent,
+                    monitor=getattr(capture, "monitor", None),
+                    position=config.popup_position,
+                    scale=config.popup_scale,
+                    opacity=config.popup_opacity,
+                )
 
         deliveries = enabled_alert_deliveries(
             config,
@@ -368,7 +323,7 @@ def run_watch(
         for delivery in deliveries:
             threading.Thread(
                 target=deliver,
-                args=(delivery.target, delivery.args, delivery.kwargs, event),
+                args=(delivery, event),
                 daemon=True,
             ).start()
 
@@ -431,7 +386,7 @@ def run_watch(
             else:
                 event["sample_path"] = str(sample_path)
 
-        _append_event_safely(event, emit=emit)
+        log_event(event)
         emit("alert", event=event)
         print(f"[ALERT] {event['ts']} Rebirth droid available score={match.score:.2f}")
         if can_play_local_sound():
@@ -469,7 +424,7 @@ def run_watch(
             "monitor_index": active_capture_config.monitor_index,
             "capture_source": active_capture_config.capture_source,
         }
-        _append_event_safely(event, emit=emit)
+        log_event(event)
         emit("alert", event=event)
         print(f"[ALERT] {event['ts']} Rebirth Ready level={level} score={ready_score:.2f}")
         if can_play_local_sound():
@@ -538,7 +493,7 @@ def run_watch(
             else:
                 event["sample_path"] = str(sample_path)
 
-        _append_event_safely(event, emit=emit)
+        log_event(event)
         emit("alert", event=event)
         print(f"[ALERT] {event['ts']} CB23 Mission score={match.score:.2f}")
         if can_play_local_sound():
@@ -583,7 +538,6 @@ def run_watch(
             replacement_resolver = RegionResolver(
                 replacement_width,
                 replacement_height,
-                max_failures=config.validation_failures_before_calibration_prompt,
                 monitor_key=getattr(_capture_area(replacement), "key", None),
             )
             replacement_box, replacement_source = replacement_resolver.resolve()
@@ -660,8 +614,7 @@ def run_watch(
                     resolver = RegionResolver(
                         screen_w,
                         screen_h,
-                        max_failures=config.validation_failures_before_calibration_prompt,
-                        monitor_key=getattr(_capture_area(capture), "key", None),
+                                monitor_key=getattr(_capture_area(capture), "key", None),
                     )
                     box, region_source = resolver.resolve()
                     print(
@@ -705,8 +658,7 @@ def run_watch(
                     resolver = RegionResolver(
                         screen_w,
                         screen_h,
-                        max_failures=config.validation_failures_before_calibration_prompt,
-                        monitor_key=getattr(_capture_area(capture), "key", None),
+                                monitor_key=getattr(_capture_area(capture), "key", None),
                     )
                     box, region_source = resolver.resolve()
                     emit(
@@ -746,8 +698,9 @@ def run_watch(
 
             result = pipeline.detect(band, screen_height=screen_h, screen_width=screen_w, keep_normalized=True)
             scan_now = time.monotonic()
-            if config.rebirth_alert_enabled and scan_now >= next_rebirth_available_scan_at:
-                next_rebirth_available_scan_at = scan_now + REBIRTH_SCAN_INTERVAL_SECONDS
+            if config.rebirth_alert_enabled and auxiliary_schedule.rebirth_available_due(
+                scan_now, REBIRTH_SCAN_INTERVAL_SECONDS
+            ):
                 if rebirth_available_detector is None and not rebirth_available_detector_failed:
                     try:
                         rebirth_available_detector = RebirthAlertDetector()
@@ -776,16 +729,16 @@ def run_watch(
                             scanned_at=timestamp(),
                         )
                         cooldown = max(12.0, config.dedupe_seconds, config.alert_cooldown_seconds)
-                        if confirmed and scan_now - last_rebirth_available_alert_at >= cooldown:
-                            last_rebirth_available_alert_at = scan_now
+                        if confirmed and auxiliary_schedule.can_alert_rebirth_available(
+                            scan_now, cooldown
+                        ):
                             fire_rebirth_available_alert(rebirth_match, rebirth_band, rebirth_box)
             if (
                 config.cb23_mission_alert_enabled
-                and scan_now >= next_cb23_mission_scan_at
-            ):
-                next_cb23_mission_scan_at = (
-                    scan_now + CB23_MISSION_SCAN_INTERVAL_SECONDS
+                and auxiliary_schedule.cb23_due(
+                    scan_now, CB23_MISSION_SCAN_INTERVAL_SECONDS
                 )
+            ):
                 if cb23_mission_detector is None and not cb23_mission_detector_failed:
                     try:
                         cb23_mission_detector = CB23MissionDetector()
@@ -819,8 +772,9 @@ def run_watch(
                             config.dedupe_seconds,
                             config.alert_cooldown_seconds,
                         )
-                        if confirmed and scan_now - last_cb23_mission_alert_at >= cooldown:
-                            last_cb23_mission_alert_at = scan_now
+                        if confirmed and auxiliary_schedule.can_alert_cb23(
+                            scan_now, cooldown
+                        ):
                             fire_cb23_mission_alert(
                                 mission_match,
                                 mission_band,
@@ -837,8 +791,9 @@ def run_watch(
                     scale=round(result.scale, 4),
                 )
 
-            if config.rebirth_ready_alert_enabled and status_now >= next_rebirth_ready_scan_at:
-                next_rebirth_ready_scan_at = status_now + config.rebirth_scan_interval_seconds
+            if config.rebirth_ready_alert_enabled and auxiliary_schedule.rebirth_ready_due(
+                status_now, config.rebirth_scan_interval_seconds
+            ):
                 try:
                     if rebirth_ready_detector is None:
                         rebirth_ready_detector = RebirthHudDetector()
@@ -872,6 +827,10 @@ def run_watch(
             # classify to nothing count as misses, and the hint prints once.
             if result.detections:
                 misfire_count = 0
+                try:
+                    resolver.mark_validated()
+                except OSError as exc:
+                    print(f"[REGION] Could not save validated monitor size: {exc}")
             elif result.phrase_row_boxes:
                 misfire_count += 1
                 if misfire_count >= config.validation_failures_before_calibration_prompt and not calibration_hint_shown:
@@ -933,7 +892,7 @@ def run_watch(
                         event["sample_path"] = str(sample_paths[1])
                 should_log_event = fire or debug or not recently_logged
                 if should_log_event:
-                    _append_event_safely(event, emit=emit)
+                    log_event(event)
                     emit("alert" if fire else "detection", event=event)
                 if fire:
                     print(f"[ALERT] {event['ts']} {label} score={detection.score:.2f}")
@@ -955,11 +914,10 @@ def run_watch(
                             print(f"[DEBUG] Failed to save shared alert snapshot: {exc}")
                             emit("debug_save_error", message=str(exc))
                         else:
-                            _append_event_safely(
+                            log_event(
                                 _debug_snapshot_event(
                                     frame_index, result, debug_paths, reason="shared_alert"
-                                ),
-                                emit=emit,
+                                )
                             )
                             telemetry.submit_debug_detection(
                                 detection=detection,
@@ -1008,7 +966,7 @@ def run_watch(
                         "is_priority": False,
                         "score": None,
                     }
-                    _append_event_safely(rejected_event, emit=emit)
+                    log_event(rejected_event)
                     detail = f" {rejection['detail']}" if rejection.get("detail") else ""
                     print(
                         f"[REJECTED] {rejected_event['ts']} y={rejection['y']} "
@@ -1022,9 +980,8 @@ def run_watch(
                     print(f"[DEBUG] Failed to save manual snapshot: {exc}")
                     emit("debug_save_error", message=str(exc))
                 else:
-                    _append_event_safely(
+                    log_event(
                         _debug_snapshot_event(frame_index, result, saved, reason="manual"),
-                        emit=emit,
                     )
                     print("[debug] saved manual chat-box snapshot:")
                     for path in saved:
@@ -1036,11 +993,10 @@ def run_watch(
                     print(f"[DEBUG] Failed to save timed macOS snapshot: {exc}")
                     emit("debug_save_error", message=str(exc))
                 else:
-                    _append_event_safely(
+                    log_event(
                         _debug_snapshot_event(
                             frame_index, result, saved, reason="macos_interval"
-                        ),
-                        emit=emit,
+                        )
                     )
                     print("[debug] saved timed macOS chat-box snapshot:")
                     for path in saved:
@@ -1110,18 +1066,6 @@ def _wait_or_stop(stop_event, seconds: float) -> bool:
         time.sleep(seconds)
         return False
     return bool(stop_event.wait(seconds))
-
-
-def _delivery_retryable(message: str) -> bool:
-    """Retry timeouts, rate limits, and server failures once; not bad credentials."""
-    text = str(message).lower()
-    non_retryable = ("http 400", "http 401", "http 403", "http 404", "credential", "unauthorized")
-    if any(marker in text for marker in non_retryable):
-        return False
-    return any(
-        marker in text
-        for marker in ("timeout", "timed out", "tempor", "connection", "http 408", "http 429", "http 5")
-    )
 
 
 def _spawn_key(detection) -> str:
