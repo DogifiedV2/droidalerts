@@ -1,29 +1,21 @@
 from __future__ import annotations
 
-import ctypes
 import math
+import multiprocessing
 import sys
 import threading
 from collections.abc import Callable
 
-from .capture import MonitorInfo, format_tk_geometry
-from .popup import CARD_BG, CARD_BG_SOFT, RAINBOW_LETTERS, RARITY_COLORS, _rounded_rect
+from PySide6.QtCore import QPoint, QRect, Qt, QThread, QTimer
+from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen
+from PySide6.QtWidgets import QApplication, QWidget
+
+from .capture import MonitorInfo
+from .config import AppConfig, save_config
+from .popup import RARITY_COLORS
 from .timer_sync import TIMER_SCHEDULE_CLOCK
 
-try:
-    import tkinter as tk
-    from tkinter import font as tkfont
-except Exception:  # pragma: no cover - tkinter availability is platform dependent.
-    tk = None
-    tkfont = None
 
-
-# "Droid Timers" overlay: a small always-on-top, click-through strip showing
-# when the next droids are due (server-synchronized UTC schedule). Beskar spawns every
-# 15 minutes (xx:00/15/30/45), Galactic at xx:45 every hour, Mythic at
-# xx:55 every hour, and Rainbow every 10 minutes (xx:00/10/...). Rainbow
-# timing stays available on the Dashboard, while the overlay shows Beskar,
-# Mythic, and Galactic side by side.
 TIMER_ORDER = ("beskar", "mythic", "rainbow", "galactic")
 DISPLAY_TIMER_ORDER = ("beskar", "mythic", "galactic")
 TIMER_LABELS = {
@@ -44,14 +36,23 @@ TIMER_PERIOD_SECONDS = {
     "galactic": 3600,
 }
 
-BASE_WIDTH = 376
-BASE_HEIGHT = 72
+BASE_WIDTH = 420
+BASE_HEIGHT = 78
 EDIT_BAR_HEIGHT = 72
 MIN_SCALE = 0.6
 MAX_SCALE = 2.0
 DEFAULT_CENTER_X_RATIO = 0.5
 DEFAULT_TOP_Y_RATIO = 0.006
 TIMER_REFRESH_GUARD_MS = 8
+
+CARD_BG = "#0e151d"
+CARD_BG_HOT = "#1c1817"
+CARD_LINE = "#243140"
+CARD_LINE_EDIT = "#39c6d8"
+TEXT = "#e9f1f7"
+MUTED = "#8ba0ae"
+ACCENT = "#39c6d8"
+WARNING = "#f4b942"
 
 
 def _edit_bar_row_bounds(card_top: int, scale: float) -> tuple[int, int, int, int]:
@@ -89,48 +90,14 @@ def next_timer_refresh_delay_ms(
     return math.ceil(until_next_second * 1000) + TIMER_REFRESH_GUARD_MS
 
 
-def _apply_overlay_window_styles(window: "tk.Misc", color_hex: str, *, click_through: bool) -> None:
-    """Layered color-key transparency, no-activate, and (normally)
-    click-through so the strip never blocks the game. Edit mode drops the
-    click-through bit so the strip can be dragged and its buttons clicked."""
-    if sys.platform != "win32":
-        return
-    try:
-        user32 = ctypes.windll.user32
-        hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
-        gwl_exstyle = -20
-        ws_ex_layered = 0x00080000
-        ws_ex_transparent = 0x00000020
-        ws_ex_noactivate = 0x08000000
-        lwa_colorkey = 0x00000001
-        r = int(color_hex[1:3], 16)
-        g = int(color_hex[3:5], 16)
-        b = int(color_hex[5:7], 16)
-        colorref = r | (g << 8) | (b << 16)
-        style = user32.GetWindowLongW(hwnd, gwl_exstyle)
-        style |= ws_ex_layered | ws_ex_noactivate
-        if click_through:
-            style |= ws_ex_transparent
-        else:
-            style &= ~ws_ex_transparent
-        user32.SetWindowLongW(hwnd, gwl_exstyle, style)
-        user32.SetLayeredWindowAttributes(hwnd, colorref, 0, lwa_colorkey)
-    except Exception:
-        pass
-
-
-class DroidTimersOverlay:
-    """Countdown strip; position and size are user-adjustable and persisted.
-
-    Layout is stored resolution-independently: the strip's horizontal center
-    and top edge as fractions of the screen, plus a size scale factor.
-    """
+class DroidTimersOverlay(QWidget):
+    """Qt always-on-top countdown strip with a temporary drag/resize mode."""
 
     def __init__(
         self,
-        master: "tk.Misc | None" = None,
+        master: QWidget | None = None,
         *,
-        stop_event: threading.Event | None = None,
+        stop_event=None,
         scale: float = 1.0,
         center_x_ratio: float = DEFAULT_CENTER_X_RATIO,
         top_y_ratio: float = DEFAULT_TOP_Y_RATIO,
@@ -141,8 +108,8 @@ class DroidTimersOverlay:
         offset_seconds: int = 0,
         on_reminder: Callable[[str, int], None] | None = None,
     ) -> None:
-        if tk is None:
-            raise RuntimeError("tkinter is not available")
+        super().__init__(master)
+        self.window = self  # Compatibility with the previous overlay surface.
         self._stop_event = stop_event
         self._on_layout_change = on_layout_change
         self._monitor = monitor
@@ -151,187 +118,203 @@ class DroidTimersOverlay:
         self._offset_seconds = int(offset_seconds)
         self._on_reminder = on_reminder
         self._reminded_targets: dict[str, int] = {}
-        self._after_id: str | None = None
-        self._time_items: dict[str, int] = {}
-        self._drag_offset: tuple[int, int] | None = None
+        self._remaining: dict[str, int] = {}
+        self._drag_offset: QPoint | None = None
         self.edit_mode = False
         self.scale = min(MAX_SCALE, max(MIN_SCALE, float(scale)))
         self.center_x_ratio = min(1.0, max(0.0, float(center_x_ratio)))
         self.top_y_ratio = min(1.0, max(0.0, float(top_y_ratio)))
 
-        self.window = tk.Toplevel(master) if master is not None else tk.Tk()
-        window = self.window
-        window.overrideredirect(True)
-        window.attributes("-topmost", True)
-        self._transparent = "#010203"
-        window.configure(bg=self._transparent)
-        try:
-            window.attributes("-transparentcolor", self._transparent)
-        except Exception:
-            self._transparent = CARD_BG
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._apply_window_mode()
+        self._apply_geometry()
 
-        self.canvas = tk.Canvas(window, bg=self._transparent, highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
-        # Themed parents override the constructor bg (same quirk as the popup).
-        self.canvas.configure(bg=self._transparent, highlightthickness=0)
-        self.canvas.bind("<ButtonPress-1>", self._on_press)
-        self.canvas.bind("<B1-Motion>", self._on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self._on_release)
-
-        self._build_card()
-        window.update_idletasks()
-        if self._transparent == "#010203":
-            _apply_overlay_window_styles(window, self._transparent, click_through=True)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._tick)
         self._tick()
 
-    # ------------------------------------------------------------------
-    # Geometry helpers
-    # ------------------------------------------------------------------
+    def _apply_window_mode(self) -> None:
+        flags = (
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        if not self.edit_mode:
+            flags |= (
+                Qt.WindowType.WindowTransparentForInput
+                | Qt.WindowType.WindowDoesNotAcceptFocus
+            )
+        self.setWindowFlags(flags)
+
+    def _screen_geometry(self) -> QRect:
+        if self._monitor is not None:
+            return QRect(
+                self._monitor.left,
+                self._monitor.top,
+                self._monitor.width,
+                self._monitor.height,
+            )
+        screen = QApplication.primaryScreen()
+        return screen.geometry() if screen is not None else QRect(0, 0, 1920, 1080)
+
     def _card_size(self) -> tuple[int, int]:
-        return int(BASE_WIDTH * self.scale), int(BASE_HEIGHT * self.scale)
+        return round(BASE_WIDTH * self.scale), round(BASE_HEIGHT * self.scale)
 
     def _window_size(self) -> tuple[int, int]:
         width, height = self._card_size()
         if self.edit_mode:
-            height += int(EDIT_BAR_HEIGHT * self.scale)
+            height += round(EDIT_BAR_HEIGHT * self.scale)
         return width, height
 
     def _apply_geometry(self) -> None:
-        window = self.window
-        screen_w = self._monitor.width if self._monitor is not None else window.winfo_screenwidth()
-        screen_h = self._monitor.height if self._monitor is not None else window.winfo_screenheight()
-        screen_left = self._monitor.left if self._monitor is not None else 0
-        screen_top = self._monitor.top if self._monitor is not None else 0
+        screen = self._screen_geometry()
         width, height = self._window_size()
-        x = int(self.center_x_ratio * screen_w - width / 2)
-        y = int(self.top_y_ratio * screen_h)
-        x = max(0, min(screen_w - width, x))
-        y = max(0, min(screen_h - height, y))
-        window.geometry(
-            format_tk_geometry(
-                width=width,
-                height=height,
-                x=screen_left + x,
-                y=screen_top + y,
-            )
+        x = round(screen.left() + self.center_x_ratio * screen.width() - width / 2)
+        y = round(screen.top() + self.top_y_ratio * screen.height())
+        x = max(screen.left(), min(screen.right() - width + 1, x))
+        y = max(screen.top(), min(screen.bottom() - height + 1, y))
+        self.setGeometry(x, y, width, height)
+
+    def _store_position(self) -> None:
+        screen = self._screen_geometry()
+        self.center_x_ratio = min(
+            1.0,
+            max(
+                0.0,
+                (self.x() - screen.left() + self.width() / 2)
+                / max(1, screen.width()),
+            ),
+        )
+        self.top_y_ratio = min(
+            1.0,
+            max(0.0, (self.y() - screen.top()) / max(1, screen.height())),
         )
 
-    def _store_position_from_window(self) -> None:
-        window = self.window
-        screen_w = max(1, self._monitor.width if self._monitor is not None else window.winfo_screenwidth())
-        screen_h = max(1, self._monitor.height if self._monitor is not None else window.winfo_screenheight())
-        screen_left = self._monitor.left if self._monitor is not None else 0
-        screen_top = self._monitor.top if self._monitor is not None else 0
-        width, _height = self._window_size()
-        self.center_x_ratio = (window.winfo_x() - screen_left + width / 2) / screen_w
-        self.top_y_ratio = (window.winfo_y() - screen_top) / screen_h
+    def _font(self, pixels: int, *, bold: bool = False) -> QFont:
+        family = "Segoe UI" if sys.platform == "win32" else "Avenir Next"
+        font = QFont(family)
+        font.setPixelSize(max(8, round(pixels * self.scale)))
+        font.setWeight(QFont.Weight.Bold if bold else QFont.Weight.Medium)
+        return font
 
-    # ------------------------------------------------------------------
-    # Drawing
-    # ------------------------------------------------------------------
-    def _build_card(self) -> None:
-        canvas = self.canvas
-        canvas.delete("all")
-        self._time_items = {}
-        s = self.scale
-        width, card_h = self._card_size()
-        win_w, win_h = self._window_size()
-        canvas.configure(width=win_w, height=win_h)
+    def _button_rects(self) -> dict[str, QRect]:
+        width, card_height = self._card_size()
+        y1, y2, reset_y1, reset_y2 = _edit_bar_row_bounds(card_height, self.scale)
+        return {
+            "smaller": QRect(
+                width // 2 - round(120 * self.scale),
+                y1,
+                round(52 * self.scale),
+                y2 - y1,
+            ),
+            "larger": QRect(
+                width // 2 - round(58 * self.scale),
+                y1,
+                round(52 * self.scale),
+                y2 - y1,
+            ),
+            "done": QRect(
+                width // 2 + round(10 * self.scale),
+                y1,
+                round(110 * self.scale),
+                y2 - y1,
+            ),
+            "reset": QRect(
+                width // 2 - round(86 * self.scale),
+                reset_y1,
+                round(172 * self.scale),
+                reset_y2 - reset_y1,
+            ),
+        }
 
-        border = "#5bc0de" if self.edit_mode else "#4d5160"
-        _rounded_rect(canvas, 0, 0, width - 1, card_h - 1, int(18 * s), fill=border, outline="")
-        _rounded_rect(canvas, 2, 2, width - 3, card_h - 3, int(16 * s), fill=CARD_BG, outline="")
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        width, card_height = self._card_size()
+        card = QRect(1, 1, width - 2, card_height - 2)
+        hottest = min(self._remaining.values(), default=9999) <= 60
+        painter.setBrush(QColor(CARD_BG_HOT if hottest else CARD_BG))
+        painter.setPen(
+            QPen(QColor(CARD_LINE_EDIT if self.edit_mode else CARD_LINE), 1)
+        )
+        painter.drawRoundedRect(card, round(12 * self.scale), round(12 * self.scale))
 
-        label_font = tkfont.Font(root=self.window, family="Segoe UI", size=max(7, int(12 * s)), weight="bold")
-        time_font = tkfont.Font(root=self.window, family="Segoe UI Black", size=max(9, int(19 * s)))
-        column_w = width // len(DISPLAY_TIMER_ORDER)
+        column_width = width / len(DISPLAY_TIMER_ORDER)
         for index, kind in enumerate(DISPLAY_TIMER_ORDER):
-            center_x = column_w * index + column_w // 2
-            if index > 0:
-                canvas.create_line(
-                    column_w * index, int(14 * s), column_w * index, card_h - int(14 * s),
-                    fill=CARD_BG_SOFT,
+            left = round(index * column_width)
+            right = round((index + 1) * column_width)
+            if index:
+                painter.setPen(QPen(QColor(CARD_LINE), 1))
+                painter.drawLine(
+                    left,
+                    round(14 * self.scale),
+                    left,
+                    card_height - round(14 * self.scale),
                 )
-            label = TIMER_LABELS[kind]
-            label_y = int(18 * s)
-            if kind == "rainbow":
-                total = sum(label_font.measure(ch) for ch in label)
-                letter_x = center_x - total // 2
-                for i, ch in enumerate(label):
-                    canvas.create_text(
-                        letter_x, label_y, text=ch, anchor="w",
-                        fill=RAINBOW_LETTERS[i % len(RAINBOW_LETTERS)], font=label_font,
-                    )
-                    letter_x += label_font.measure(ch)
-            else:
-                canvas.create_text(
-                    center_x, label_y, text=label, fill=TIMER_COLORS[kind], font=label_font
-                )
-            self._time_items[kind] = canvas.create_text(
-                center_x, int(47 * s), text="--:--", fill="#f5f6fa", font=time_font
+            remaining = self._remaining.get(kind, 0)
+            color = WARNING if remaining <= 60 else TIMER_COLORS[kind]
+            painter.setFont(self._font(10, bold=True))
+            painter.setPen(QColor(color))
+            painter.drawText(
+                QRect(left, round(10 * self.scale), right - left, round(22 * self.scale)),
+                Qt.AlignmentFlag.AlignCenter,
+                TIMER_LABELS[kind],
+            )
+            painter.setFont(self._font(24, bold=True))
+            painter.setPen(QColor(TEXT))
+            painter.drawText(
+                QRect(left, round(29 * self.scale), right - left, round(33 * self.scale)),
+                Qt.AlignmentFlag.AlignCenter,
+                format_countdown(remaining),
+            )
+            progress = min(
+                1.0,
+                max(0.0, remaining / max(1, TIMER_PERIOD_SECONDS[kind])),
+            )
+            line_left = left + round(12 * self.scale)
+            line_width = max(1, right - left - round(24 * self.scale))
+            line_y = card_height - round(9 * self.scale)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#182330"))
+            painter.drawRoundedRect(
+                line_left,
+                line_y,
+                line_width,
+                max(2, round(3 * self.scale)),
+                2,
+                2,
+            )
+            painter.setBrush(QColor(color))
+            painter.drawRoundedRect(
+                line_left,
+                line_y,
+                round(line_width * progress),
+                max(2, round(3 * self.scale)),
+                2,
+                2,
             )
 
-        if self.edit_mode:
-            self._build_edit_bar(card_h)
-        self._apply_geometry()
-        self._refresh_times()
-
-    def _build_edit_bar(self, card_top: int) -> None:
-        """Controls below the card for resizing, saving, and restoring defaults."""
-        canvas = self.canvas
-        s = self.scale
-        width, _card_h = self._card_size()
-        y1, y2, reset_y1, reset_y2 = _edit_bar_row_bounds(card_top, s)
-        button_font = tkfont.Font(root=self.window, family="Segoe UI", size=max(8, int(11 * s)), weight="bold")
-
-        buttons = (
-            ("size-down", "−", width // 2 - int(90 * s)),
-            ("size-up", "+", width // 2 - int(30 * s)),
-            ("done", "Done", width // 2 + int(60 * s)),
-        )
-        half_w = {"size-down": int(24 * s), "size-up": int(24 * s), "done": int(44 * s)}
-        for tag, text, center_x in buttons:
-            fill = "#2f9e5f" if tag == "done" else CARD_BG_SOFT
-            _rounded_rect(
-                canvas, center_x - half_w[tag], y1, center_x + half_w[tag], y2,
-                (y2 - y1) // 2, fill=fill, outline="#5bc0de", tags=(tag,),
+        if not self.edit_mode:
+            return
+        painter.setFont(self._font(10, bold=True))
+        for key, rect in self._button_rects().items():
+            painter.setBrush(QColor("#17323a" if key == "done" else "#182330"))
+            painter.setPen(QPen(QColor(ACCENT), 1))
+            painter.drawRoundedRect(rect, rect.height() // 2, rect.height() // 2)
+            painter.setPen(QColor(TEXT))
+            painter.drawText(
+                rect,
+                Qt.AlignmentFlag.AlignCenter,
+                {
+                    "smaller": "−",
+                    "larger": "+",
+                    "done": "Done",
+                    "reset": "Reset to default",
+                }[key],
             )
-            canvas.create_text(
-                center_x, (y1 + y2) // 2, text=text, fill="#f5f6fa",
-                font=button_font, tags=(tag,),
-            )
-        canvas.tag_bind("size-down", "<Button-1>", lambda _e: self._resize_step(-0.1))
-        canvas.tag_bind("size-up", "<Button-1>", lambda _e: self._resize_step(0.1))
-        canvas.tag_bind("done", "<Button-1>", lambda _e: self.exit_edit_mode())
-
-        reset_x = width // 2
-        reset_half_w = int(78 * s)
-        _rounded_rect(
-            canvas,
-            reset_x - reset_half_w,
-            reset_y1,
-            reset_x + reset_half_w,
-            reset_y2,
-            max(1, (reset_y2 - reset_y1) // 2),
-            fill=CARD_BG_SOFT,
-            outline="#5bc0de",
-            tags=("reset-default",),
-        )
-        canvas.create_text(
-            reset_x,
-            (reset_y1 + reset_y2) // 2,
-            text="Reset to default",
-            fill="#f5f6fa",
-            font=button_font,
-            tags=("reset-default",),
-        )
-        canvas.tag_bind("reset-default", "<Button-1>", lambda _e: self._reset_layout())
-
-    def _refresh_times(self) -> None:
-        for kind, item in self._time_items.items():
-            remaining = seconds_until_next(kind, self._offset_seconds)
-            self.canvas.itemconfigure(item, text=format_countdown(remaining))
-            self._maybe_remind(kind, remaining)
 
     def _maybe_remind(self, kind: str, remaining: int) -> None:
         if not self._reminders_enabled or remaining > self._reminder_seconds:
@@ -353,110 +336,195 @@ class DroidTimersOverlay:
                 return
             except Exception as exc:
                 print(f"[TIMERS] Reminder callback failed: {exc}")
-        try:
-            self.window.bell()
-        except Exception:
-            pass
+        QApplication.beep()
 
-    # ------------------------------------------------------------------
-    # Edit mode (move + resize)
-    # ------------------------------------------------------------------
+    def _tick(self) -> None:
+        if self._stop_event is not None and self._stop_event.is_set():
+            self.close()
+            app = QApplication.instance()
+            if self.parent() is None and app is not None:
+                app.quit()
+            return
+        for kind in DISPLAY_TIMER_ORDER:
+            remaining = seconds_until_next(kind, self._offset_seconds)
+            self._remaining[kind] = remaining
+            self._maybe_remind(kind, remaining)
+        self.update()
+        self._timer.start(next_timer_refresh_delay_ms(self._offset_seconds))
+
     def enter_edit_mode(self) -> None:
         if self.edit_mode:
+            self.raise_()
             return
         self.edit_mode = True
-        self._build_card()
-        _apply_overlay_window_styles(self.window, self._transparent, click_through=False)
+        self._apply_window_mode()
+        self._apply_geometry()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.update()
 
     def exit_edit_mode(self) -> None:
         if not self.edit_mode:
             return
-        self._store_position_from_window()
+        self._store_position()
         self.edit_mode = False
-        self._build_card()
-        _apply_overlay_window_styles(self.window, self._transparent, click_through=True)
+        self._apply_window_mode()
+        self._apply_geometry()
+        self.show()
+        self.raise_()
         if self._on_layout_change is not None:
-            try:
-                self._on_layout_change(self.center_x_ratio, self.top_y_ratio, self.scale)
-            except Exception as exc:
-                print(f"[TIMERS] Failed to save overlay layout: {exc}")
+            self._on_layout_change(
+                self.center_x_ratio,
+                self.top_y_ratio,
+                self.scale,
+            )
 
     def _resize_step(self, delta: float) -> None:
-        new_scale = min(MAX_SCALE, max(MIN_SCALE, round(self.scale + delta, 2)))
-        if abs(new_scale - self.scale) < 0.01:
-            return
-        self._store_position_from_window()
-        self.scale = new_scale
-        self._build_card()
+        self._store_position()
+        self.scale = min(
+            MAX_SCALE,
+            max(MIN_SCALE, round(self.scale + delta, 2)),
+        )
+        self._apply_geometry()
+        self.update()
 
     def _reset_layout(self) -> None:
         self.scale = 1.0
         self.center_x_ratio = DEFAULT_CENTER_X_RATIO
         self.top_y_ratio = DEFAULT_TOP_Y_RATIO
-        self._build_card()
+        self._apply_geometry()
+        self.update()
 
-    def _on_press(self, event: "tk.Event") -> None:
-        if not self.edit_mode:
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if not self.edit_mode or event.button() != Qt.MouseButton.LeftButton:
             return
-        # Ignore presses on the control buttons (they have their own bindings).
-        tags = self.canvas.gettags("current")
-        if any(tag in ("size-down", "size-up", "done", "reset-default") for tag in tags):
-            return
-        self._drag_offset = (event.x_root - self.window.winfo_x(), event.y_root - self.window.winfo_y())
+        point = event.position().toPoint()
+        for key, rect in self._button_rects().items():
+            if rect.contains(point):
+                if key == "smaller":
+                    self._resize_step(-0.1)
+                elif key == "larger":
+                    self._resize_step(0.1)
+                elif key == "reset":
+                    self._reset_layout()
+                else:
+                    self.exit_edit_mode()
+                return
+        self._drag_offset = event.globalPosition().toPoint() - self.pos()
 
-    def _on_drag(self, event: "tk.Event") -> None:
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if not self.edit_mode or self._drag_offset is None:
             return
-        x = event.x_root - self._drag_offset[0]
-        y = event.y_root - self._drag_offset[1]
-        screen_w = self._monitor.width if self._monitor is not None else self.window.winfo_screenwidth()
-        screen_h = self._monitor.height if self._monitor is not None else self.window.winfo_screenheight()
-        screen_left = self._monitor.left if self._monitor is not None else 0
-        screen_top = self._monitor.top if self._monitor is not None else 0
-        width, height = self._window_size()
-        x = max(screen_left, min(screen_left + screen_w - width, x))
-        y = max(screen_top, min(screen_top + screen_h - height, y))
-        self.window.geometry(format_tk_geometry(x=x, y=y))
+        screen = self._screen_geometry()
+        candidate = event.globalPosition().toPoint() - self._drag_offset
+        x = max(screen.left(), min(screen.right() - self.width() + 1, candidate.x()))
+        y = max(screen.top(), min(screen.bottom() - self.height() + 1, candidate.y()))
+        self.move(x, y)
 
-    def _on_release(self, _event: "tk.Event") -> None:
+    def mouseReleaseEvent(self, _event: QMouseEvent) -> None:
         self._drag_offset = None
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
     @property
     def alive(self) -> bool:
-        try:
-            return bool(self.window.winfo_exists())
-        except Exception:
-            return False
+        return self.isVisible()
 
-    def _tick(self) -> None:
-        if self._stop_event is not None and self._stop_event.is_set():
-            self.close()
-            return
-        try:
-            self._refresh_times()
-            self.window.attributes("-topmost", True)
-            self._after_id = self.window.after(
-                next_timer_refresh_delay_ms(self._offset_seconds),
-                self._tick,
-            )
-        except Exception:
-            pass
+    def close(self) -> bool:
+        self._timer.stop()
+        return super().close()
 
-    def close(self) -> None:
-        if self._after_id is not None:
-            try:
-                self.window.after_cancel(self._after_id)
-            except Exception:
-                pass
-            self._after_id = None
-        try:
-            if self.window.winfo_exists():
-                self.window.destroy()
-        except Exception:
-            pass
+
+_ACTIVE_TIMER_OVERLAY: DroidTimersOverlay | None = None
+
+
+def _layout_saver(config: AppConfig) -> Callable[[float, float, float], None]:
+    def save_layout(center_x: float, top_y: float, scale: float) -> None:
+        config.droid_timers_center_x = center_x
+        config.droid_timers_top_y = top_y
+        config.droid_timers_scale = scale
+        save_config(config)
+
+    return save_layout
+
+
+def show_droid_timers(
+    config: AppConfig,
+    monitor: MonitorInfo | None = None,
+) -> DroidTimersOverlay | None:
+    """Show or refresh the GUI-managed Qt timer strip."""
+    global _ACTIVE_TIMER_OVERLAY
+    app = QApplication.instance()
+    if app is None or QThread.currentThread() is not app.thread():
+        return None
+    if _ACTIVE_TIMER_OVERLAY is not None:
+        _ACTIVE_TIMER_OVERLAY.close()
+    overlay = DroidTimersOverlay(
+        scale=config.droid_timers_scale,
+        center_x_ratio=config.droid_timers_center_x,
+        top_y_ratio=config.droid_timers_top_y,
+        on_layout_change=_layout_saver(config),
+        monitor=monitor,
+        reminders_enabled=config.timer_reminders_enabled,
+        reminder_seconds=config.timer_reminder_seconds,
+        offset_seconds=config.timer_offset_seconds,
+    )
+    _ACTIVE_TIMER_OVERLAY = overlay
+    overlay.show()
+    return overlay
+
+
+def hide_droid_timers() -> None:
+    global _ACTIVE_TIMER_OVERLAY
+    if _ACTIVE_TIMER_OVERLAY is not None:
+        _ACTIVE_TIMER_OVERLAY.close()
+        _ACTIVE_TIMER_OVERLAY.deleteLater()
+        _ACTIVE_TIMER_OVERLAY = None
+
+
+def adjust_droid_timers(config: AppConfig) -> DroidTimersOverlay | None:
+    overlay = _ACTIVE_TIMER_OVERLAY
+    if overlay is None or not overlay.alive:
+        overlay = show_droid_timers(config)
+    if overlay is not None:
+        overlay.enter_edit_mode()
+    return overlay
+
+
+def _run_standalone_timer_overlay(
+    stop_event,
+    scale: float,
+    center_x_ratio: float,
+    top_y_ratio: float,
+    monitor: MonitorInfo | None,
+    reminders_enabled: bool,
+    reminder_seconds: int,
+    offset_seconds: int,
+) -> None:
+    app = QApplication([])
+    overlay = DroidTimersOverlay(
+        stop_event=stop_event,
+        scale=scale,
+        center_x_ratio=center_x_ratio,
+        top_y_ratio=top_y_ratio,
+        monitor=monitor,
+        reminders_enabled=reminders_enabled,
+        reminder_seconds=reminder_seconds,
+        offset_seconds=offset_seconds,
+    )
+    overlay.show()
+    app.exec()
+
+
+class _StandaloneTimerHandle:
+    def __init__(self, process, bridge: threading.Thread | None) -> None:
+        self.process = process
+        self.bridge = bridge
+
+    def is_alive(self) -> bool:
+        return self.process.is_alive()
+
+    def join(self, timeout: float | None = None) -> None:
+        self.process.join(timeout)
 
 
 def start_droid_timers_thread(
@@ -469,25 +537,52 @@ def start_droid_timers_thread(
     reminders_enabled: bool = False,
     reminder_seconds: int = 60,
     offset_seconds: int = 0,
-) -> threading.Thread:
-    """Standalone overlay for the CLI watcher (no GUI mainloop to attach to)."""
+) -> _StandaloneTimerHandle:
+    """Start the CLI overlay in its own process so Qt stays on a main thread."""
+    context = multiprocessing.get_context("spawn")
+    process_stop = context.Event()
+    process = context.Process(
+        target=_run_standalone_timer_overlay,
+        args=(
+            process_stop,
+            scale,
+            center_x_ratio,
+            top_y_ratio,
+            monitor,
+            reminders_enabled,
+            reminder_seconds,
+            offset_seconds,
+        ),
+        name="DroidAlertsTimers",
+        daemon=True,
+    )
+    process.start()
+    bridge = None
+    if stop_event is not None:
+        def relay_stop() -> None:
+            stop_event.wait()
+            process_stop.set()
 
-    def run() -> None:
-        try:
-            overlay = DroidTimersOverlay(
-                stop_event=stop_event,
-                scale=scale,
-                center_x_ratio=center_x_ratio,
-                top_y_ratio=top_y_ratio,
-                monitor=monitor,
-                reminders_enabled=reminders_enabled,
-                reminder_seconds=reminder_seconds,
-                offset_seconds=offset_seconds,
-            )
-            overlay.window.mainloop()
-        except Exception as exc:
-            print(f"[TIMERS] Failed to show Droid Timers overlay: {exc}")
+        bridge = threading.Thread(
+            target=relay_stop,
+            name="droid-timers-stop",
+            daemon=True,
+        )
+        bridge.start()
+    return _StandaloneTimerHandle(process, bridge)
 
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
-    return thread
+
+__all__ = [
+    "DISPLAY_TIMER_ORDER",
+    "DroidTimersOverlay",
+    "TIMER_COLORS",
+    "TIMER_PERIOD_SECONDS",
+    "_edit_bar_row_bounds",
+    "adjust_droid_timers",
+    "format_countdown",
+    "hide_droid_timers",
+    "next_timer_refresh_delay_ms",
+    "seconds_until_next",
+    "show_droid_timers",
+    "start_droid_timers_thread",
+]

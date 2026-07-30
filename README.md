@@ -62,9 +62,9 @@ appears in History as **Rebirth Ready**. The scan interval can be changed from
 seconds is recommended.
 
 The fixed sidebar keeps Dashboard, Belt Tracker, Limited Deals, History,
-Diagnostics, and Settings available in one place. Settings also includes three live themes:
-**Default**, **Midnight**, and **Daylight**. Theme changes
-apply immediately and are remembered the next time the app opens.
+Diagnostics, and Settings available in one place. The interface uses one
+consistent Signal dark theme across the main window, dialogs, alert popups,
+region tools, and timer overlay.
 
 ## Belt Tracker
 

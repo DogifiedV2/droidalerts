@@ -36,7 +36,7 @@ It installs the build tools, runs PyInstaller, and creates:
 
 ```text
 dist\Droid Alerts\Droid Alerts.exe
-dist\DroidAlerts-Windows.zip
+dist\DroidAlerts.zip
 ```
 
 Share the zip with normal users. They only need to unzip it and double-click
@@ -102,7 +102,7 @@ synthetic 1920x1080 / 2560x1440 / 3440x1440 stress renders and real 4:3
 (1440x1040) captures.
 
 `python tests/test_paths_guard.py` asserts the tool never references OS
-user-data paths. `python tests/test_runtime_ux.py` covers config recovery,
+user-data paths. The normal unit-test suite covers config recovery,
 per-display calibration, retention cleanup, timer boundaries, delivery retry
 classification, and safe update extraction.
 

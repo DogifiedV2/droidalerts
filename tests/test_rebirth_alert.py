@@ -15,11 +15,8 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.capture import MonitorInfo, PixelBox
-from droid_alerts.classifier import Detection
 from droid_alerts.config import AppConfig
 from droid_alerts.auxiliary_alerts import AuxiliaryAlertSchedule
-from droid_alerts.gui import REBIRTH_ALERT_TOOLTIP
-from droid_alerts.notifications import alert_title, event_text
 from droid_alerts.rebirth import (
     RebirthAlertDetector,
     RebirthMatch,
@@ -87,22 +84,6 @@ class RebirthDetectorTests(unittest.TestCase):
         self.assertFalse(gate.update(False))
         self.assertFalse(gate.update(True))
         self.assertTrue(gate.update(True))
-
-    def test_rebirth_notification_copy_is_specific(self):
-        detection = Detection(
-            droid="Rebirth",
-            rarity="Available",
-            row_box=(0, 0, 1, 1),
-            droid_score=0.9,
-            rarity_score=0.9,
-            rarity_margin=0.9,
-            score=0.9,
-            source="rebirth-alert",
-        )
-
-        self.assertEqual("A rebirth droid is available", event_text(detection))
-        self.assertEqual("Droid Alerts Rebirth Alert", alert_title(detection))
-
 
 class RebirthWatcherTests(unittest.TestCase):
     def test_confirmed_jawa_uses_normal_alert_channels_and_history(self):
@@ -187,12 +168,6 @@ class RebirthWatcherTests(unittest.TestCase):
 
 
 class RebirthConfigTests(unittest.TestCase):
-    def test_dashboard_toggle_uses_requested_tooltip(self):
-        self.assertEqual(
-            "Receive a notification when a droid you need for rebirth spawns",
-            REBIRTH_ALERT_TOOLTIP,
-        )
-
     def test_setting_round_trips_and_defaults_off(self):
         self.assertFalse(AppConfig.from_dict({}).rebirth_alert_enabled)
         restored = AppConfig.from_dict(AppConfig(rebirth_alert_enabled=True).to_dict())

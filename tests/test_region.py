@@ -29,6 +29,23 @@ class AutoBoxProfileTests(unittest.TestCase):
 
 
 class RegionValidationTests(unittest.TestCase):
+    def test_calibration_profiles_are_independent_per_display(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "droid_alerts.region.config_dir", return_value=Path(temp_dir)
+        ):
+            Calibration(
+                mode="manual",
+                ratios={"left": 0.1, "top": 0.2, "width": 0.3, "height": 0.4},
+            ).save("display-a")
+            Calibration(
+                mode="manual",
+                ratios={"left": 0.2, "top": 0.3, "width": 0.3, "height": 0.3},
+            ).save("display-b")
+
+            self.assertEqual(0.1, Calibration.load("display-a").ratios["left"])
+            self.assertEqual(0.2, Calibration.load("display-b").ratios["left"])
+            self.assertEqual("auto", Calibration.load("missing-display").mode)
+
     def test_validated_rescaled_manual_region_persists_new_signature(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch(
             "droid_alerts.region.config_dir", return_value=Path(temp_dir)

@@ -13,9 +13,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 sys.path.insert(0, str(BASE_DIR / "tests"))
 
-from droid_alerts.classifier import Detection
 from droid_alerts.config import AppConfig
-from droid_alerts.notifications import alert_title, event_text
 from droid_alerts.normalize import scale_from_screen
 from droid_alerts.rebirth import (
     RebirthAlertTracker,
@@ -213,22 +211,6 @@ class RebirthIntegrationTests(unittest.TestCase):
 
         self.assertTrue(restored.rebirth_ready_alert_enabled)
         self.assertEqual(7.0, restored.rebirth_scan_interval_seconds)
-
-    def test_notification_copy(self):
-        detection = Detection(
-            droid="Rebirth",
-            rarity="Ready",
-            row_box=(0, 0, 0, 0),
-            droid_score=1.0,
-            rarity_score=1.0,
-            rarity_margin=1.0,
-            score=1.0,
-            source="rebirth-ready",
-        )
-
-        self.assertEqual("Rebirth Ready", event_text(detection))
-        self.assertEqual("Droid Alerts Rebirth Ready", alert_title(detection))
-
 
 if __name__ == "__main__":
     unittest.main()

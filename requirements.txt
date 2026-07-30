@@ -1,7 +1,7 @@
 opencv-python>=4.8,<5
 numpy>=1.26,<3
 mss>=9.0
-ttkbootstrap>=1.10
+PySide6-Essentials>=6.8,<7
 certifi>=2024.2.2
 pyobjc-framework-Cocoa>=10; sys_platform == "darwin"
 windows-capture==2.0.0; sys_platform == "win32"

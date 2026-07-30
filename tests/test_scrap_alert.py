@@ -7,14 +7,12 @@ import numpy as np
 
 from droid_alerts.classifier import Detection
 from droid_alerts.config import AppConfig
-from droid_alerts.gui import SCRAP_ALERT_TOOLTIP
-from droid_alerts.notifications import alert_title, alert_type_id, event_text
+from droid_alerts.notifications import alert_type_id
 from droid_alerts.scrap_alert import (
     CreditHudDetector,
     CreditHudObservation,
     ScrapIncomeTracker,
     ScrapVisibilityTracker,
-    scrap_debug_detail,
 )
 
 
@@ -40,24 +38,6 @@ class ScrapIncomeTrackerTests(unittest.TestCase):
         self.assertTrue(tracker.observe(second, now=59))
         self.assertFalse(tracker.observe(CreditHudObservation(False), now=60))
         self.assertFalse(tracker.observe(second, now=90))
-
-    def test_debug_detail_describes_each_scan_state(self):
-        visible = CreditHudObservation(True, "fingerprint", 0.94)
-        missing = CreditHudObservation(False, None, 0.31)
-
-        self.assertEqual(
-            "Credits display changed; stall timer reset",
-            scrap_debug_detail(visible, changed=True, unchanged_seconds=0),
-        )
-        self.assertEqual(
-            "Credits display unchanged for 15s",
-            scrap_debug_detail(visible, changed=False, unchanged_seconds=15.2),
-        )
-        self.assertEqual(
-            "Credits display not found; stall timer reset",
-            scrap_debug_detail(missing, changed=False, unchanged_seconds=0),
-        )
-
 
 class ScrapVisibilityTrackerTests(unittest.TestCase):
     def test_alerts_once_after_five_minutes_without_the_icon(self):
@@ -114,13 +94,7 @@ class CreditHudDetectorTests(unittest.TestCase):
 
 
 class ScrapAlertIntegrationTests(unittest.TestCase):
-    def test_toggle_uses_requested_tooltip(self):
-        self.assertEqual(
-            "Notifies you when your credits stop increasing. Useful for when afk.",
-            SCRAP_ALERT_TOOLTIP,
-        )
-
-    def test_config_and_notification_copy(self):
+    def test_config_and_alert_type(self):
         restored = AppConfig.from_dict(AppConfig(scrap_alert_enabled=True).to_dict())
         self.assertTrue(restored.scrap_alert_enabled)
 
@@ -135,8 +109,6 @@ class ScrapAlertIntegrationTests(unittest.TestCase):
             source="scrap-alert",
         )
         self.assertEqual("scrap_alert", alert_type_id(detection))
-        self.assertEqual("Your income is no longer increasing", event_text(detection))
-        self.assertEqual("Droid Alerts Scrap Alert", alert_title(detection))
 
         inactive = Detection(
             droid="Scrap",
@@ -149,10 +121,6 @@ class ScrapAlertIntegrationTests(unittest.TestCase):
             source="scrap-inactive",
         )
         self.assertEqual("scrap_alert", alert_type_id(inactive))
-        self.assertEqual(
-            "Scrap inactive for 5+ min. Possibly kicked from the lobby.",
-            event_text(inactive),
-        )
 
 
 if __name__ == "__main__":

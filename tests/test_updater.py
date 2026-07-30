@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import json
 import ssl
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -83,6 +85,16 @@ class BundledCertificateTests(unittest.TestCase):
 
 
 class SourceUpdaterInstallTests(unittest.TestCase):
+    def test_update_archive_rejects_path_traversal(self):
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w") as archive:
+            archive.writestr("../escape.txt", "nope")
+        payload.seek(0)
+
+        with tempfile.TemporaryDirectory() as folder, zipfile.ZipFile(payload) as archive:
+            with self.assertRaises(RuntimeError):
+                updater._safe_extract(archive, Path(folder) / "extract")
+
     def make_release(self, root: Path) -> Path:
         source = root / "release"
         for directory in ("src/droid_alerts", "assets", "templates"):

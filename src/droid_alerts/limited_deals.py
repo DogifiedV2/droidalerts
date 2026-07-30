@@ -22,6 +22,7 @@ LIMITED_DEAL_FAMILY_ORDER = (
     "Beskar",
     "Galactic",
 )
+LIMITED_DEAL_ALERT_FAMILY_ORDER = LIMITED_DEAL_FAMILY_ORDER[2:]
 LIMITED_DEAL_FAMILY_RANK = {
     family: index for index, family in enumerate(LIMITED_DEAL_FAMILY_ORDER)
 }
@@ -40,8 +41,6 @@ LIMITED_DEAL_PRIORITY_COMBOS = (
     ("Beskar", "Legendary"),
     ("Galactic", "Epic"),
     ("Galactic", "Legendary"),
-    ("Default", "Mythic"),
-    ("Gold", "Mythic"),
     ("Diamond", "Mythic"),
     ("Rainbow", "Mythic"),
     ("Beskar", "Mythic"),
@@ -208,7 +207,10 @@ def normalize_limited_deal_target_tiers(raw_targets: object) -> dict[str, str]:
         except (TypeError, ValueError):
             continue
         family = _FAMILY_BY_CASEFOLD.get(str(raw_family or "").strip().casefold())
-        if droid_id in LIMITED_DEAL_DROIDS_BY_ID and family is not None:
+        if (
+            droid_id in LIMITED_DEAL_DROIDS_BY_ID
+            and family in LIMITED_DEAL_ALERT_FAMILY_ORDER
+        ):
             normalized[str(droid_id)] = family
     return {
         str(droid.id): normalized[str(droid.id)]

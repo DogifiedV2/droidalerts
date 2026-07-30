@@ -11,7 +11,7 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 
 def _source_dependencies_ready(splash=None) -> bool:
-    """Check source dependencies after the splash is visible."""
+    """Install missing source dependencies before loading Qt."""
     if getattr(sys, "frozen", False):
         return True
     checker_path = BASE_DIR / "tools" / "ensure_dependencies.py"
@@ -29,12 +29,6 @@ def _source_dependencies_ready(splash=None) -> bool:
 
 
 def main() -> int | None:
-    splash = None
-    if len(sys.argv) == 1 or sys.argv[1] == "gui":
-        from droid_alerts.startup_splash import create_startup_splash
-
-        splash = create_startup_splash()
-
     parser = argparse.ArgumentParser(prog="droid-alerts", description="Cross-PC Droid Tycoon alert detector.")
     sub = parser.add_subparsers(dest="command")
 
@@ -58,12 +52,7 @@ def main() -> int | None:
     test.add_argument("--verbose", action="store_true")
     test.add_argument("--dump-unlabeled", action="store_true", help="Dump per-candidate crops for review.")
 
-    try:
-        args = parser.parse_args()
-    except BaseException:
-        if splash is not None:
-            splash.destroy()
-        raise
+    args = parser.parse_args()
     command = args.command or "gui"
 
     if command == "watch":
@@ -75,13 +64,16 @@ def main() -> int | None:
             config.extra_checks = True
         run_watch(debug=args.debug, config=config)
     elif command == "gui":
+        splash = None
         try:
-            if not _source_dependencies_ready(splash):
+            if not _source_dependencies_ready():
                 raise SystemExit("Droid Alerts dependencies could not be installed.")
+            from droid_alerts.startup_splash import create_startup_splash
+
+            splash = create_startup_splash()
             if splash is not None:
-                run_gui = splash.run_task(_load_gui)
-            else:
-                run_gui = _load_gui()
+                splash.set_status("Loading dashboard…")
+            run_gui = _load_gui()
             run_gui(startup_splash=splash)
         except BaseException:
             if splash is not None:
@@ -106,7 +98,7 @@ def main() -> int | None:
 
 
 def _load_gui():
-    from droid_alerts.gui import run_gui
+    from droid_alerts.ui import run_gui
 
     return run_gui
 

@@ -1,0 +1,14 @@
+module DroidAlerts.Components
+singleton Theme 1.0 ../../components/Theme.qml
+SignalButton 1.0 ../../components/SignalButton.qml
+SignalCard 1.0 ../../components/SignalCard.qml
+SignalCheck 1.0 ../../components/SignalCheck.qml
+SignalCombo 1.0 ../../components/SignalCombo.qml
+SignalField 1.0 ../../components/SignalField.qml
+SignalChip 1.0 ../../components/SignalChip.qml
+StatusLamp 1.0 ../../components/StatusLamp.qml
+SectionTitle 1.0 ../../components/SectionTitle.qml
+SettingField 1.0 ../../components/SettingField.qml
+DialogOverlay 1.0 ../../components/DialogOverlay.qml
+NavIcon 1.0 ../../components/NavIcon.qml
+LinkChip 1.0 ../../components/LinkChip.qml

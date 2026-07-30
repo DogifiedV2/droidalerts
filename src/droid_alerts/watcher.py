@@ -314,7 +314,7 @@ def run_watch(
                 show_popup(
                     detection,
                     config.popup_seconds,
-                    icon_path=popup_icon_path(config),
+                    icon_path=popup_icon_path(config, detection),
                     parent=popup_parent,
                     monitor=getattr(capture, "monitor", None),
                     position=config.popup_position,
