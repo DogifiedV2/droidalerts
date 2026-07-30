@@ -10,7 +10,7 @@ from ..classifier import Detection
 from ..config import AppConfig, data_dir
 from ..limited_deals import (
     LIMITED_DEAL_ALERT_FAMILY_ORDER,
-    LIMITED_DEAL_DROIDS,
+    LIMITED_DEAL_CUSTOM_ALERT_DROIDS,
     LIMITED_DEAL_PRIORITY_COMBOS,
     LimitedDeal,
     LimitedDealService,
@@ -101,7 +101,7 @@ class DealsController(StateObject):
                 "minimum": limited_deal_target_label(tiers[str(droid.id)]),
                 "tone": tiers[str(droid.id)].lower(),
             }
-            for droid in LIMITED_DEAL_DROIDS
+            for droid in LIMITED_DEAL_CUSTOM_ALERT_DROIDS
             if str(droid.id) in tiers
         ]
 
@@ -132,6 +132,9 @@ class DealsController(StateObject):
                     f"{deal.mutation} {deal.rarity} · {deal.droid}"
                     if deal is not None
                     else self._error or "Getting limited deal…"
+                ),
+                "sidebarLabel": (
+                    f"{deal.mutation} {deal.droid}" if deal is not None else ""
                 ),
                 "countdown": self._countdown(),
                 "portrait": (
@@ -256,7 +259,7 @@ class DealsController(StateObject):
         ]
         self.runtime.dialogs.rules(
             "Custom Droid Alerts",
-            "Choose the minimum Limited Deal mutation for each droid.",
+            "Choose the minimum Limited Deal rarity for each droid.",
             [
                 {
                     "id": str(droid.id),
@@ -264,7 +267,7 @@ class DealsController(StateObject):
                     "detail": droid.rarity,
                     "value": rules.get(str(droid.id), ""),
                 }
-                for droid in LIMITED_DEAL_DROIDS
+                for droid in LIMITED_DEAL_CUSTOM_ALERT_DROIDS
             ],
             choices,
             callback=self._save_targets,
@@ -293,8 +296,8 @@ class DealsController(StateObject):
             "Limited Deals",
             "Get alerted when the rotating deal matches something you want.",
             note=(
-                "Choose a mutation and rarity combination, or set a minimum "
-                "mutation for individual droids. New offers normally appear "
+                "Choose a rarity/class combination, or set a minimum "
+                "rarity for individual droids. New offers normally appear "
                 "about 10 seconds after each hour."
             ),
             accept_text="Got it",

@@ -35,15 +35,15 @@ LIMITED_DEAL_TARGET_FAMILIES_BY_LABEL = {
 }
 LIMITED_DEAL_RARITIES = ("Rare", "Epic", "Legendary", "Mythic")
 LIMITED_DEAL_PRIORITY_COMBOS = (
+    ("Diamond", "Mythic"),
     ("Rainbow", "Epic"),
     ("Rainbow", "Legendary"),
+    ("Rainbow", "Mythic"),
     ("Beskar", "Epic"),
     ("Beskar", "Legendary"),
+    ("Beskar", "Mythic"),
     ("Galactic", "Epic"),
     ("Galactic", "Legendary"),
-    ("Diamond", "Mythic"),
-    ("Rainbow", "Mythic"),
-    ("Beskar", "Mythic"),
     ("Galactic", "Mythic"),
 )
 FETCH_SECOND = 10
@@ -114,7 +114,13 @@ LIMITED_DEAL_DROIDS = (
     LimitedDealDroid(70, "MO-Trak", "Mythic", "Combo22"),
     LimitedDealDroid(71, "TRI-TEK", "Mythic", "Combo23"),
 )
+LIMITED_DEAL_CUSTOM_ALERT_DROIDS = tuple(
+    droid for droid in LIMITED_DEAL_DROIDS if droid.rarity != "Rare"
+)
 LIMITED_DEAL_DROIDS_BY_ID = {droid.id: droid for droid in LIMITED_DEAL_DROIDS}
+_CUSTOM_ALERT_DROID_IDS = frozenset(
+    droid.id for droid in LIMITED_DEAL_CUSTOM_ALERT_DROIDS
+)
 _FAMILY_BY_CASEFOLD = {
     family.casefold(): family for family in LIMITED_DEAL_FAMILY_ORDER
 }
@@ -208,13 +214,13 @@ def normalize_limited_deal_target_tiers(raw_targets: object) -> dict[str, str]:
             continue
         family = _FAMILY_BY_CASEFOLD.get(str(raw_family or "").strip().casefold())
         if (
-            droid_id in LIMITED_DEAL_DROIDS_BY_ID
+            droid_id in _CUSTOM_ALERT_DROID_IDS
             and family in LIMITED_DEAL_ALERT_FAMILY_ORDER
         ):
             normalized[str(droid_id)] = family
     return {
         str(droid.id): normalized[str(droid.id)]
-        for droid in LIMITED_DEAL_DROIDS
+        for droid in LIMITED_DEAL_CUSTOM_ALERT_DROIDS
         if str(droid.id) in normalized
     }
 

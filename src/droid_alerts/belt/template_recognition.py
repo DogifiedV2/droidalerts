@@ -62,6 +62,13 @@ _IDENTITY_MINIMUM_MARGINS = {
     "R9": 0.070,
 }
 
+
+def identity_minimum_margin(name: str, default_margin: float) -> float:
+    return max(
+        float(default_margin),
+        _IDENTITY_MINIMUM_MARGINS.get(str(name), 0.0),
+    )
+
 # Belt regions can include price labels above the cards and conveyor scenery
 # below them. Probe a small set of heights at top, center, and bottom anchors,
 # then keep the winning geometry for normal single-pass scans.
@@ -304,10 +311,12 @@ class TemplateCardRecognizer:
         *,
         index_path: str | Path | None = None,
         config: TemplateRecognitionConfig | None = None,
+        geometry_search_enabled: bool = True,
     ) -> None:
         started = time.perf_counter()
         self.index = index or BeltTemplateIndex.load(index_path)
         self.config = config or TemplateRecognitionConfig()
+        self.geometry_search_enabled = bool(geometry_search_enabled)
         self._geometry: tuple[float, float] | None = None
         self._geometry_misses = 0
         self.init_seconds = time.perf_counter() - started
@@ -328,6 +337,16 @@ class TemplateCardRecognizer:
 
         if self._geometry is None:
             initial_result = self._analyze_aligned(frame_bgr)
+            if not self.geometry_search_enabled:
+                return self._geometry_result(
+                    initial_result,
+                    frame_bgr,
+                    crop_top=0,
+                    ratio=1.0,
+                    top_ratio=0.0,
+                    searched=False,
+                    started=started,
+                )
             if not self._has_card_like_evidence(initial_result):
                 self._geometry = (1.0, 0.0)
                 self._geometry_misses = 0
@@ -364,7 +383,10 @@ class TemplateCardRecognizer:
             self._geometry_misses = 0
         else:
             self._geometry_misses += 1
-            if self._geometry_misses >= _GEOMETRY_RETRY_MISSES:
+            if (
+                self.geometry_search_enabled
+                and self._geometry_misses >= _GEOMETRY_RETRY_MISSES
+            ):
                 return self._search_geometry(
                     frame_bgr,
                     started=started,
@@ -378,6 +400,29 @@ class TemplateCardRecognizer:
             searched=False,
             started=started,
         )
+
+    def set_card_geometry(
+        self,
+        card_box: tuple[int, int, int, int],
+        frame_shape: tuple[int, ...],
+    ) -> None:
+        """Use a trusted card box to seed the inexpensive aligned scan."""
+
+        frame_height = int(frame_shape[0]) if frame_shape else 0
+        if frame_height < 80:
+            return
+        _x, card_top, _width, card_height = card_box
+        crop_height = min(frame_height, max(80, int(card_height)))
+        available = frame_height - crop_height
+        if available <= 0:
+            vertical_anchor = 0.0
+        else:
+            vertical_anchor = min(
+                1.0,
+                max(0.0, float(card_top) / available),
+            )
+        self._geometry = crop_height / frame_height, vertical_anchor
+        self._geometry_misses = 0
 
     def _search_geometry(
         self,
@@ -711,12 +756,9 @@ class TemplateCardRecognizer:
                 reason = "accepted_template"
                 if similarity < self.config.minimum_identity_similarity:
                     accepted, reason = False, "low_template_similarity"
-                elif margin < max(
+                elif margin < identity_minimum_margin(
+                    self.index.identity_names[int(best_name_indices[row])],
                     self.config.minimum_identity_margin,
-                    _IDENTITY_MINIMUM_MARGINS.get(
-                        self.index.identity_names[int(best_name_indices[row])],
-                        0.0,
-                    ),
                 ):
                     accepted, reason = False, "ambiguous_template_identity"
                 proposals.append(
@@ -903,7 +945,7 @@ class TemplateCardRecognizer:
         rarity = ""
         rarity_confidence = 0.0
         if proposal.accepted:
-            family_result = self._classify_family_details(
+            family_result = self.classify_family_details(
                 frame_bgr,
                 name_box,
                 card_box,
@@ -958,10 +1000,20 @@ class TemplateCardRecognizer:
         name_box: tuple[int, int, int, int],
         card_box: tuple[int, int, int, int],
     ) -> tuple[str, float]:
-        result = self._classify_family_details(frame_bgr, name_box, card_box)
+        result = self.classify_family_details(frame_bgr, name_box, card_box)
         return result.family, result.confidence
 
     def _classify_family_details(
+        self,
+        frame_bgr: np.ndarray,
+        name_box: tuple[int, int, int, int],
+        card_box: tuple[int, int, int, int],
+    ) -> _FamilyResult:
+        """Compatibility wrapper for older internal callers and tests."""
+
+        return self.classify_family_details(frame_bgr, name_box, card_box)
+
+    def classify_family_details(
         self,
         frame_bgr: np.ndarray,
         name_box: tuple[int, int, int, int],
@@ -1004,9 +1056,13 @@ class TemplateCardRecognizer:
             and margin >= _FAMILY_MINIMUM_MARGINS[template_family]
         )
 
-        if distinctive_border and border_family != template_family:
+        if distinctive_border and (
+            border_family != template_family or not template_accepted
+        ):
             # Conflicting independent signals are unsafe for a tier-based alert.
-            # Abstain and wait for another frame instead of guessing either way.
+            # A same-label template below its own margin is not corroboration
+            # either: colorful droid artwork can contaminate the border band.
+            # Abstain and wait for another frame instead of guessing.
             family, confidence = "", 0.0
         elif distinctive_border:
             family = border_family

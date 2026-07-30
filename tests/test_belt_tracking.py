@@ -538,10 +538,28 @@ class TrackingTests(unittest.TestCase):
         for index, scan in enumerate(scans):
             events.extend(tracker.update(scan, index * (10.0 / 3.0), 2_000).events)
 
-        self.assertEqual(["A", "B", "C"], [event.track.name for event in events])
+        self.assertEqual(
+            ["A", "B", "C", "NEW-1"],
+            [event.track.name for event in events],
+        )
         self.assertTrue(all(event.track.confirmation_mode == "slow-cadence" for event in events))
 
-    def test_slow_cadence_confirmation_requires_three_strong_consecutive_reads(self):
+    def test_slow_cadence_confirmation_requires_two_strong_consecutive_frames(self):
+        strong = BeltTracker(timeout_seconds=8.0)
+        first = strong.update(
+            [observation("GONK", 100, confidence=0.94)],
+            0.0,
+            1_200,
+        )
+        self.assertEqual([], first.events)
+        second = strong.update(
+            [observation("GONK", 400, confidence=0.94)],
+            2.0,
+            1_200,
+        )
+        self.assertEqual(["entered"], [event.kind for event in second.events])
+        self.assertEqual("slow-cadence", second.events[0].track.confirmation_mode)
+
         weak = BeltTracker(timeout_seconds=8.0)
         for index in range(3):
             update = weak.update(
@@ -568,6 +586,41 @@ class TrackingTests(unittest.TestCase):
                 1_200,
             )
         self.assertEqual([], update.events)
+
+    def test_overlay_predictions_do_not_break_consecutive_slow_scan_reads(self):
+        tracker = BeltTracker(timeout_seconds=8.0)
+        tracker.update(
+            [observation("GONK", 100, confidence=0.94)],
+            0.0,
+            1_200,
+        )
+        for timestamp in (0.2, 0.4, 0.8, 1.2, 1.6):
+            tracker.predict(timestamp, 1_200)
+
+        confirmed = tracker.update(
+            [observation("GONK", 400, confidence=0.94)],
+            2.0,
+            1_200,
+        )
+
+        self.assertEqual(["entered"], [event.kind for event in confirmed.events])
+        self.assertEqual("slow-cadence", confirmed.events[0].track.confirmation_mode)
+
+    def test_confirmation_hits_one_still_cannot_alert_from_one_frame(self):
+        tracker = BeltTracker(
+            confirmation_hits=1,
+            slow_confirmation_hits=1,
+            minimum_template_displacement_ratio=0.0,
+        )
+
+        first = tracker.update(
+            [observation("R2", 100, confidence=0.99, raw_text="template:R2")],
+            0.0,
+            600,
+        )
+
+        self.assertEqual([], first.events)
+        self.assertFalse(tracker._tracks[0].confirmed)
 
     def test_normal_cadence_still_requires_four_of_five_reads(self):
         tracker = BeltTracker()
@@ -717,6 +770,214 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual(["GONK"], [track.name for track in confirmed.tracks])
         self.assertEqual(["entered"], [event.kind for event in confirmed.events])
         self.assertEqual(["exited"], [event.kind for event in tracker.predict(0.81, 400).events])
+
+    def test_one_recent_same_name_does_not_suppress_a_real_repeat(self):
+        tracker = BeltTracker(
+            confirmation_hits=2,
+            confirmation_window=3,
+            timeout_seconds=0.5,
+            reacquisition_retention_seconds=5.0,
+        )
+        tracker.update([observation("GONK", 100)], 0.0, 800)
+        entered = tracker.update([observation("GONK", 130)], 0.1, 800)
+        original_id = entered.events[0].track.id
+        tracker.predict(0.7, 800)
+
+        first_repeat = tracker.update([observation("GONK", 500)], 0.8, 800)
+        second_repeat = tracker.update([observation("GONK", 530)], 0.9, 800)
+
+        self.assertEqual([], first_repeat.events)
+        self.assertEqual(["entered"], [event.kind for event in second_repeat.events])
+        self.assertNotEqual(original_id, second_repeat.events[0].track.id)
+
+    def test_two_distinct_retired_names_trigger_camera_jump_reacquisition(self):
+        tracker = BeltTracker(
+            confirmation_hits=2,
+            confirmation_window=3,
+            timeout_seconds=0.5,
+            reacquisition_retention_seconds=5.0,
+            reacquisition_mode_seconds=2.0,
+        )
+        first_row = [
+            observation("R5", 100),
+            observation("LO", 300),
+            observation("BDX EXPLORER", 500),
+        ]
+        second_row = [
+            observation("R5", 120),
+            observation("LO", 320),
+            observation("BDX EXPLORER", 520),
+        ]
+        tracker.update(first_row, 0.0, 1_000)
+        entered = tracker.update(second_row, 0.1, 1_000)
+        original_ids = {
+            event.track.name: event.track.id for event in entered.events
+        }
+        tracker.predict(0.7, 1_000)
+
+        jump = tracker.update(
+            [observation("R5", 650), observation("LO", 820)],
+            0.8,
+            1_000,
+        )
+        trailing = tracker.update(
+            [observation("BDX EXPLORER", 700)],
+            1.0,
+            1_000,
+        )
+
+        self.assertEqual(
+            ["reacquired", "reacquired"],
+            [event.kind for event in jump.events],
+        )
+        self.assertEqual(
+            {"R5", "LO"},
+            {event.track.name for event in jump.events},
+        )
+        self.assertEqual(["reacquired"], [event.kind for event in trailing.events])
+        self.assertEqual(
+            original_ids["BDX EXPLORER"],
+            trailing.events[0].track.id,
+        )
+        self.assertFalse(
+            any(
+                event.kind == "entered"
+                for event in (*jump.events, *trailing.events)
+            )
+        )
+
+    def test_reacquisition_rejects_a_conflicting_known_family(self):
+        tracker = BeltTracker(
+            confirmation_hits=2,
+            confirmation_window=3,
+            timeout_seconds=0.5,
+            template_attribute_confirmation_hits=2,
+            reacquisition_retention_seconds=5.0,
+            reacquisition_mode_seconds=2.0,
+        )
+        first_row = [
+            observation("R5", 100, family="Default"),
+            observation("LO", 300, family="Default"),
+            observation("PIT", 500, family="Gold"),
+        ]
+        second_row = [
+            observation("R5", 120, family="Default"),
+            observation("LO", 320, family="Default"),
+            observation("PIT", 520, family="Gold"),
+        ]
+        tracker.update(first_row, 0.0, 1_000)
+        entered = tracker.update(second_row, 0.1, 1_000)
+        pit_id = next(
+            event.track.id
+            for event in entered.events
+            if event.track.name == "PIT"
+        )
+        tracker.predict(0.7, 1_000)
+        tracker.update(
+            [
+                observation("R5", 650, family="Default"),
+                observation("LO", 820, family="Default"),
+            ],
+            0.8,
+            1_000,
+        )
+
+        conflict = tracker.update(
+            [observation("PIT", 700, family="Diamond")],
+            1.0,
+            1_000,
+        )
+
+        self.assertEqual([], conflict.events)
+        self.assertNotEqual(pit_id, conflict.observation_track_ids[0])
+
+    def test_retired_exact_name_beats_a_weak_unconfirmed_camera_jump_path(self):
+        tracker = BeltTracker(
+            confirmation_hits=2,
+            confirmation_window=3,
+            timeout_seconds=0.5,
+            reacquisition_retention_seconds=5.0,
+            reacquisition_mode_seconds=2.0,
+        )
+        first_row = [
+            observation("R5", 100),
+            observation("LO", 300),
+            observation("PIT", 500),
+        ]
+        second_row = [
+            observation("R5", 120),
+            observation("LO", 320),
+            observation("PIT", 520),
+        ]
+        tracker.update(first_row, 0.0, 1_000)
+        entered = tracker.update(second_row, 0.1, 1_000)
+        pit_id = next(
+            event.track.id
+            for event in entered.events
+            if event.track.name == "PIT"
+        )
+        tracker.predict(0.7, 1_000)
+        tracker.update(
+            [observation("R5", 650), observation("LO", 820)],
+            0.8,
+            1_000,
+        )
+        tracker.update([observation("A-LT", 100)], 0.9, 1_000)
+
+        pit = tracker.update([observation("PIT", 110)], 1.0, 1_000)
+
+        self.assertEqual(["reacquired"], [event.kind for event in pit.events])
+        self.assertEqual(pit_id, pit.events[0].track.id)
+        self.assertEqual(pit_id, pit.observation_track_ids[0])
+
+    def test_camera_jump_shadow_cannot_start_a_second_same_identity_track(self):
+        tracker = BeltTracker(
+            confirmation_hits=2,
+            confirmation_window=3,
+            timeout_seconds=0.5,
+            reacquisition_retention_seconds=5.0,
+            reacquisition_mode_seconds=2.0,
+        )
+        first_row = [
+            observation("R5", 100),
+            observation("LO", 300),
+            observation("ID10", 500),
+        ]
+        second_row = [
+            observation("R5", 120),
+            observation("LO", 320),
+            observation("ID10", 520),
+        ]
+        tracker.update(first_row, 0.0, 1_000)
+        entered = tracker.update(second_row, 0.1, 1_000)
+        id10_id = next(
+            event.track.id
+            for event in entered.events
+            if event.track.name == "ID10"
+        )
+        tracker.predict(0.7, 1_000)
+        tracker.update(
+            [observation("R5", 650), observation("LO", 820)],
+            0.8,
+            1_000,
+        )
+        reacquired = tracker.update([observation("ID10", 500)], 0.9, 1_000)
+        split = tracker.update(
+            [observation("ID10", 300), observation("ID10", 700)],
+            1.0,
+            1_000,
+        )
+
+        self.assertEqual(["reacquired"], [event.kind for event in reacquired.events])
+        self.assertEqual([], split.events)
+        self.assertEqual(
+            {id10_id},
+            set(split.observation_track_ids.values()),
+        )
+        self.assertEqual(
+            1,
+            sum(track.name == "ID10" for track in tracker._tracks),
+        )
 
 
 if __name__ == "__main__":

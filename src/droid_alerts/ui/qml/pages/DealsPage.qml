@@ -98,7 +98,9 @@ ScrollView {
 
                 GridLayout {
                     Layout.fillWidth: true
+                    flow: GridLayout.TopToBottom
                     columns: width >= 420 ? 2 : 1
+                    rows: width >= 420 ? 5 : 10
                     columnSpacing: 8
                     rowSpacing: 3
 

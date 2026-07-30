@@ -192,6 +192,58 @@ ApplicationWindow {
                     spacing: 8
 
                     Rectangle {
+                        visible: dealsController.state.available
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 56
+                        radius: 9
+                        color: Theme.bg2
+                        border.color: Theme.line
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 8
+                            anchors.rightMargin: 9
+                            spacing: 8
+
+                            Rectangle {
+                                Layout.preferredWidth: 40
+                                Layout.preferredHeight: 40
+                                radius: 7
+                                color: Theme.bg3
+                                border.color: Theme.line
+                                clip: true
+
+                                Image {
+                                    anchors.fill: parent
+                                    anchors.margins: 2
+                                    source: dealsController.state.portrait
+                                    fillMode: Image.PreserveAspectFit
+                                }
+
+                                Text {
+                                    visible: dealsController.state.portrait.length === 0
+                                    anchors.centerIn: parent
+                                    text: "◉"
+                                    color: Theme.accent
+                                    font.pixelSize: 20
+                                }
+                            }
+
+                            Text {
+                                text: dealsController.state.sidebarLabel
+                                color: Theme.ink
+                                font.family: Theme.bodyFont
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                                wrapMode: Text.WordWrap
+                                maximumLineCount: 2
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+
+                    Rectangle {
                         Layout.fillWidth: true
                         Layout.leftMargin: 2
                         Layout.rightMargin: 2

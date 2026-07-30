@@ -18,6 +18,7 @@ from droid_alerts.config import AppConfig
 from droid_alerts.limited_deals import (
     LimitedDeal,
     LimitedDealService,
+    LIMITED_DEAL_CUSTOM_ALERT_DROIDS,
     LIMITED_DEAL_PRIORITY_COMBOS,
     fetch_current_limited_deal,
     fetch_limited_deal_portrait,
@@ -84,6 +85,7 @@ class LimitedDealRuleTests(unittest.TestCase):
                 {
                     17: "rainbow",
                     59: "BESKAR",
+                    1: "Galactic",
                     7: "Default",
                     8: "Gold",
                     "999": "Gold",
@@ -94,8 +96,8 @@ class LimitedDealRuleTests(unittest.TestCase):
         self.assertEqual(
             [
                 ["Rainbow", "Epic"],
-                ["Galactic", "Legendary"],
                 ["Beskar", "Mythic"],
+                ["Galactic", "Legendary"],
             ],
             normalize_limited_deal_priority_alerts(
                 [
@@ -105,6 +107,29 @@ class LimitedDealRuleTests(unittest.TestCase):
                     ["Gold", "Rare"],
                 ]
             ),
+        )
+
+    def test_priority_alerts_follow_the_two_column_display_order(self):
+        self.assertEqual(
+            (
+                ("Diamond", "Mythic"),
+                ("Rainbow", "Epic"),
+                ("Rainbow", "Legendary"),
+                ("Rainbow", "Mythic"),
+                ("Beskar", "Epic"),
+                ("Beskar", "Legendary"),
+                ("Beskar", "Mythic"),
+                ("Galactic", "Epic"),
+                ("Galactic", "Legendary"),
+                ("Galactic", "Mythic"),
+            ),
+            LIMITED_DEAL_PRIORITY_COMBOS,
+        )
+
+    def test_custom_alert_droids_exclude_rare_droids(self):
+        self.assertNotIn(
+            "Rare",
+            {droid.rarity for droid in LIMITED_DEAL_CUSTOM_ALERT_DROIDS},
         )
 
     def test_priority_and_per_droid_minimum_rules_are_combined(self):
@@ -142,7 +167,7 @@ class LimitedDealRuleTests(unittest.TestCase):
             }
         )
         restored = AppConfig.from_dict(config.to_dict())
-        self.assertEqual([["Rainbow", "Epic"]], restored.limited_deal_priority_alerts)
+        self.assertEqual([["Diamond", "Mythic"]], restored.limited_deal_priority_alerts)
         self.assertEqual({"17": "Rainbow"}, restored.limited_deal_target_tiers)
 
 class LimitedDealSchedulingTests(unittest.TestCase):

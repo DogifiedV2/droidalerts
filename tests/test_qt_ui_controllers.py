@@ -20,6 +20,7 @@ from droid_alerts import __version__
 from droid_alerts.belt.region import RelativeRegion
 from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox
 from droid_alerts.config import AppConfig
+from droid_alerts.limited_deals import LimitedDeal
 from droid_alerts.popup import _centered_text_bounds, popup_icon_path
 from droid_alerts.classifier import Detection
 from droid_alerts.timers import DroidTimersOverlay
@@ -511,10 +512,47 @@ class QtUiControllerTests(unittest.TestCase):
         dashboard = DashboardStub()
         with patch.object(DealsController, "start"):
             controller = DealsController(runtime, dashboard)
+        self.assertEqual("", controller.state_snapshot()["sidebarLabel"])
+        self.assertEqual(
+            [
+                "Diamond Mythic",
+                "Rainbow Epic",
+                "Rainbow Legendary",
+                "Rainbow Mythic",
+                "Beskar Epic",
+                "Beskar Legendary",
+                "Beskar Mythic",
+                "Galactic Epic",
+                "Galactic Legendary",
+                "Galactic Mythic",
+            ],
+            [row["label"] for row in controller.state_snapshot()["priorityRows"]],
+        )
         controller.setPriority("Rainbow|Epic", True)
         self.assertIn(
             ["Rainbow", "Epic"],
             runtime.config.limited_deal_priority_alerts,
+        )
+        controller.shutdown()
+
+    def test_limited_deal_sidebar_label_uses_rarity_and_droid_name(self):
+        runtime = RuntimeStub(AppConfig())
+        with patch.object(DealsController, "start"):
+            controller = DealsController(runtime, DashboardStub())
+        controller.current_deal = LimitedDeal(
+            starts_at="2026-07-30T12:00:00.000Z",
+            ends_at="2026-07-30T13:00:00.000Z",
+            mutation="Diamond",
+            droid="Mecha Droid",
+            droid_id=47,
+            rarity="Legendary",
+        )
+
+        controller.refresh()
+
+        self.assertEqual(
+            "Diamond Mecha Droid",
+            controller.state_snapshot()["sidebarLabel"],
         )
         controller.shutdown()
 
@@ -530,10 +568,12 @@ class QtUiControllerTests(unittest.TestCase):
         controller.chooseTargets()
 
         choices = runtime.dialogs.state_snapshot()["choices"]
+        options = runtime.dialogs.state_snapshot()["options"]
         self.assertEqual(
             ["", "Diamond", "Rainbow", "Beskar", "Galactic"],
             [choice["id"] for choice in choices],
         )
+        self.assertNotIn("Rare", {option["detail"] for option in options})
         self.assertEqual({}, runtime.config.limited_deal_target_tiers)
         controller.shutdown()
 

@@ -217,7 +217,7 @@ class AppConfig:
     belt_region_guide_confirmed: bool = False
     # Droid name -> minimum visual rarity tier. Empty means no Belt Tracker alerts.
     belt_target_tiers: dict[str, str] = field(default_factory=dict)
-    # Rotating droid ID -> minimum Limited Deal mutation. Priority combos are exact.
+    # Rotating droid ID -> minimum Limited Deal rarity. Priority combos are exact.
     limited_deal_target_tiers: dict[str, str] = field(default_factory=dict)
     limited_deal_priority_alerts: list[list[str]] = field(default_factory=list)
     retention_days: int = 30

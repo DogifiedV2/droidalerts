@@ -71,6 +71,8 @@ class Track:
     entered_emitted: bool = False
     prediction_horizon: float = 0.75
     confirmation_mode: str = ""
+    last_observed_scan: int = 0
+    consecutive_scan_hits: int = 1
 
     def predicted_box(self, now: float) -> Box:
         # Extrapolate through the expected next OCR result, but never let a
@@ -111,9 +113,10 @@ class BeltTracker:
     identity alive.
 
     Template identities require four consecutive labels by default. On hardware
-    producing less than 0.75 scan FPS, three consecutive, high-confidence exact
-    reads are accepted instead so short-lived cards still have a physically
-    possible path to confirmation. Family evidence is attached only after
+    producing roughly one scan per second or less, two consecutive,
+    high-confidence exact reads are accepted instead so short-lived cards still
+    have a physically possible path to confirmation. No configuration can
+    confirm a track from one frame. Family evidence is attached only after
     repeated stable reads, but it does not block a confirmed identity from
     entering. An unknown family is safer than either losing the whole card or
     inventing Default. Production template tracking can additionally require
@@ -129,14 +132,19 @@ class BeltTracker:
         timeout_seconds: float = 3.5,
         association_distance_ratio: float = 0.20,
         outside_margin: float = 60.0,
-        slow_confirmation_hits: int = 3,
-        slow_cadence_seconds: float = 4.0 / 3.0,
-        slow_minimum_confidence: float = 0.78,
+        slow_confirmation_hits: int = 2,
+        slow_cadence_seconds: float = 0.70,
+        slow_minimum_confidence: float = 0.90,
         template_conflict_grace_seconds: float = 0.50,
         template_attribute_confirmation_hits: int = 3,
         minimum_template_displacement_ratio: float = 0.0,
+        reacquisition_retention_seconds: float = 20.0,
+        reacquisition_mode_seconds: float = 15.0,
+        reacquisition_required_distinct_names: int = 2,
     ) -> None:
-        self.confirmation_hits = max(1, int(confirmation_hits))
+        # A one-frame alert is never safe, including when tests or callers pass
+        # an accidentally permissive value.
+        self.confirmation_hits = max(2, int(confirmation_hits))
         self.slow_confirmation_hits = max(2, int(slow_confirmation_hits))
         self.confirmation_window = max(
             self.confirmation_hits,
@@ -168,12 +176,36 @@ class BeltTracker:
             1.0,
             max(0.0, float(minimum_template_displacement_ratio)),
         )
+        self.reacquisition_retention_seconds = max(
+            0.0,
+            float(reacquisition_retention_seconds),
+        )
+        self.reacquisition_mode_seconds = max(
+            0.0,
+            float(reacquisition_mode_seconds),
+        )
+        # One repeated identity can be a genuinely new blueprint. Camera-jump
+        # suppression is therefore never allowed to activate from one name.
+        self.reacquisition_required_distinct_names = max(
+            2,
+            int(reacquisition_required_distinct_names),
+        )
         self._tracks: list[Track] = []
+        self._retired_tracks: list[Track] = []
+        self._reacquisition_mode_until = float("-inf")
+        self._camera_jump_track_ids: set[int] = set()
+        self._camera_jump_track_id_ceiling = 0
         self._next_id = 1
+        self._scan_number = 0
 
     def reset(self) -> None:
         self._tracks.clear()
+        self._retired_tracks.clear()
+        self._reacquisition_mode_until = float("-inf")
+        self._camera_jump_track_ids.clear()
+        self._camera_jump_track_id_ceiling = 0
         self._next_id = 1
+        self._scan_number = 0
 
     def diagnostic_state(self) -> list[dict[str, object]]:
         return [
@@ -198,9 +230,22 @@ class BeltTracker:
         observations: Sequence[DroidObservation],
         now: float,
         frame_width: int,
+        *,
+        _prediction_only: bool = False,
     ) -> TrackerUpdate:
         frame_width = max(1, int(frame_width))
+        if not _prediction_only:
+            self._scan_number += 1
         events: list[TrackEvent] = []
+
+        if now > self._reacquisition_mode_until:
+            self._camera_jump_track_ids.clear()
+            self._camera_jump_track_id_ceiling = 0
+        self._retired_tracks = [
+            track
+            for track in self._retired_tracks
+            if now - track.last_seen_at <= self.reacquisition_retention_seconds
+        ]
 
         # Do not resurrect a stale track simply because a later observation is
         # close to its old position.
@@ -209,6 +254,8 @@ class BeltTracker:
             if now - track.last_seen_at > self.timeout_seconds:
                 if track.entered_emitted:
                     events.append(TrackEvent("exited", self._snapshot(track)))
+                    if self.reacquisition_retention_seconds > 0.0:
+                        self._retired_tracks.append(track)
             else:
                 active.append(track)
         self._tracks = active
@@ -216,6 +263,7 @@ class BeltTracker:
         prepared = self._prepare_observations(observations)
         prepared = self._deduplicate_observations(prepared)
         matches = self._associate(prepared, now, frame_width)
+        matches = self._prefer_retired_exact_matches(matches, prepared, now)
         matched_observations = {observation_index for observation_index in matches.values()}
         observation_track_ids: dict[int, int] = {}
 
@@ -234,6 +282,42 @@ class BeltTracker:
                 # consumers re-evaluate a priority threshold when the family
                 # becomes trustworthy, without counting another sighting.
                 events.append(TrackEvent("updated", self._snapshot(track)))
+
+        reacquired = self._reacquire_retired_tracks(
+            prepared,
+            matched_observations,
+            now,
+        )
+        for observation_index, track in reacquired.items():
+            observation = prepared[observation_index]
+            matched_observations.add(observation_index)
+            observation_track_ids[observation.source_index] = track.id
+            events.append(TrackEvent("reacquired", self._snapshot(track)))
+
+        if now <= self._reacquisition_mode_until:
+            for track_index, observation_index in matches.items():
+                track = self._tracks[track_index]
+                observation = prepared[observation_index]
+                if (
+                    track.confirmed
+                    and track.entered_emitted
+                    and track.id <= self._camera_jump_track_id_ceiling
+                    and track.name == observation.name
+                ):
+                    self._camera_jump_track_ids.add(track.id)
+            shadow_matches = self._suppress_camera_jump_shadows(
+                prepared,
+                matched_observations,
+                {
+                    self._tracks[track_index].id
+                    for track_index in matches
+                },
+                now,
+            )
+            for observation_index, track in shadow_matches.items():
+                observation = prepared[observation_index]
+                matched_observations.add(observation_index)
+                observation_track_ids[observation.source_index] = track.id
 
         for observation_index, observation in enumerate(prepared):
             if observation_index in matched_observations:
@@ -257,7 +341,7 @@ class BeltTracker:
         return TrackerUpdate(visible, events, observation_track_ids)
 
     def predict(self, now: float, frame_width: int) -> TrackerUpdate:
-        return self.update([], now, frame_width)
+        return self.update([], now, frame_width, _prediction_only=True)
 
     def _prepare_observations(
         self, observations: Sequence[DroidObservation]
@@ -603,6 +687,207 @@ class BeltTracker:
                 return True
         return False
 
+    def _prefer_retired_exact_matches(
+        self,
+        matches: dict[int, int],
+        observations: list[_PreparedObservation],
+        now: float,
+    ) -> dict[int, int]:
+        """Do not let a weak unconfirmed path consume an old exact identity."""
+
+        if now > self._reacquisition_mode_until or not self._retired_tracks:
+            return matches
+        preferred = dict(matches)
+        for track_index, observation_index in matches.items():
+            track = self._tracks[track_index]
+            if track.confirmed:
+                continue
+            observation = observations[observation_index]
+            leading_name, _leading_votes = self._leading_identity(track)
+            if leading_name == observation.name:
+                continue
+            if any(
+                now - retired.last_seen_at <= self.reacquisition_retention_seconds
+                and self._retired_track_matches(retired, observation)
+                for retired in self._retired_tracks
+            ):
+                preferred.pop(track_index)
+        return preferred
+
+    def _reacquire_retired_tracks(
+        self,
+        observations: list[_PreparedObservation],
+        matched_observations: set[int],
+        now: float,
+    ) -> dict[int, Track]:
+        """Reconnect a row after a camera jump without emitting new entries.
+
+        A single exact repeat remains eligible to become a new blueprint. The
+        suppression mode starts only when one frame independently rediscovers
+        at least two distinct recently retired identities. Once that strong
+        camera-jump signal exists, later members of the same old row may
+        reconnect individually for a short bounded window.
+        """
+
+        if not self._retired_tracks:
+            return {}
+        available = {
+            track.id: track
+            for track in self._retired_tracks
+            if (
+                track.confirmed
+                and track.entered_emitted
+                and now - track.last_seen_at <= self.reacquisition_retention_seconds
+            )
+        }
+        if not available:
+            return {}
+
+        candidates: dict[int, Track] = {}
+        ordered_observations = sorted(
+            (
+                (index, observation)
+                for index, observation in enumerate(observations)
+                if index not in matched_observations
+            ),
+            key=lambda item: (-item[1].confidence, item[1].source_index),
+        )
+        for observation_index, observation in ordered_observations:
+            compatible = [
+                track
+                for track in available.values()
+                if self._retired_track_matches(track, observation)
+            ]
+            if not compatible:
+                continue
+            observed_center_x, _observed_center_y = _center(observation.box)
+            chosen = min(
+                compatible,
+                key=lambda track: (
+                    0
+                    if track.family
+                    and observation.family
+                    and track.family == observation.family
+                    else 1,
+                    abs(track.last_center_x - observed_center_x),
+                    -track.last_seen_at,
+                    track.id,
+                ),
+            )
+            candidates[observation_index] = chosen
+            available.pop(chosen.id)
+
+        distinct_names = {
+            observations[index].name for index in candidates
+        }
+        mode_active = now <= self._reacquisition_mode_until
+        if (
+            not mode_active
+            and len(distinct_names) < self.reacquisition_required_distinct_names
+        ):
+            return {}
+        if len(distinct_names) >= self.reacquisition_required_distinct_names:
+            if not mode_active:
+                self._camera_jump_track_id_ceiling = self._next_id - 1
+            self._reacquisition_mode_until = max(
+                self._reacquisition_mode_until,
+                now + self.reacquisition_mode_seconds,
+            )
+
+        restored_ids = {track.id for track in candidates.values()}
+        self._retired_tracks = [
+            track for track in self._retired_tracks if track.id not in restored_ids
+        ]
+        for observation_index, track in candidates.items():
+            self._restore_retired_track(track, observations[observation_index], now)
+            self._tracks.append(track)
+            self._camera_jump_track_ids.add(track.id)
+        return candidates
+
+    def _suppress_camera_jump_shadows(
+        self,
+        observations: list[_PreparedObservation],
+        matched_observations: set[int],
+        matched_track_ids: set[int],
+        now: float,
+    ) -> dict[int, Track]:
+        """Map split detections back to old-row tracks during jump recovery."""
+
+        if not self._camera_jump_track_ids:
+            return {}
+        tracks_by_name: dict[str, list[Track]] = {}
+        for track in self._tracks:
+            if track.id in self._camera_jump_track_ids:
+                tracks_by_name.setdefault(track.name, []).append(track)
+        suppressed: dict[int, Track] = {}
+        restored_ids: set[int] = set()
+        for observation_index, observation in enumerate(observations):
+            if observation_index in matched_observations:
+                continue
+            compatible = [
+                track
+                for track in tracks_by_name.get(observation.name, [])
+                if self._retired_track_matches(track, observation)
+            ]
+            if not compatible:
+                continue
+            observed_center_x, _observed_center_y = _center(observation.box)
+            track = min(
+                compatible,
+                key=lambda item: (
+                    abs(item.last_center_x - observed_center_x),
+                    item.id,
+                ),
+            )
+            suppressed[observation_index] = track
+            if track.id not in matched_track_ids and track.id not in restored_ids:
+                self._restore_retired_track(track, observation, now)
+                restored_ids.add(track.id)
+        return suppressed
+
+    @staticmethod
+    def _retired_track_matches(
+        track: Track,
+        observation: _PreparedObservation,
+    ) -> bool:
+        if track.name != observation.name:
+            return False
+        return not (
+            track.family
+            and observation.family
+            and track.family != observation.family
+        )
+
+    def _restore_retired_track(
+        self,
+        track: Track,
+        observation: _PreparedObservation,
+        now: float,
+    ) -> None:
+        center_x, center_y = _center(observation.box)
+        track.box = observation.box
+        track.last_seen_at = now
+        track.last_updated_at = now
+        track.last_center_x = center_x
+        track.last_center_y = center_y
+        track.velocity_x = 0.0
+        track.velocity_y = 0.0
+        track.prediction_horizon = 0.75
+        track.last_observed_scan = self._scan_number
+        track.consecutive_scan_hits = 1
+        track.hits += 1
+        track.confidence = track.confidence * 0.70 + observation.confidence * 0.30
+        track.raw_text = observation.raw_text
+        if observation.family and not track.family:
+            track.family_votes.append(
+                (observation.name, observation.family, observation.family_confidence)
+            )
+        if observation.rarity and not track.rarity:
+            track.rarity_votes.append(
+                (observation.name, observation.rarity, observation.rarity_confidence)
+            )
+        self._assign_card_attributes(track)
+
     def _new_track(self, observation: _PreparedObservation, now: float) -> Track:
         center_x, center_y = _center(observation.box)
         track = Track(
@@ -633,6 +918,8 @@ class BeltTracker:
             initial_center_x=center_x,
             last_center_x=center_x,
             last_center_y=center_y,
+            last_observed_scan=self._scan_number,
+            consecutive_scan_hits=1,
         )
         self._next_id += 1
         return track
@@ -645,6 +932,11 @@ class BeltTracker:
     ) -> None:
         if track.confirmed and observation.name != track.name:
             return
+        if track.last_observed_scan == self._scan_number - 1:
+            track.consecutive_scan_hits += 1
+        else:
+            track.consecutive_scan_hits = 1
+        track.last_observed_scan = self._scan_number
         new_center_x, new_center_y = _center(observation.box)
         dx = new_center_x - track.last_center_x
         dy = new_center_y - track.last_center_y
@@ -785,6 +1077,7 @@ class BeltTracker:
                 value >= self.slow_cadence_seconds
                 for value in intervals[1:]
             )
+            and track.consecutive_scan_hits >= self.slow_confirmation_hits
         ):
             return names[-1], "slow-cadence"
         return None

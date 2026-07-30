@@ -1,0 +1,848 @@
+{
+  "version": 1,
+  "reviewed_at": "2026-07-30",
+  "review_method": "Manual visual count at approximately six-second intervals, with detail-frame review around ambiguous transitions.",
+  "counting_rule": "Each readable blueprint card is counted once. Four cards already visible at the beginning are included.",
+  "videos": {
+    "screen-droid-tycoon.mp4": {
+      "label": "v1",
+      "source_resolution": [
+        1914,
+        1078
+      ],
+      "duration_seconds": 222.215,
+      "manual_total": 78,
+      "initial_cards": 4,
+      "new_arrivals": 74,
+      "nominal_arrival_interval_seconds": 3.0,
+      "events": [
+        {
+          "id": 1,
+          "time": 0.0,
+          "name": "IG",
+          "phase": "initial",
+          "family": ""
+        },
+        {
+          "id": 2,
+          "time": 0.0,
+          "name": "GONK",
+          "phase": "initial",
+          "family": ""
+        },
+        {
+          "id": 3,
+          "time": 0.0,
+          "name": "A-LT",
+          "phase": "initial",
+          "family": ""
+        },
+        {
+          "id": 4,
+          "time": 0.0,
+          "name": "IG",
+          "phase": "initial",
+          "family": ""
+        },
+        {
+          "id": 5,
+          "time": 3.0,
+          "name": "R8",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 6,
+          "time": 6.0,
+          "name": "MONO-WLKR",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 7,
+          "time": 9.0,
+          "name": "ID10",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 8,
+          "time": 12.0,
+          "name": "R3",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 9,
+          "time": 15.0,
+          "name": "ARG",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 10,
+          "time": 18.0,
+          "name": "IMPERIAL PROBE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 11,
+          "time": 21.0,
+          "name": "R9",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 12,
+          "time": 24.0,
+          "name": "BAL-CORE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 13,
+          "time": 27.0,
+          "name": "KX",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 14,
+          "time": 30.0,
+          "name": "R9",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 15,
+          "time": 33.0,
+          "name": "BDX EXPLORER",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 16,
+          "time": 36.0,
+          "name": "IMPERIAL PROBE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 17,
+          "time": 39.0,
+          "name": "R8",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 18,
+          "time": 42.0,
+          "name": "SEN-TRI",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 19,
+          "time": 45.0,
+          "name": "B2 HEAVY",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 20,
+          "time": 48.0,
+          "name": "CB",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 21,
+          "time": 51.0,
+          "name": "MOUSE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 22,
+          "time": 54.0,
+          "name": "ID10",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 23,
+          "time": 57.0,
+          "name": "A-LT",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 24,
+          "time": 60.0,
+          "name": "GONK",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 25,
+          "time": 64.0,
+          "name": "VECT-ARM",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 26,
+          "time": 67.0,
+          "name": "R3",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 27,
+          "time": 69.0,
+          "name": "PIT",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 28,
+          "time": 75.0,
+          "name": "B1 SECURITY",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 29,
+          "time": 78.0,
+          "name": "CB",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 30,
+          "time": 81.0,
+          "name": "PIT",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 31,
+          "time": 84.0,
+          "name": "IMPERIAL PROBE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 32,
+          "time": 87.0,
+          "name": "R9",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 33,
+          "time": 90.0,
+          "name": "GONK",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 34,
+          "time": 93.0,
+          "name": "B1 BATTLE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 35,
+          "time": 96.0,
+          "name": "R3",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 36,
+          "time": 99.0,
+          "name": "PIT",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 37,
+          "time": 102.0,
+          "name": "HOV-R",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 38,
+          "time": 105.0,
+          "name": "CB",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 39,
+          "time": 108.0,
+          "name": "BU-4D",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 40,
+          "time": 111.0,
+          "name": "DRK-1 PROBE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 41,
+          "time": 114.0,
+          "name": "A-LT",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 42,
+          "time": 117.0,
+          "name": "MOUSE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 43,
+          "time": 120.0,
+          "name": "IMPERIAL PROBE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 44,
+          "time": 123.0,
+          "name": "CB",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 45,
+          "time": 126.0,
+          "name": "MOUSE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 46,
+          "time": 128.0,
+          "name": "ID10",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 47,
+          "time": 129.0,
+          "name": "R8",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 48,
+          "time": 132.0,
+          "name": "ROLL-R",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 49,
+          "time": 135.0,
+          "name": "CYCLO-GRAV",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 50,
+          "time": 138.0,
+          "name": "R3",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 51,
+          "time": 141.0,
+          "name": "PIT",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 52,
+          "time": 144.0,
+          "name": "DRK-1 PROBE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 53,
+          "time": 147.0,
+          "name": "R5",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 54,
+          "time": 150.0,
+          "name": "PIT",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 55,
+          "time": 153.0,
+          "name": "DRK-1 PROBE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 56,
+          "time": 156.0,
+          "name": "R3",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 57,
+          "time": 159.0,
+          "name": "MOUSE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 58,
+          "time": 162.0,
+          "name": "IMPERIAL PROBE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 59,
+          "time": 165.0,
+          "name": "CYCLENS",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 60,
+          "time": 168.0,
+          "name": "ROLL-R",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 61,
+          "time": 171.0,
+          "name": "NAV-EX",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 62,
+          "time": 174.0,
+          "name": "BB9",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 63,
+          "time": 177.0,
+          "name": "MECHA-DROID",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 64,
+          "time": 180.0,
+          "name": "B2 SUPER",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 65,
+          "time": 183.0,
+          "name": "R3",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 66,
+          "time": 186.0,
+          "name": "MONO-WLKR",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 67,
+          "time": 189.0,
+          "name": "HOV-R",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 68,
+          "time": 192.0,
+          "name": "CB",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 69,
+          "time": 195.0,
+          "name": "ARG",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 70,
+          "time": 198.0,
+          "name": "IMPERIAL PROBE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 71,
+          "time": 201.0,
+          "name": "UTIL-TEC",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 72,
+          "time": 204.0,
+          "name": "PIT",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 73,
+          "time": 207.0,
+          "name": "NAV-EX",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 74,
+          "time": 210.0,
+          "name": "CB",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 75,
+          "time": 213.0,
+          "name": "PIT",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 76,
+          "time": 217.0,
+          "name": "IMPERIAL PROBE",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 77,
+          "time": 219.0,
+          "name": "R8",
+          "phase": "arrival",
+          "family": ""
+        },
+        {
+          "id": 78,
+          "time": 222.1,
+          "name": "MOUSE",
+          "phase": "arrival",
+          "family": ""
+        }
+      ]
+    },
+    "2026-07-29 13-05-06.mkv": {
+      "label": "v2",
+      "source_resolution": [
+        1920,
+        1080
+      ],
+      "duration_seconds": 112.55,
+      "manual_total": 38,
+      "initial_cards": 4,
+      "new_arrivals": 34,
+      "nominal_arrival_interval_seconds": 3.0,
+      "events": [
+        {
+          "id": 1,
+          "time": 0.0,
+          "name": "R8",
+          "phase": "initial",
+          "family": "Default"
+        },
+        {
+          "id": 2,
+          "time": 0.0,
+          "name": "IMPERIAL PROBE",
+          "phase": "initial",
+          "family": "Gold"
+        },
+        {
+          "id": 3,
+          "time": 0.0,
+          "name": "SEN-TRI",
+          "phase": "initial",
+          "family": "Default"
+        },
+        {
+          "id": 4,
+          "time": 0.0,
+          "name": "R8",
+          "phase": "initial",
+          "family": "Gold"
+        },
+        {
+          "id": 5,
+          "time": 6.0,
+          "name": "PIT",
+          "phase": "arrival",
+          "family": "Gold"
+        },
+        {
+          "id": 6,
+          "time": 9.0,
+          "name": "VECT-ARM",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 7,
+          "time": 12.0,
+          "name": "R9",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 8,
+          "time": 15.0,
+          "name": "LO",
+          "phase": "arrival",
+          "family": "Diamond"
+        },
+        {
+          "id": 9,
+          "time": 18.0,
+          "name": "HOV-R",
+          "phase": "arrival",
+          "family": "Gold"
+        },
+        {
+          "id": 10,
+          "time": 19.0,
+          "name": "R7",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 11,
+          "time": 21.0,
+          "name": "SNOW MOUSE",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 12,
+          "time": 24.0,
+          "name": "VECT-ARM",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 13,
+          "time": 30.0,
+          "name": "A-LT",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 14,
+          "time": 33.0,
+          "name": "BAL-CORE",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 15,
+          "time": 34.0,
+          "name": "HAUL-R",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 16,
+          "time": 36.0,
+          "name": "R5",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 17,
+          "time": 39.0,
+          "name": "BAL-CORE",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 18,
+          "time": 42.0,
+          "name": "ID10",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 19,
+          "time": 46.0,
+          "name": "R3",
+          "phase": "arrival",
+          "family": "Gold"
+        },
+        {
+          "id": 20,
+          "time": 48.0,
+          "name": "MOUSE",
+          "phase": "arrival",
+          "family": "Diamond"
+        },
+        {
+          "id": 21,
+          "time": 51.0,
+          "name": "B1 SECURITY",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 22,
+          "time": 54.0,
+          "name": "R3",
+          "phase": "arrival",
+          "family": "Diamond"
+        },
+        {
+          "id": 23,
+          "time": 58.0,
+          "name": "LO",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 24,
+          "time": 61.0,
+          "name": "ID10",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 25,
+          "time": 64.0,
+          "name": "R5",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 26,
+          "time": 69.0,
+          "name": "PIT",
+          "phase": "arrival",
+          "family": "Diamond"
+        },
+        {
+          "id": 27,
+          "time": 70.0,
+          "name": "B1 BATTLE",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 28,
+          "time": 73.0,
+          "name": "R8",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 29,
+          "time": 76.0,
+          "name": "BDX EXPLORER",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 30,
+          "time": 89.0,
+          "name": "B1 SECURITY",
+          "phase": "arrival",
+          "family": "Gold"
+        },
+        {
+          "id": 31,
+          "time": 92.0,
+          "name": "2BB",
+          "phase": "arrival",
+          "family": "Diamond"
+        },
+        {
+          "id": 32,
+          "time": 95.0,
+          "name": "SENATE HOVERCAM",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 33,
+          "time": 98.0,
+          "name": "IMPERIAL PROBE",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 34,
+          "time": 101.0,
+          "name": "R2",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 35,
+          "time": 104.0,
+          "name": "MECHA-DROID",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 36,
+          "time": 107.0,
+          "name": "ID10",
+          "phase": "arrival",
+          "family": "Gold"
+        },
+        {
+          "id": 37,
+          "time": 110.0,
+          "name": "R4",
+          "phase": "arrival",
+          "family": "Default"
+        },
+        {
+          "id": 38,
+          "time": 112.0,
+          "name": "ARG",
+          "phase": "arrival",
+          "family": "Default"
+        }
+      ]
+    }
+  }
+}

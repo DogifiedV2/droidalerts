@@ -14,7 +14,11 @@ import numpy as np
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from droid_alerts.belt.dev_logging import BeltDevLogger
+from droid_alerts.belt.dev_logging import (
+    BeltDevLogger,
+    request_belt_issue_report,
+    request_belt_miss_report,
+)
 from droid_alerts.config import AppConfig
 from droid_alerts.diagnostics import create_support_bundle
 
@@ -105,6 +109,107 @@ class BeltDevLoggerTests(unittest.TestCase):
                 logger.log("scan")
 
             self.assertFalse((root / "belt_dev").exists())
+
+    def test_manual_miss_report_flushes_bounded_unreviewed_ring_buffer(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with (
+                patch(
+                    "droid_alerts.belt.dev_logging.belt_dev_dir",
+                    return_value=root / "belt_dev",
+                ),
+                patch("droid_alerts.belt.dev_logging.data_dir", return_value=root),
+            ):
+                logger = BeltDevLogger(True)
+                frame = np.zeros((40, 60, 3), dtype=np.uint8)
+                logger.remember_frame(
+                    frame,
+                    frame_number=1,
+                    now=10.0,
+                    metadata={"accepted_count": 0},
+                )
+                logger.remember_frame(
+                    frame,
+                    frame_number=2,
+                    now=10.2,
+                    metadata={"accepted_count": 1},
+                )
+                logger.remember_frame(
+                    frame,
+                    frame_number=3,
+                    now=10.6,
+                    metadata={"accepted_count": 0},
+                )
+                request_belt_miss_report("R2 passed without an alert")
+
+                relative_report = logger.consume_miss_request()
+
+                self.assertTrue(relative_report.startswith("belt_dev/session_"))
+                report = root / relative_report
+                manifest = json.loads(
+                    (report / "manifest.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual("unreviewed", manifest["label_status"])
+                self.assertEqual("never_auto_promote", manifest["training_status"])
+                self.assertEqual("missed", manifest["issue_kind"])
+                self.assertEqual(
+                    "R2 passed without an alert",
+                    manifest["note"],
+                )
+                self.assertEqual([1, 3], [item["frame"] for item in manifest["frames"]])
+                self.assertEqual(2, len(list(report.glob("frame_*.jpg"))))
+                self.assertFalse(
+                    (root / "belt_dev" / "report_miss.request").exists()
+                )
+
+    def test_manual_issue_report_records_kind_and_only_previous_fifteen_seconds(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with (
+                patch(
+                    "droid_alerts.belt.dev_logging.belt_dev_dir",
+                    return_value=root / "belt_dev",
+                ),
+                patch("droid_alerts.belt.dev_logging.data_dir", return_value=root),
+            ):
+                logger = BeltDevLogger(True)
+                frame = np.zeros((40, 60, 3), dtype=np.uint8)
+                logger.remember_frame(
+                    frame,
+                    frame_number=1,
+                    now=1.0,
+                )
+                logger.remember_frame(
+                    frame,
+                    frame_number=2,
+                    now=15.5,
+                )
+                logger.remember_frame(
+                    frame,
+                    frame_number=3,
+                    now=16.5,
+                )
+                request_belt_issue_report(
+                    "wrong",
+                    "Detected R9, actually R3",
+                )
+
+                relative_report = logger.consume_issue_request()
+
+                manifest = json.loads(
+                    (root / relative_report / "manifest.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual("wrong", manifest["issue_kind"])
+                self.assertEqual(
+                    "Detected R9, actually R3",
+                    manifest["note"],
+                )
+                self.assertEqual(
+                    [2, 3],
+                    [item["frame"] for item in manifest["frames"]],
+                )
 
 
 class BeltDevSupportBundleTests(unittest.TestCase):

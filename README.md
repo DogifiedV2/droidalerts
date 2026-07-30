@@ -75,25 +75,34 @@ chat alerts.
 1. Choose the Fortnite display, window, or capture device once on the Dashboard.
    Both watchers use that capture source.
 2. Open Belt Tracker and click **Select Belt Region**.
-3. Use the recommended and only officially supported setup shown in the guide:
-   stand at the start of the belt and match the cyan example box with two
-   complete blueprint cards visible. Price labels may be inside the box; Belt
-   Tracker ignores them. Other camera angles, distances, and framing may not
-   detect reliably. Press Enter to save it.
+3. Use the guide to select the belt area with complete blueprint cards visible.
+   Price labels and empty padding may be inside the box. The detector searches
+   independent card positions and sizes, so normal camera zoom changes and
+   supported screen resolutions do not require one exact card height. Press
+   Enter to save it.
 4. Under **Priority Alerts**, click **Modify**, search for a droid, and assign
    its minimum alert tier. You can edit several selected rows at once. A droid
    set to Off has no Belt Tracker alerts.
 5. Click **Start Tracking**.
 
 The detector identifies cards from a compact local artwork-template index and
-does not use OCR. A dark-nameplate gate and confidence
-margin reject scenery, ambiguous lookalikes, and incomplete edge cards. The
-frame/label supplies the rarity tier (Default, Gold, Diamond, Rainbow, Beskar,
-or Galactic). Common, Rare, Epic, Legendary, or Mythic is a fixed class for each
-droid and comes directly from the bundled identity table; the colored pill is
-not scanned.
-Normally a card is reported as soon as four recent scans agree. Active regions
-scan at up to 8 FPS and empty regions back off to 4 FPS. Minimum rarity tiers follow
+does not use OCR. A fast aligned scan runs normally, while a bounded
+two-dimensional scan periodically recovers cards at different positions and
+sizes. A dark-nameplate gate, independent identity margin, card-motion check,
+and incomplete-edge rejection keep scenery and ambiguous lookalikes from
+alerting. A learned CPU model can act as an additional disagreement guard when
+a reviewed model is bundled, but it never overrides a conflicting template.
+The card frame supplies the family (Default, Gold, Diamond, Rainbow, Beskar, or
+Galactic). Common, Rare, Epic, Legendary, or Mythic is fixed for each droid and
+comes directly from the bundled identity table.
+
+Normally a card needs four consecutive matching scans. On an older CPU
+producing roughly one result per second or less, two consecutive
+high-confidence frames can confirm it. A card must also move horizontally like
+the belt. **One frame can never produce an alert**, even if a caller supplies
+an unsafe confirmation setting. Track timeouts expand with measured capture
+cadence so a 0.3 FPS machine does not lose the first read before the second.
+Active regions scan at up to 8 FPS and empty regions back off to 4 FPS. Minimum rarity tiers follow
 Default → Gold → Diamond → Rainbow → Beskar → Galactic, so Gold+ includes Gold
 and every tier above it. Galactic is selectable now; its visual templates will
 be trained from real blueprint cards after release. The fixed Common–Mythic class does not affect this filter. Configured
@@ -104,7 +113,9 @@ in History.
 Advanced Settings exposes **Belt idle scan FPS** and **Belt active scan FPS**.
 Both accept 1–20 FPS, default to 4/8 for every install, and the idle value is
 automatically kept at or below the active value. Higher active rates confirm
-cards sooner but use proportionally more CPU.
+cards sooner but use proportionally more CPU. The multi-scale recovery scan is
+rate-limited to about 25% of one CPU core and automatically runs less often on
+slower hardware.
 
 To collect examples for detector review, keep two complete blueprints visible
 in the officially supported framing and enable **Save detections for review**
@@ -121,17 +132,59 @@ If Belt Tracker is unusually slow or misses cards, enable **Developer logging**
 under **Belt Developer Tools** before starting it. Developer logging records
 detector-stage timings, candidate rejection
 reasons, tracker state, and one compressed belt-region frame per second under
-`data/belt_dev`. Entered and ambiguous results also receive event evidence, and
-each session stops adding images at 200 MB. Stop after reproducing the issue and create a Support Bundle in
-Diagnostics; the bundle includes the latest Belt dev log and up to four frames.
+`data/belt_dev`. It also groups moving accepted or rejected card candidates
+into review-only tracks, retains up to five diverse original-pixel crops, and
+attaches the production decision. Static rejected HUD hypotheses are filtered
+from the review queue but remain visible in the scan log. Track crops are
+written on a background thread and stop at a separate 100 MB cap. General
+evidence stops at 200 MB. Stop after reproducing the issue. The complete
+session can be reviewed or exported as a ZIP without adding anything to the
+trusted template index.
+The normal Support Bundle remains small and includes only the latest Belt dev
+log and up to four general frames.
 If the bundled template index is unavailable or corrupt, Belt Tracker reports
 the problem instead of silently switching detectors.
+
+While Developer logging is running, a missed, incorrect, or duplicate alert can
+preserve the previous fifteen seconds of full detector evidence:
+
+```text
+python tools/report_belt_miss.py "R2 passed without an alert"
+python tools/report_belt_issue.py wrong "Detected R9, actually R3"
+```
+
+Reports and physical tracks are marked unreviewed and are never promoted into
+training automatically. Review or export a completed live session with:
+
+```text
+python tools/review_belt_dev_session.py
+python tools/export_belt_dev_session.py
+```
+
+Both commands use the newest session when no path is supplied. Human-confirmed
+tracks are written as identity-only samples under the session's `confirmed`
+folder. Family training remains opt-in.
+
+To process recorded user videos into the same review-only pipeline:
+
+```text
+python tools/extract_belt_video_samples.py video1.mp4 video2.mkv
+python tools/review_belt_samples.py data/belt_video_review/run_YYYYMMDD_HHMMSS
+python tools/build_belt_template_index.py RUN/confirmed --base-index templates/belt_blueprints.npz --output NEW_INDEX.npz
+python tools/evaluate_belt_videos.py video1.mp4 video2.mkv --index NEW_INDEX.npz
+```
+
+Reviewed video crops train identity only by default. Family training stays
+opt-in until several diverse examples have been curated, because one correct
+crop can still be a poor global family reference.
+Keep each source video whole when evaluating accuracy. Do not randomly split
+near-identical frames from one physical card between training and validation.
 
 ## Limited Deals
 
 The **Limited Deals** page shows the offer that is live right now and can alert
 through the same Popup, Sound, Discord, ntfy, and Pushover channels used by the
-Dashboard. Familiar priority combinations, Galactic Epic/Legendary, plus every Mythic mutation are
+Dashboard. Familiar priority combinations, Galactic Epic/Legendary, plus every Mythic rarity option are
 available as quick toggles. For finer control, click **Modify** and choose a minimum deal tier for
 any rotating droid; higher tiers also match through Default → Gold → Diamond →
 Rainbow → Beskar → Galactic.
