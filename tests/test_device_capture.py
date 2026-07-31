@@ -5,6 +5,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import cv2
@@ -21,6 +22,7 @@ from droid_alerts.config import AppConfig
 from droid_alerts.device_capture import (
     CaptureDeviceDescriptor,
     DeviceCaptureSession,
+    _enumerated_devices,
     list_capture_devices,
     resolve_capture_devices,
 )
@@ -68,6 +70,60 @@ class DeviceSelectorTests(unittest.TestCase):
 
         self.assertEqual(1, len(devices))
         self.assertEqual(cv2.CAP_MSMF, devices[0].backend)
+
+    def test_linux_enumerates_v4l2_and_gstreamer_devices(self):
+        requested_backends = []
+
+        def enumerate_cameras(backend):
+            requested_backends.append(backend)
+            if backend == cv2.CAP_V4L2:
+                return [
+                    SimpleNamespace(
+                        index=2,
+                        backend=backend,
+                        name="USB Capture HDMI",
+                        path="/dev/video2",
+                        vid=0x1234,
+                        pid=0x5678,
+                    )
+                ]
+            return []
+
+        module = SimpleNamespace(enumerate_cameras=enumerate_cameras)
+        with (
+            patch("droid_alerts.device_capture.sys.platform", "linux"),
+            patch.dict(sys.modules, {"cv2_enumerate_cameras": module}),
+        ):
+            devices = _enumerated_devices()
+
+        self.assertEqual(
+            [cv2.CAP_V4L2, cv2.CAP_GSTREAMER],
+            requested_backends,
+        )
+        self.assertEqual("/dev/video2", devices[0].path)
+
+    def test_macos_enumerates_avfoundation_devices(self):
+        camera = SimpleNamespace(
+            index=0,
+            backend=cv2.CAP_AVFOUNDATION,
+            name="Game Capture",
+            path="unique-device-id",
+            vid=None,
+            pid=None,
+        )
+        module = SimpleNamespace(
+            enumerate_cameras=lambda backend: (
+                [camera] if backend == cv2.CAP_AVFOUNDATION else []
+            )
+        )
+        with (
+            patch("droid_alerts.device_capture.sys.platform", "darwin"),
+            patch.dict(sys.modules, {"cv2_enumerate_cameras": module}),
+        ):
+            devices = _enumerated_devices()
+
+        self.assertEqual(1, len(devices))
+        self.assertEqual(cv2.CAP_AVFOUNDATION, devices[0].backend)
 
     def test_resolver_uses_stable_path_and_prefers_saved_backend(self):
         candidates = [device(4, cv2.CAP_DSHOW), device(1, cv2.CAP_MSMF)]

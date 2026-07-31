@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 from queue import Full, Queue
+import re
 import threading
 from typing import Any, Mapping, Sequence
 import zipfile
@@ -15,12 +16,13 @@ import cv2
 import numpy as np
 
 from .models import CardCandidate
+from .names import droid_class
 from .template_recognition import identity_features
 
 
-DEV_CAPTURE_SCHEMA_VERSION = 1
+DEV_CAPTURE_SCHEMA_VERSION = 2
 DEV_TRACK_TIMEOUT_SECONDS = 5.0
-DEV_TRACK_MAX_CROPS = 5
+DEV_TRACK_MAX_CROPS = 3
 DEV_TRACK_MAX_OBSERVATIONS = 80
 DEV_TRACK_MAX_ACTIVE = 64
 DEV_TRACK_WRITE_QUEUE_SIZE = 64
@@ -89,12 +91,14 @@ class _TrackWriteJob:
 
 
 class BeltDevCaptureRecorder:
-    """Create review-only packages for physical card candidates.
+    """Automatically collect review-only packages for physical blueprints.
 
     This recorder is deliberately separate from production alert tracking. It
-    associates every card-shaped candidate, including rejected identities,
-    retains several diverse source crops, and writes completed tracks on a
-    background thread. Disabling Developer Mode makes every method a no-op.
+    associates accepted detections across scans. Confirmed physical candidates
+    retain several diverse source crops and are written on a background thread.
+    Rejected-only tracks are discarded, while manual captures preserve rejected
+    detector evidence separately. Disabling Blueprint Collection Mode makes
+    every method a no-op.
     """
 
     def __init__(
@@ -296,7 +300,9 @@ class BeltDevCaptureRecorder:
                 "active_tracks": len(self._tracks),
                 "queued_tracks": self._queued_tracks,
                 "written_tracks": self._written_tracks,
+                "written_blueprints": self._written_tracks,
                 "dropped_tracks": self._dropped_tracks,
+                "dropped_blueprints": self._dropped_tracks,
                 "filtered_tracks": self._filtered_tracks,
                 "dropped_crops": self._dropped_crops,
                 "written_bytes": self._written_bytes,
@@ -552,7 +558,9 @@ class BeltDevCaptureRecorder:
         if self.tracks_dir is None:
             return
         track = job.track
-        track_dir = self.tracks_dir / f"track_{track.id:06d}"
+        observations = list(track.observations)
+        summary = _track_summary(observations)
+        track_dir = self.tracks_dir / _track_folder_name(track.id, summary)
         track_dir.mkdir(parents=True, exist_ok=True)
         frame_records: list[dict[str, object]] = []
         for index, crop in enumerate(
@@ -572,7 +580,7 @@ class BeltDevCaptureRecorder:
                     self._dropped_crops += 1
                     continue
                 self._written_bytes += len(payload)
-            file_name = f"crop_{index:02d}_frame_{crop.frame_number:06d}.png"
+            file_name = _crop_file_name(index, crop)
             (track_dir / file_name).write_bytes(payload)
             frame_records.append(
                 {
@@ -587,25 +595,7 @@ class BeltDevCaptureRecorder:
                 }
             )
 
-        observations = list(track.observations)
-        predicted_names = Counter(
-            str(item.get("candidate", {}).get("name", ""))
-            for item in observations
-            if isinstance(item.get("candidate"), dict)
-            and str(item.get("candidate", {}).get("name", ""))
-        )
-        predicted_families = Counter(
-            str(item.get("candidate", {}).get("family", ""))
-            for item in observations
-            if isinstance(item.get("candidate"), dict)
-            and str(item.get("candidate", {}).get("family", ""))
-        )
-        rejection_reasons = Counter(
-            str(item.get("candidate", {}).get("reason", ""))
-            for item in observations
-            if isinstance(item.get("candidate"), dict)
-            and not bool(item.get("candidate", {}).get("accepted", False))
-        )
+        summary["saved_crop_count"] = len(frame_records)
         manifest = {
             "version": DEV_CAPTURE_SCHEMA_VERSION,
             "physical_track_id": track.id,
@@ -624,18 +614,7 @@ class BeltDevCaptureRecorder:
             ),
             "production_track_ids": sorted(track.production_track_ids),
             "tracker_events": track.tracker_events,
-            "summary": {
-                "observation_count": len(observations),
-                "saved_crop_count": len(frame_records),
-                "accepted_count": sum(
-                    bool(item.get("candidate", {}).get("accepted", False))
-                    for item in observations
-                    if isinstance(item.get("candidate"), dict)
-                ),
-                "predicted_names": dict(predicted_names),
-                "predicted_families": dict(predicted_families),
-                "rejection_reasons": dict(rejection_reasons),
-            },
+            "summary": summary,
             "observations": observations,
             "frames": frame_records,
         }
@@ -655,7 +634,9 @@ class BeltDevCaptureRecorder:
             ),
             "label_status": "unreviewed",
             "training_status": "manual_review_required",
-            "capture_scope": "belt_region_only",
+            "capture_scope": (
+                "automatic_blueprint_candidates_and_periodic_belt_frames"
+            ),
             "metadata": self._session_metadata,
             "status": status,
         }
@@ -667,24 +648,40 @@ class BeltDevCaptureRecorder:
 
 def candidate_diagnostics(candidate: CardCandidate) -> dict[str, object]:
     context = candidate.context
+    accepted = bool(candidate.accepted)
+    name = str(candidate.canonical_name)
+    family = str(candidate.family)
+    droid_class_name = str(candidate.rarity)
     return {
-        "name": str(candidate.canonical_name),
+        "blueprint_detected": True,
+        "identity_status": "identified" if accepted else "unknown",
+        "name": name,
+        "detected_name": name if accepted else "",
+        "best_guess_name": name,
         "raw_text": str(candidate.raw_text),
         "identity_confidence": _finite_float(candidate.identity_confidence),
         "raw_best_similarity": _finite_float(candidate.raw_best_similarity),
         "runner_up_identity": str(candidate.runner_up_identity),
         "identity_margin": _finite_float(candidate.identity_margin),
         "name_box": list(candidate.name_box),
-        "accepted": bool(candidate.accepted),
+        "accepted": accepted,
         "reason": str(candidate.reason),
-        "family": str(candidate.family),
+        "family": family,
         "family_confidence": _finite_float(candidate.family_confidence),
         "family_best_similarity": _finite_float(
             candidate.family_best_similarity
         ),
         "runner_up_family": str(candidate.runner_up_family),
         "family_margin": _finite_float(candidate.family_margin),
-        "rarity": str(candidate.rarity),
+        # The detector still calls the visual Default-through-Galactic tier
+        # "family" internally. Collection output exposes it as rarity while
+        # retaining the legacy fields for existing review tools.
+        "detected_rarity": family,
+        "best_guess_rarity": family,
+        "detected_rarity_confidence": _finite_float(candidate.family_confidence),
+        "rarity": droid_class_name if accepted else "",
+        "detected_class": droid_class_name if accepted else "",
+        "best_guess_class": droid_class_name or droid_class(name),
         "rarity_confidence": _finite_float(candidate.rarity_confidence),
         "context": {
             "art_box": list(context.art_box),
@@ -703,6 +700,167 @@ def candidate_diagnostics(candidate: CardCandidate) -> dict[str, object]:
     }
 
 
+def _track_summary(
+    observations: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    candidates = [
+        candidate
+        for observation in observations
+        if isinstance(observation, Mapping)
+        and isinstance((candidate := observation.get("candidate")), Mapping)
+    ]
+    accepted = [
+        candidate for candidate in candidates if bool(candidate.get("accepted", False))
+    ]
+    predicted_names = Counter(
+        value
+        for candidate in candidates
+        if (value := str(candidate.get("name", "")).strip())
+    )
+    accepted_names = Counter(
+        value
+        for candidate in accepted
+        if (value := str(candidate.get("detected_name") or candidate.get("name") or "").strip())
+    )
+    detected_families = Counter(
+        value
+        for candidate in candidates
+        if (value := str(candidate.get("family", "")).strip())
+    )
+    detected_rarities = Counter(
+        value
+        for candidate in candidates
+        if (value := str(
+            candidate.get("detected_rarity") or candidate.get("family") or ""
+        ).strip())
+    )
+    accepted_classes = Counter(
+        value
+        for candidate in accepted
+        if (value := str(
+            candidate.get("detected_class") or candidate.get("rarity") or ""
+        ).strip())
+    )
+    rejection_reasons = Counter(
+        value
+        for candidate in candidates
+        if not bool(candidate.get("accepted", False))
+        and (value := str(candidate.get("reason", "")).strip())
+    )
+    detected_name = _counter_majority(accepted_names)
+    detected_family = _counter_majority(detected_families)
+    detected_rarity = _counter_majority(detected_rarities)
+    detected_class = _counter_majority(accepted_classes)
+    if detected_name and not detected_class:
+        detected_class = droid_class(detected_name)
+    best_guess = max(
+        candidates,
+        key=lambda candidate: (
+            _finite_float(candidate.get("raw_best_similarity", 0.0)),
+            _finite_float(candidate.get("identity_margin", 0.0)),
+        ),
+        default={},
+    )
+    best_guess_name = str(best_guess.get("best_guess_name") or best_guess.get("name") or "")
+    best_guess_rarity = str(
+        best_guess.get("best_guess_rarity")
+        or best_guess.get("family")
+        or ""
+    )
+    best_guess_class = str(
+        best_guess.get("best_guess_class")
+        or best_guess.get("rarity")
+        or droid_class(best_guess_name)
+    )
+    return {
+        "blueprint_detected": bool(candidates),
+        "identity_status": "identified" if detected_name else "unknown",
+        "detected_name": detected_name,
+        "detected_family": detected_family,
+        "detected_rarity": detected_rarity,
+        "detected_class": detected_class,
+        "best_guess_name": best_guess_name,
+        "best_guess_rarity": best_guess_rarity,
+        "best_guess_class": best_guess_class,
+        "best_guess_similarity": _finite_float(
+            best_guess.get("raw_best_similarity", 0.0)
+        ),
+        "observation_count": len(observations),
+        "accepted_count": len(accepted),
+        "predicted_names": dict(predicted_names),
+        "accepted_names": dict(accepted_names),
+        "predicted_families": dict(detected_families),
+        "predicted_rarities": dict(detected_rarities),
+        "predicted_classes": dict(accepted_classes),
+        "rejection_reasons": dict(rejection_reasons),
+    }
+
+
+def _track_folder_name(track_id: int, summary: Mapping[str, object]) -> str:
+    detected_name = str(summary.get("detected_name") or "").strip()
+    detected_rarity = str(summary.get("detected_rarity") or "").strip()
+    detected_class = str(summary.get("detected_class") or "").strip()
+    if detected_name:
+        label = (
+            f"detected-{_slug(detected_name)}"
+            f"__rarity-{_slug(detected_rarity)}"
+            f"__class-{_slug(detected_class)}"
+        )
+    else:
+        best_name = str(summary.get("best_guess_name") or "").strip()
+        best_rarity = str(summary.get("best_guess_rarity") or "").strip()
+        best_class = str(summary.get("best_guess_class") or "").strip()
+        label = (
+            f"unknown__best-{_slug(best_name)}"
+            f"__rarity-{_slug(best_rarity)}"
+            f"__class-{_slug(best_class)}"
+        )
+    return f"track_{int(track_id):06d}__{label}"
+
+
+def _crop_file_name(index: int, crop: _SavedCrop) -> str:
+    candidate = crop.candidate
+    accepted = bool(candidate.get("accepted", False))
+    if accepted:
+        name = str(candidate.get("detected_name") or candidate.get("name") or "")
+        rarity = str(candidate.get("detected_rarity") or candidate.get("family") or "")
+        droid_class_name = str(
+            candidate.get("detected_class") or candidate.get("rarity") or ""
+        )
+        label = (
+            f"detected-{_slug(name)}"
+            f"__rarity-{_slug(rarity)}"
+            f"__class-{_slug(droid_class_name)}"
+        )
+    else:
+        name = str(candidate.get("best_guess_name") or candidate.get("name") or "")
+        rarity = str(
+            candidate.get("best_guess_rarity")
+            or candidate.get("family")
+            or ""
+        )
+        droid_class_name = str(
+            candidate.get("best_guess_class")
+            or candidate.get("rarity")
+            or droid_class(name)
+        )
+        label = (
+            f"unknown__best-{_slug(name)}"
+            f"__rarity-{_slug(rarity)}"
+            f"__class-{_slug(droid_class_name)}"
+        )
+    return (
+        f"crop_{int(index):02d}_frame_{int(crop.frame_number):06d}"
+        f"__{label}.png"
+    )
+
+
+def _counter_majority(values: Counter[str]) -> str:
+    if not values:
+        return ""
+    return max(values.items(), key=lambda item: (item[1], item[0]))[0]
+
+
 def latest_dev_session(root: str | Path) -> Path | None:
     directory = Path(root)
     sessions = [
@@ -719,7 +877,7 @@ def export_dev_session(
     session_dir: str | Path,
     output_path: str | Path | None = None,
 ) -> Path:
-    """Export a complete local Belt Dev session without changing its labels."""
+    """Export a complete Blueprint Collection session without changing labels."""
 
     session = Path(session_dir).resolve()
     if not session.is_dir():
@@ -743,9 +901,10 @@ def export_dev_session(
         ) as archive:
             archive.writestr(
                 "README.txt",
-                "Belt Tracker Developer Mode capture.\n"
-                "Contains only the selected belt region, local detector diagnostics, "
-                "and human review labels if present.\n"
+                "Droid Alerts Blueprint Collection Mode capture.\n"
+                "Contains clean blueprint crops, detected identities and rarities, "
+                "unknown candidates, local detector diagnostics, periodic belt-region "
+                "safety frames, and human review labels if present.\n"
                 "Nothing in this archive is automatically trusted as training data.\n",
             )
             for path in sorted(session.rglob("*")):
@@ -1011,32 +1170,11 @@ def _same_physical_box(
 
 def _review_worthy_track(track: _DevTrack) -> bool:
     observations = list(track.observations)
-    if not observations:
-        return False
-    accepted = [
-        item
-        for item in observations
-        if isinstance(item.get("candidate"), dict)
+    return any(
+        isinstance(item.get("candidate"), dict)
         and bool(item["candidate"].get("accepted", False))
-    ]
-    if accepted:
-        return True
-    if len(observations) < 2:
-        return False
-    movement = track.maximum_center_x - track.minimum_center_x
-    required_movement = max(
-        6.0,
-        max(track.initial_box[2], track.last_box[2]) * 0.10,
+        for item in observations
     )
-    best_similarity = max(
-        (
-            _finite_float(item["candidate"].get("raw_best_similarity", 0.0))
-            for item in observations
-            if isinstance(item.get("candidate"), dict)
-        ),
-        default=0.0,
-    )
-    return movement >= required_movement and best_similarity >= 0.72
 
 
 def _intersection_over_union(
@@ -1056,6 +1194,10 @@ def _intersection_over_union(
 
 def _box_center(box: tuple[int, int, int, int]) -> tuple[float, float]:
     return box[0] + box[2] / 2.0, box[1] + box[3] / 2.0
+
+
+def _slug(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(value).casefold()).strip("-") or "unknown"
 
 
 def _finite_float(value: object) -> float:

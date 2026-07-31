@@ -81,8 +81,14 @@ class BeltController(StateObject):
             self._status = status
             self.statusChanged.emit(status)
 
-    def load_region(self) -> None:
-        monitor = self.capture.current_belt_source()
+    def load_region(self, *, open_source: bool = False) -> None:
+        try:
+            monitor = self.capture.current_belt_source(
+                open_device=open_source,
+            )
+        except Exception:
+            self.region = None
+            return
         if monitor is None:
             self.region = None
             return
@@ -172,7 +178,7 @@ class BeltController(StateObject):
                 self._set_status("Error")
                 self.update_state(detail=str(exc))
                 return
-        self.load_region()
+        self.load_region(open_source=config.capture_source == "window")
         if self.region is None:
             self.update_state(detail="Select the belt region first.")
             return
@@ -310,7 +316,11 @@ class BeltController(StateObject):
             self.update_state(detail="Capture source reconnected automatically.")
         elif kind == "dev_log":
             self.runtime.detailChanged.emit(
-                f"Belt dev log: data/{event.get('path') or 'belt_dev'}"
+                f"Blueprint collection: data/{event.get('path') or 'belt_dev'}"
+            )
+        elif kind == "manual_capture":
+            self.runtime.detailChanged.emit(
+                f"Belt screenshot saved: data/{event.get('path') or 'belt_dev'}"
             )
         self.refresh()
 
@@ -437,7 +447,7 @@ class BeltController(StateObject):
             try:
                 capture = (
                     self.capture.create_chat_capture()
-                    if self.runtime.config.capture_source == "device"
+                    if self.runtime.config.capture_source in {"window", "device"}
                     else None
                 )
                 self.selector = RegionSelector(

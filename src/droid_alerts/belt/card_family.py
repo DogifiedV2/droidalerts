@@ -11,7 +11,7 @@ def classify_card_family_border(
     name_box: tuple[int, int, int, int],
     card_box: tuple[int, int, int, int],
 ) -> tuple[str, float]:
-    """Fallback for the distinctive Gold, Diamond, and Rainbow frames.
+    """Fallback for the distinctive Gold, Diamond, Rainbow, and Galactic frames.
 
     Default and Beskar are deliberately not guessed from color because both
     are low-saturation metal/gray under some lighting. The family label OCR is
@@ -47,6 +47,9 @@ def classify_card_family_border(
     cyan_fraction = float(
         ((hue >= 75) & (hue <= 105) & (saturation >= 70) & (value >= 100)).sum()
     ) / valid_count
+    galactic_fraction = float(
+        ((hue >= 115) & (hue <= 160) & (saturation >= 70) & (value >= 100)).sum()
+    ) / valid_count
 
     diverse_bins = 0
     hue_spread = 0
@@ -64,6 +67,12 @@ def classify_card_family_border(
             ),
             default=0,
         )
+
+    # Galactic frames have a broad, persistent violet glow. Check this before
+    # Rainbow. Galactic also occupies several hue bins, but the audited belt
+    # captures kept at least half of the usable band in the violet range.
+    if vivid_fraction >= 0.65 and galactic_fraction >= 0.45:
+        return "Galactic", min(1.0, galactic_fraction / 0.65)
 
     # Gold frames pick up small red/magenta highlights as they move. Those
     # colors remain close on the circular hue wheel, unlike a real Rainbow

@@ -15,6 +15,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.config import AppConfig
+from droid_alerts.classifier import Detection
 from droid_alerts.limited_deals import (
     LimitedDeal,
     LimitedDealService,
@@ -28,22 +29,27 @@ from droid_alerts.limited_deals import (
     normalize_limited_deal_priority_alerts,
     normalize_limited_deal_target_tiers,
 )
+from droid_alerts.notifications import (
+    load_discord_webhook_for_detection,
+    save_discord_webhook,
+    save_limited_deal_discord_webhook,
+)
 
 
 def deal_payload(
     *,
-    mutation: str = "Rainbow",
+    deal_rarity: str = "Rainbow",
     droid: str = "R2",
     droid_id: int = 17,
-    rarity: str = "Epic",
+    droid_class: str = "Epic",
 ) -> dict[str, object]:
     return {
         "startsAt": "2026-07-18T14:00:00.000Z",
         "endsAt": "2026-07-18T15:00:00.000Z",
-        "mutation": mutation,
+        "mutation": deal_rarity,
         "droid": droid,
         "droidId": droid_id,
-        "rarity": rarity,
+        "rarity": droid_class,
     }
 
 
@@ -62,10 +68,20 @@ def current_deal() -> LimitedDeal:
 class LimitedDealRuleTests(unittest.TestCase):
     def test_portrait_urls_match_the_website_assets(self):
         default_deal = LimitedDeal.from_payload(
-            deal_payload(mutation="Default", droid="A-LT", droid_id=8, rarity="Rare")
+            deal_payload(
+                deal_rarity="Default",
+                droid="A-LT",
+                droid_id=8,
+                droid_class="Rare",
+            )
         )
         rainbow_deal = LimitedDeal.from_payload(
-            deal_payload(mutation="Rainbow", droid="A-LT", droid_id=8, rarity="Rare")
+            deal_payload(
+                deal_rarity="Rainbow",
+                droid="A-LT",
+                droid_id=8,
+                droid_class="Rare",
+            )
         )
         endpoint = "https://gonk.tools/api/droid-alerts/limited-deal"
 
@@ -112,7 +128,6 @@ class LimitedDealRuleTests(unittest.TestCase):
     def test_priority_alerts_follow_the_two_column_display_order(self):
         self.assertEqual(
             (
-                ("Diamond", "Mythic"),
                 ("Rainbow", "Epic"),
                 ("Rainbow", "Legendary"),
                 ("Rainbow", "Mythic"),
@@ -122,6 +137,7 @@ class LimitedDealRuleTests(unittest.TestCase):
                 ("Galactic", "Epic"),
                 ("Galactic", "Legendary"),
                 ("Galactic", "Mythic"),
+                ("Diamond", "Mythic"),
             ),
             LIMITED_DEAL_PRIORITY_COMBOS,
         )
@@ -129,7 +145,7 @@ class LimitedDealRuleTests(unittest.TestCase):
     def test_custom_alert_droids_exclude_rare_droids(self):
         self.assertNotIn(
             "Rare",
-            {droid.rarity for droid in LIMITED_DEAL_CUSTOM_ALERT_DROIDS},
+            {droid.droid_class for droid in LIMITED_DEAL_CUSTOM_ALERT_DROIDS},
         )
 
     def test_priority_and_per_droid_minimum_rules_are_combined(self):
@@ -139,15 +155,15 @@ class LimitedDealRuleTests(unittest.TestCase):
         self.assertFalse(limited_deal_matches(deal, [], {"17": "Beskar"}))
         self.assertFalse(limited_deal_matches(deal, [], {"59": "Default"}))
 
-    def test_priority_alerts_exclude_default_and_gold_mutations(self):
-        mythic_mutations = {
-            mutation
-            for mutation, rarity in LIMITED_DEAL_PRIORITY_COMBOS
-            if rarity == "Mythic"
+    def test_priority_alerts_exclude_default_and_gold_rarities(self):
+        mythic_rarities = {
+            deal_rarity
+            for deal_rarity, droid_class in LIMITED_DEAL_PRIORITY_COMBOS
+            if droid_class == "Mythic"
         }
         self.assertEqual(
             {"Diamond", "Rainbow", "Beskar", "Galactic"},
-            mythic_mutations,
+            mythic_rarities,
         )
 
     def test_priority_alerts_include_all_galactic_target_classes(self):
@@ -164,11 +180,62 @@ class LimitedDealRuleTests(unittest.TestCase):
             {
                 "limited_deal_priority_alerts": [list(LIMITED_DEAL_PRIORITY_COMBOS[0])],
                 "limited_deal_target_tiers": {"17": "Rainbow"},
+                "limited_deal_discord_webhook_file": "deals-webhook.txt",
+                "limited_deal_discord_env_var": "DEALS_WEBHOOK_URL",
             }
         )
         restored = AppConfig.from_dict(config.to_dict())
-        self.assertEqual([["Diamond", "Mythic"]], restored.limited_deal_priority_alerts)
+        self.assertEqual([["Rainbow", "Epic"]], restored.limited_deal_priority_alerts)
         self.assertEqual({"17": "Rainbow"}, restored.limited_deal_target_tiers)
+        self.assertEqual(
+            "deals-webhook.txt",
+            restored.limited_deal_discord_webhook_file,
+        )
+        self.assertEqual(
+            "DEALS_WEBHOOK_URL",
+            restored.limited_deal_discord_env_var,
+        )
+
+    def test_limited_deals_can_use_a_separate_discord_webhook(self):
+        config = AppConfig()
+        normal = Detection(
+            droid="Beskar",
+            rarity="Mythic",
+            row_box=(0, 0, 1, 1),
+            droid_score=1.0,
+            rarity_score=1.0,
+            rarity_margin=1.0,
+            score=1.0,
+            source="watcher",
+        )
+        limited = Detection(
+            droid="R2",
+            rarity="Rainbow Epic",
+            row_box=(0, 0, 1, 1),
+            droid_score=1.0,
+            rarity_score=1.0,
+            rarity_margin=1.0,
+            score=1.0,
+            source="limited-deal",
+        )
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "droid_alerts.notifications.config_dir",
+            return_value=Path(directory),
+        ):
+            save_discord_webhook(config, "https://discord.com/api/webhooks/1/main")
+            save_limited_deal_discord_webhook(
+                config,
+                "https://discord.com/api/webhooks/2/deals",
+            )
+
+            normal_url, _ = load_discord_webhook_for_detection(config, normal)
+            limited_url, _ = load_discord_webhook_for_detection(config, limited)
+            self.assertEqual("https://discord.com/api/webhooks/1/main", normal_url)
+            self.assertEqual("https://discord.com/api/webhooks/2/deals", limited_url)
+
+            save_limited_deal_discord_webhook(config, "")
+            fallback_url, _ = load_discord_webhook_for_detection(config, limited)
+            self.assertEqual("https://discord.com/api/webhooks/1/main", fallback_url)
 
 class LimitedDealSchedulingTests(unittest.TestCase):
     def test_fetch_uses_a_bundled_ca_context(self):
@@ -194,7 +261,12 @@ class LimitedDealSchedulingTests(unittest.TestCase):
         response.__exit__ = Mock(return_value=False)
         response.read.return_value = b"\x89PNG\r\n\x1a\nwebsite-icon"
         deal = LimitedDeal.from_payload(
-            deal_payload(mutation="Default", droid="A-LT", droid_id=8, rarity="Rare")
+            deal_payload(
+                deal_rarity="Default",
+                droid="A-LT",
+                droid_id=8,
+                droid_class="Rare",
+            )
         )
 
         with tempfile.TemporaryDirectory() as directory, patch(

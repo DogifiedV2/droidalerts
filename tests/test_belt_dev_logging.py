@@ -98,6 +98,55 @@ class BeltDevLoggerTests(unittest.TestCase):
                 self.assertEqual("", logger.save_frame(frame, frame_number=1, now=1.0))
                 self.assertEqual([], list(logger.session_dir.glob("frame_*")))
 
+    def test_manual_capture_saves_detector_snapshot_next_to_lossless_region(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with (
+                patch(
+                    "droid_alerts.belt.dev_logging.belt_dev_dir",
+                    return_value=root / "belt_dev",
+                ),
+                patch("droid_alerts.belt.dev_logging.data_dir", return_value=root),
+            ):
+                logger = BeltDevLogger(True)
+                frame = np.zeros((40, 60, 3), dtype=np.uint8)
+                relative_image = logger.save_manual_capture(
+                    frame,
+                    frame_number=17,
+                    now=12.5,
+                    detector_snapshot={
+                        "detector": "hybrid-v2",
+                        "accepted_detection_count": 1,
+                        "rejected_candidate_count": 0,
+                        "detected_names": ["R2"],
+                        "accepted_detections": [
+                            {
+                                "detected_name": "R2",
+                                "detected_rarity": "Gold",
+                            }
+                        ],
+                        "rejected_candidates": [],
+                    },
+                )
+
+                image_path = root / relative_image
+                metadata_path = image_path.with_suffix(".json")
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+                self.assertTrue(image_path.exists())
+                self.assertEqual("manual_p_hotkey", metadata["capture_source"])
+                self.assertEqual(
+                    "selected_belt_region",
+                    metadata["capture_scope"],
+                )
+                snapshot = metadata["detector_snapshot"]
+                self.assertEqual(["R2"], snapshot["detected_names"])
+                self.assertEqual(
+                    "Gold",
+                    snapshot["accepted_detections"][0]["detected_rarity"],
+                )
+                self.assertEqual([], snapshot["rejected_candidates"])
+
     def test_disabled_logger_creates_nothing(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

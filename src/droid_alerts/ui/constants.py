@@ -3,16 +3,16 @@ from __future__ import annotations
 ALERT_COMBOS: tuple[tuple[str, str], ...] = (
     ("Rainbow", "Epic"),
     ("Rainbow", "Legendary"),
+    ("Rainbow", "Mythic"),
     ("Beskar", "Epic"),
     ("Beskar", "Legendary"),
-    ("Diamond", "Mythic"),
-    ("Rainbow", "Mythic"),
     ("Beskar", "Mythic"),
     ("Galactic", "Common"),
     ("Galactic", "Rare"),
     ("Galactic", "Epic"),
     ("Galactic", "Legendary"),
     ("Galactic", "Mythic"),
+    ("Diamond", "Mythic"),
 )
 
 DISCORD_COMMUNITY_URL = "https://discord.gg/ZmFPjS4784"

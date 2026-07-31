@@ -92,7 +92,7 @@ def build_settings_update(
         "droid_timers_enabled", "save_alert_samples", "save_debug_screenshots",
         "ntfy_enabled", "discord_enabled", "phone_alerts_enabled",
         "ntfy_include_attachment", "phone_include_attachment", "update_check_enabled",
-        "extra_checks", "start_watcher_on_launch", "rebirth_alert_enabled",
+        "start_watcher_on_launch", "rebirth_alert_enabled",
         "cb23_mission_alert_enabled", "belt_overlay_enabled", "belt_dev_mode",
         "belt_template_collection_enabled", "advanced_mode",
     )

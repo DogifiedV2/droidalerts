@@ -137,7 +137,7 @@ ScrollView {
                                     }
 
                                     ToolTip.visible: windowUnavailableHover.containsMouse
-                                    ToolTip.text: "Unsupported on MacOS"
+                                    ToolTip.text: captureController.state.windowCaptureUnavailableReason
                                     ToolTip.delay: 250
                                 }
 
@@ -164,7 +164,7 @@ ScrollView {
                                     }
 
                                     ToolTip.visible: deviceUnavailableHover.containsMouse
-                                    ToolTip.text: "Unsupported on MacOS"
+                                    ToolTip.text: captureController.state.deviceCaptureUnavailableReason
                                     ToolTip.delay: 250
                                 }
                             }
@@ -357,6 +357,14 @@ ScrollView {
                             enabled: dashboardController.state.timersEnabled
                             onClicked: dashboardController.adjustTimers()
                         }
+                    }
+
+                    SignalCheck {
+                        Layout.fillWidth: true
+                        visible: dashboardController.state.timersEnabled
+                        text: "Timer Reminder"
+                        checked: dashboardController.state.timerReminders
+                        onToggled: dashboardController.setTimerRemindersEnabled(checked)
                     }
                 }
 

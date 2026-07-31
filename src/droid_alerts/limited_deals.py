@@ -14,7 +14,7 @@ from . import __version__
 from .network import certifi_ssl_context
 
 
-LIMITED_DEAL_FAMILY_ORDER = (
+LIMITED_DEAL_RARITY_ORDER = (
     "Default",
     "Gold",
     "Diamond",
@@ -22,20 +22,19 @@ LIMITED_DEAL_FAMILY_ORDER = (
     "Beskar",
     "Galactic",
 )
-LIMITED_DEAL_ALERT_FAMILY_ORDER = LIMITED_DEAL_FAMILY_ORDER[2:]
-LIMITED_DEAL_FAMILY_RANK = {
-    family: index for index, family in enumerate(LIMITED_DEAL_FAMILY_ORDER)
+LIMITED_DEAL_ALERT_RARITY_ORDER = LIMITED_DEAL_RARITY_ORDER[2:]
+LIMITED_DEAL_RARITY_RANK = {
+    rarity: index for index, rarity in enumerate(LIMITED_DEAL_RARITY_ORDER)
 }
 LIMITED_DEAL_TARGET_LABELS = {
-    family: f"{family}+" if family != LIMITED_DEAL_FAMILY_ORDER[-1] else family
-    for family in LIMITED_DEAL_FAMILY_ORDER
+    rarity: f"{rarity}+" if rarity != LIMITED_DEAL_RARITY_ORDER[-1] else rarity
+    for rarity in LIMITED_DEAL_RARITY_ORDER
 }
-LIMITED_DEAL_TARGET_FAMILIES_BY_LABEL = {
-    label: family for family, label in LIMITED_DEAL_TARGET_LABELS.items()
+LIMITED_DEAL_TARGET_RARITIES_BY_LABEL = {
+    label: rarity for rarity, label in LIMITED_DEAL_TARGET_LABELS.items()
 }
-LIMITED_DEAL_RARITIES = ("Rare", "Epic", "Legendary", "Mythic")
+LIMITED_DEAL_DROID_CLASSES = ("Rare", "Epic", "Legendary", "Mythic")
 LIMITED_DEAL_PRIORITY_COMBOS = (
-    ("Diamond", "Mythic"),
     ("Rainbow", "Epic"),
     ("Rainbow", "Legendary"),
     ("Rainbow", "Mythic"),
@@ -45,6 +44,7 @@ LIMITED_DEAL_PRIORITY_COMBOS = (
     ("Galactic", "Epic"),
     ("Galactic", "Legendary"),
     ("Galactic", "Mythic"),
+    ("Diamond", "Mythic"),
 )
 FETCH_SECOND = 10
 REQUEST_TIMEOUT_SECONDS = 4.0
@@ -55,7 +55,7 @@ USER_AGENT = f"DroidAlerts/{__version__}"
 class LimitedDealDroid:
     id: int
     name: str
-    rarity: str
+    droid_class: str
     portrait_key: str
 
 
@@ -115,14 +115,14 @@ LIMITED_DEAL_DROIDS = (
     LimitedDealDroid(71, "TRI-TEK", "Mythic", "Combo23"),
 )
 LIMITED_DEAL_CUSTOM_ALERT_DROIDS = tuple(
-    droid for droid in LIMITED_DEAL_DROIDS if droid.rarity != "Rare"
+    droid for droid in LIMITED_DEAL_DROIDS if droid.droid_class != "Rare"
 )
 LIMITED_DEAL_DROIDS_BY_ID = {droid.id: droid for droid in LIMITED_DEAL_DROIDS}
 _CUSTOM_ALERT_DROID_IDS = frozenset(
     droid.id for droid in LIMITED_DEAL_CUSTOM_ALERT_DROIDS
 )
-_FAMILY_BY_CASEFOLD = {
-    family.casefold(): family for family in LIMITED_DEAL_FAMILY_ORDER
+_RARITY_BY_CASEFOLD = {
+    rarity.casefold(): rarity for rarity in LIMITED_DEAL_RARITY_ORDER
 }
 _PRIORITY_COMBOS = frozenset(LIMITED_DEAL_PRIORITY_COMBOS)
 
@@ -131,10 +131,10 @@ _PRIORITY_COMBOS = frozenset(LIMITED_DEAL_PRIORITY_COMBOS)
 class LimitedDeal:
     starts_at: str
     ends_at: str
-    mutation: str
+    rarity: str
     droid: str
     droid_id: int
-    rarity: str
+    droid_class: str
 
     @classmethod
     def from_payload(cls, value: object) -> "LimitedDeal":
@@ -142,8 +142,13 @@ class LimitedDeal:
             raise ValueError("Limited Deal response must contain a deal object")
         if set(value) != {"startsAt", "endsAt", "mutation", "droid", "droidId", "rarity"}:
             raise ValueError("Limited Deal response exposed unexpected deal data")
-        mutation = _FAMILY_BY_CASEFOLD.get(str(value.get("mutation") or "").casefold())
-        rarity = str(value.get("rarity") or "").strip().title()
+        # The upstream API retains its legacy field names. Internally and in
+        # the UI, "mutation" is a deal rarity and the API's "rarity" is the
+        # droid class.
+        rarity = _RARITY_BY_CASEFOLD.get(
+            str(value.get("mutation") or "").casefold()
+        )
+        droid_class = str(value.get("rarity") or "").strip().title()
         droid = str(value.get("droid") or "").strip()
         try:
             droid_id = int(value.get("droidId"))
@@ -151,14 +156,19 @@ class LimitedDeal:
             raise ValueError("Limited Deal response has an invalid droid ID") from exc
         starts_at = _normalized_utc_iso(value.get("startsAt"))
         ends_at = _normalized_utc_iso(value.get("endsAt"))
-        if mutation is None or rarity not in LIMITED_DEAL_RARITIES:
-            raise ValueError("Limited Deal response has an invalid rarity")
+        if rarity is None or droid_class not in LIMITED_DEAL_DROID_CLASSES:
+            raise ValueError(
+                "Limited Deal response has an invalid rarity or droid class"
+            )
         if not droid or len(droid) > 64:
             raise ValueError("Limited Deal response has an invalid droid name")
         catalog_droid = LIMITED_DEAL_DROIDS_BY_ID.get(droid_id)
         if catalog_droid is None:
             raise ValueError("Limited Deal response contains an unknown droid")
-        if catalog_droid.name != droid or catalog_droid.rarity != rarity:
+        if (
+            catalog_droid.name != droid
+            or catalog_droid.droid_class != droid_class
+        ):
             raise ValueError("Limited Deal response does not match the rotating droid catalog")
         start_time = _parse_utc(starts_at)
         end_time = _parse_utc(ends_at)
@@ -172,20 +182,20 @@ class LimitedDeal:
         return cls(
             starts_at=starts_at,
             ends_at=ends_at,
-            mutation=mutation,
+            rarity=rarity,
             droid=droid,
             droid_id=droid_id,
-            rarity=rarity,
+            droid_class=droid_class,
         )
 
     def to_payload(self) -> dict[str, object]:
         return {
             "startsAt": self.starts_at,
             "endsAt": self.ends_at,
-            "mutation": self.mutation,
+            "mutation": self.rarity,
             "droid": self.droid,
             "droidId": self.droid_id,
-            "rarity": self.rarity,
+            "rarity": self.droid_class,
         }
 
     def is_current(self, now: datetime | None = None) -> bool:
@@ -207,17 +217,19 @@ def normalize_limited_deal_target_tiers(raw_targets: object) -> dict[str, str]:
     if not isinstance(raw_targets, Mapping):
         return {}
     normalized: dict[str, str] = {}
-    for raw_id, raw_family in raw_targets.items():
+    for raw_id, raw_rarity in raw_targets.items():
         try:
             droid_id = int(raw_id)
         except (TypeError, ValueError):
             continue
-        family = _FAMILY_BY_CASEFOLD.get(str(raw_family or "").strip().casefold())
+        rarity = _RARITY_BY_CASEFOLD.get(
+            str(raw_rarity or "").strip().casefold()
+        )
         if (
             droid_id in _CUSTOM_ALERT_DROID_IDS
-            and family in LIMITED_DEAL_ALERT_FAMILY_ORDER
+            and rarity in LIMITED_DEAL_ALERT_RARITY_ORDER
         ):
-            normalized[str(droid_id)] = family
+            normalized[str(droid_id)] = rarity
     return {
         str(droid.id): normalized[str(droid.id)]
         for droid in LIMITED_DEAL_CUSTOM_ALERT_DROIDS
@@ -234,16 +246,18 @@ def normalize_limited_deal_priority_alerts(raw_alerts: object) -> list[list[str]
             continue
         if len(raw_combo) != 2:
             continue
-        family = _FAMILY_BY_CASEFOLD.get(str(raw_combo[0] or "").strip().casefold())
-        rarity = str(raw_combo[1] or "").strip().title()
-        combo = (family or "", rarity)
+        rarity = _RARITY_BY_CASEFOLD.get(
+            str(raw_combo[0] or "").strip().casefold()
+        )
+        droid_class = str(raw_combo[1] or "").strip().title()
+        combo = (rarity or "", droid_class)
         if combo in _PRIORITY_COMBOS:
             selected.add(combo)
     return [list(combo) for combo in LIMITED_DEAL_PRIORITY_COMBOS if combo in selected]
 
 
-def limited_deal_target_label(family: object) -> str:
-    canonical = _FAMILY_BY_CASEFOLD.get(str(family or "").strip().casefold())
+def limited_deal_target_label(rarity: object) -> str:
+    canonical = _RARITY_BY_CASEFOLD.get(str(rarity or "").strip().casefold())
     return LIMITED_DEAL_TARGET_LABELS.get(canonical, "Off")
 
 
@@ -255,13 +269,16 @@ def limited_deal_matches(
     normalized_priority = {
         tuple(combo) for combo in normalize_limited_deal_priority_alerts(priority_alerts)
     }
-    if (deal.mutation, deal.rarity) in normalized_priority:
+    if (deal.rarity, deal.droid_class) in normalized_priority:
         return True
     normalized_targets = normalize_limited_deal_target_tiers(target_tiers)
     minimum = normalized_targets.get(str(deal.droid_id))
     if minimum is None:
         return False
-    return LIMITED_DEAL_FAMILY_RANK[deal.mutation] >= LIMITED_DEAL_FAMILY_RANK[minimum]
+    return (
+        LIMITED_DEAL_RARITY_RANK[deal.rarity]
+        >= LIMITED_DEAL_RARITY_RANK[minimum]
+    )
 
 
 def next_limited_deal_fetch_at(
@@ -301,11 +318,11 @@ def fetch_current_limited_deal(endpoint_url: str) -> LimitedDeal:
 
 def limited_deal_portrait_url(endpoint_url: str, deal: LimitedDeal) -> str:
     droid = LIMITED_DEAL_DROIDS_BY_ID[deal.droid_id]
-    if deal.mutation == "Default":
+    if deal.rarity == "Default":
         path = f"/droids/T_Portrait_{droid.portrait_key}_Common.png"
     else:
         path = (
-            f"/droids/rarities/T_Portrait_{droid.portrait_key}_{deal.mutation}.png"
+            f"/droids/rarities/T_Portrait_{droid.portrait_key}_{deal.rarity}.png"
         )
     return urljoin(endpoint_url, path)
 
@@ -315,7 +332,7 @@ def fetch_limited_deal_portrait(
     deal: LimitedDeal,
     cache_dir: Path,
 ) -> Path:
-    cache_path = cache_dir / f"{deal.droid_id}_{deal.mutation.casefold()}.png"
+    cache_path = cache_dir / f"{deal.droid_id}_{deal.rarity.casefold()}.png"
     if _valid_png(cache_path):
         return cache_path
 
@@ -502,7 +519,10 @@ class LimitedDealService:
         return self._cache_path.parent / "limited_deal_icons"
 
     def _cached_portrait(self, deal: LimitedDeal) -> Path | None:
-        path = self._portrait_cache_dir / f"{deal.droid_id}_{deal.mutation.casefold()}.png"
+        path = (
+            self._portrait_cache_dir
+            / f"{deal.droid_id}_{deal.rarity.casefold()}.png"
+        )
         return path if _valid_png(path) else None
 
     def _read_cache(self, now: datetime) -> LimitedDeal | None:

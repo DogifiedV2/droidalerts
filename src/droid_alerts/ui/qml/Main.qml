@@ -9,18 +9,34 @@ import "pages"
 
 ApplicationWindow {
     id: window
-    width: 1220
-    height: 820
+    width: 1470
+    height: 1040
     minimumWidth: 980
     minimumHeight: 650
     visible: true
     title: "Droid Alerts"
     color: Theme.bg0
 
+    // Restore the 1.3.9 default footprint while preserving the port's design.
+    // Smaller windows smoothly return to the port's original 1:1 scale.
+    readonly property real preferredUiScale: 1470 / 1220
+    readonly property real uiScale: Math.min(
+        preferredUiScale,
+        width / minimumWidth,
+        height / minimumHeight
+    )
+
     onClosing: function(close) {
         appController.close()
         close.accepted = true
     }
+
+    Item {
+        id: scaledContent
+        width: parent.width / window.uiScale
+        height: parent.height / window.uiScale
+        scale: window.uiScale
+        transformOrigin: Item.TopLeft
 
     RowLayout {
         anchors.fill: parent
@@ -476,6 +492,7 @@ ApplicationWindow {
     }
 
     DialogOverlay {}
+    }
 
     Shortcut { sequence: "1"; onActivated: appController.selectPageNumber(1) }
     Shortcut { sequence: "2"; onActivated: appController.selectPageNumber(2) }

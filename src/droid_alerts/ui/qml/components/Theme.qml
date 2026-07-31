@@ -24,6 +24,15 @@ QtObject {
     readonly property color diamond: "#61d6ff"
     readonly property color gold: "#ffd34d"
     readonly property color beskar: "#cdd2de"
+    readonly property var rainbowColors: [
+        "#ff5252",
+        "#ff9f2e",
+        "#ffe14d",
+        "#5ce06b",
+        "#42c9ff",
+        "#b06bff",
+        "#ff6bd6"
+    ]
 
     readonly property string bodyFont: Qt.platform.os === "windows" ? "Segoe UI" :
                                         Qt.platform.os === "osx" ? "Helvetica Neue" : "Noto Sans"
@@ -42,6 +51,7 @@ QtObject {
         if (tone === "diamond") return diamond
         if (tone === "gold") return gold
         if (tone === "beskar") return beskar
+        if (tone === "rainbow") return rainbowColors[6]
         return muted
     }
 }

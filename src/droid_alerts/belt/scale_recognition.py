@@ -91,6 +91,7 @@ class ScaleInvariantCardRecognizer:
         config: ScaleRecognitionConfig | None = None,
         learned_model: LearnedIdentityModel | None = None,
         load_learned_model: bool = True,
+        classify_rejected_attributes: bool = False,
     ) -> None:
         started = time.perf_counter()
         self.index = index or BeltTemplateIndex.load(index_path)
@@ -112,6 +113,7 @@ class ScaleInvariantCardRecognizer:
             self.index,
             config=self.template_config,
         )
+        self.classify_rejected_attributes = bool(classify_rejected_attributes)
         self.learned_model = learned_model
         self.learned_model_status = "provided" if learned_model is not None else "disabled"
         if learned_model is None and load_learned_model:
@@ -555,12 +557,13 @@ class ScaleInvariantCardRecognizer:
         family_result = None
         rarity = ""
         rarity_confidence = 0.0
-        if accepted:
+        if accepted or self.classify_rejected_attributes:
             family_result = self.family_recognizer.classify_family_details(
                 frame_bgr,
                 name_box,
                 card_box,
             )
+        if accepted:
             rarity = droid_class(proposal.name)
             rarity_confidence = 1.0 if rarity else 0.0
         confidence = min(
@@ -657,6 +660,7 @@ class HybridCardRecognizer:
         scale_recognizer: ScaleInvariantCardRecognizer | None = None,
         load_learned_model: bool = True,
         maximum_scale_cpu_fraction: float = 0.25,
+        classify_rejected_attributes: bool = False,
     ) -> None:
         started = time.perf_counter()
         shared_index = index
@@ -667,12 +671,14 @@ class HybridCardRecognizer:
             index_path=index_path if shared_index is None else None,
             config=template_config,
             geometry_search_enabled=False,
+            classify_rejected_attributes=classify_rejected_attributes,
         )
         self.scale_recognizer = scale_recognizer or ScaleInvariantCardRecognizer(
             shared_index or self.fast_recognizer.index,
             template_config=template_config,
             config=scale_config,
             load_learned_model=load_learned_model,
+            classify_rejected_attributes=classify_rejected_attributes,
         )
         self.scale_scan_interval_seconds = max(
             0.05,

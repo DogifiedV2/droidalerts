@@ -294,9 +294,9 @@ def create_capture(
 ) -> CaptureBackend:
     source = str(capture_source).strip().lower()
     if source == "window":
-        from .window_capture import WindowsGraphicsCapture
+        from .window_capture import create_window_capture
 
-        return WindowsGraphicsCapture(
+        return create_window_capture(
             title=window_title,
             process_name=window_process,
             class_name=window_class,

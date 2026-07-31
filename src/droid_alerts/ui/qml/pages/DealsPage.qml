@@ -88,7 +88,7 @@ ScrollView {
                 Layout.alignment: Qt.AlignTop
 
                 Text {
-                    text: "Alert for these deal-tier combos, regardless of the droid."
+                    text: "Alert for these rarity and droid-class combos, regardless of the droid."
                     color: Theme.muted
                     font.family: Theme.bodyFont
                     font.pixelSize: 12
@@ -217,7 +217,7 @@ ScrollView {
                                     Layout.fillWidth: true
                                 }
                                 Text {
-                                    text: modelData.rarity
+                                    text: modelData.droidClass
                                     color: Theme.muted
                                     font.family: Theme.bodyFont
                                     font.pixelSize: 11

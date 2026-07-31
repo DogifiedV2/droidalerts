@@ -63,8 +63,6 @@ class Pipeline:
         self,
         template_dir: str | Path,
         thresholds: Thresholds | None = None,
-        *,
-        extra_checks: bool = False,
     ) -> None:
         thresholds = thresholds or Thresholds()
         self.thresholds = thresholds
@@ -72,7 +70,6 @@ class Pipeline:
             template_dir,
             rarity_threshold=thresholds.rarity_threshold,
             droid_threshold=thresholds.droid_threshold,
-            extra_checks=extra_checks,
         )
 
     def apply_thresholds(self, thresholds: Thresholds) -> None:

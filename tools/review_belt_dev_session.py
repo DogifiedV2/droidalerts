@@ -151,7 +151,7 @@ def _prompt_label(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Review physical tracks from a Belt Developer Mode session."
+        description="Review physical tracks from a Blueprint Collection session."
     )
     parser.add_argument(
         "session",
@@ -164,14 +164,14 @@ def main() -> int:
     if session is None:
         session = latest_dev_session(belt_dev_dir())
         if session is None:
-            parser.error("No Belt Developer Mode sessions were found")
+            parser.error("No Blueprint Collection sessions were found")
     session = session.expanduser().resolve()
     pending = pending_track_manifests(session)
     if not pending:
         print("No unreviewed physical tracks remain.")
         return 0
 
-    window = "Belt Developer Mode review"
+    window = "Blueprint Collection review"
     for index, manifest_path in enumerate(pending, start=1):
         manifest = load_track_manifest(manifest_path)
         name, family = predicted_track_label(manifest)

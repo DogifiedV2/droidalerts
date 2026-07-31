@@ -38,7 +38,8 @@ _FAMILY_WORD_HOG = cv2.HOGDescriptor(
     9,
 )
 
-_FAMILY_ORDER = ("Default", "Gold", "Diamond", "Rainbow", "Beskar")
+_LEGACY_FAMILY_ORDER = ("Default", "Gold", "Diamond", "Rainbow", "Beskar")
+_FAMILY_ORDER = (*_LEGACY_FAMILY_ORDER, "Galactic")
 _FAMILY_MINIMUM_MARGINS = {
     # Default is the most dangerous fallback: Gold/Beskar captures from the
     # audited bad-connection run repeatedly landed only 0.02-0.04 ahead of it.
@@ -51,6 +52,7 @@ _FAMILY_MINIMUM_MARGINS = {
     # keeps a held low-FPS Default frame from becoming a false Beskar alert;
     # later, clearer frames can still attach the family to the confirmed track.
     "Beskar": 0.020,
+    "Galactic": 0.015,
 }
 
 _DISTINCTIVE_BORDER_MIN_CONFIDENCE = 0.68
@@ -232,7 +234,7 @@ class BeltTemplateIndex:
             or self.family_words.shape[0] != family_count
             or self.family_histograms.shape[1] != 34
             or self.family_words.shape[1] != _FAMILY_WORD_HOG.getDescriptorSize()
-            or self.family_labels != _FAMILY_ORDER
+            or self.family_labels not in {_LEGACY_FAMILY_ORDER, _FAMILY_ORDER}
             or self.family_offsets.shape != (len(self.family_labels) + 1,)
             or int(self.family_offsets[0]) != 0
             or int(self.family_offsets[-1]) != family_count
@@ -312,11 +314,13 @@ class TemplateCardRecognizer:
         index_path: str | Path | None = None,
         config: TemplateRecognitionConfig | None = None,
         geometry_search_enabled: bool = True,
+        classify_rejected_attributes: bool = False,
     ) -> None:
         started = time.perf_counter()
         self.index = index or BeltTemplateIndex.load(index_path)
         self.config = config or TemplateRecognitionConfig()
         self.geometry_search_enabled = bool(geometry_search_enabled)
+        self.classify_rejected_attributes = bool(classify_rejected_attributes)
         self._geometry: tuple[float, float] | None = None
         self._geometry_misses = 0
         self.init_seconds = time.perf_counter() - started
@@ -944,12 +948,13 @@ class TemplateCardRecognizer:
         family_result = _FamilyResult()
         rarity = ""
         rarity_confidence = 0.0
-        if proposal.accepted:
+        if proposal.accepted or self.classify_rejected_attributes:
             family_result = self.classify_family_details(
                 frame_bgr,
                 name_box,
                 card_box,
             )
+        if proposal.accepted:
             rarity = droid_class(proposal.name)
             rarity_confidence = 1.0 if rarity else 0.0
 
@@ -1029,7 +1034,10 @@ class TemplateCardRecognizer:
             card_box,
         )
         distinctive_border = (
-            border_family in {"Gold", "Diamond", "Rainbow"}
+            # The bronze belt environment frequently fills the band below a
+            # Default card and looks Gold. Gold therefore relies on its printed
+            # family template. These three borders remain independently unique.
+            border_family in {"Diamond", "Rainbow", "Galactic"}
             and border_confidence >= _DISTINCTIVE_BORDER_MIN_CONFIDENCE
         )
 

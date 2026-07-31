@@ -11,7 +11,7 @@ from droid_alerts.alerts import AlertPolicy
 from droid_alerts.classifier import Detection
 from droid_alerts.config import AppConfig
 from droid_alerts.gui import ALERT_COMBOS
-from droid_alerts.notifications import alert_type_id, discord_color
+from droid_alerts.notifications import alert_title, alert_type_id, discord_color, event_text
 
 
 def _detection(droid: str = "Diamond", rarity: str = "Mythic") -> Detection:
@@ -74,9 +74,13 @@ def main() -> int:
         failures.append("Rainbow Epic should be disabled by default")
     if ("Rainbow", "Legendary") in default_config.targets:
         failures.append("Rainbow Legendary should be disabled by default")
-    expected_first_slots = (("Rainbow", "Epic"), ("Rainbow", "Legendary"), ("Beskar", "Epic"))
+    expected_first_slots = (
+        ("Rainbow", "Epic"),
+        ("Rainbow", "Legendary"),
+        ("Rainbow", "Mythic"),
+    )
     if ALERT_COMBOS[:3] != expected_first_slots:
-        failures.append("Rainbow Epic and Legendary should occupy the first two toggle slots")
+        failures.append("Rainbow priorities should occupy the first toggle group")
     enabled_epic_config = AppConfig(alert_targets=[["Rainbow", "Epic"]])
     if not AlertPolicy(enabled_epic_config).should_alert(rainbow_epic, "rainbow-epic-row"):
         failures.append("enabled Rainbow Epic target should fire")
@@ -162,7 +166,28 @@ class ChannelAlertConfigTests(unittest.TestCase):
         self.assertEqual("rebirth_available", alert_type_id(_source_detection(source="rebirth-alert")))
         self.assertEqual("belt_tracker", alert_type_id(_source_detection(source="belt-tracker")))
         self.assertEqual("limited_deals", alert_type_id(_source_detection(source="limited-deal")))
+        self.assertEqual(
+            "timer_reminder",
+            alert_type_id(
+                _source_detection(
+                    source="timer-reminder",
+                    droid="Mythic Timer",
+                    rarity="60",
+                )
+            ),
+        )
         self.assertEqual("chat:Beskar:Mythic", alert_type_id(_source_detection(source="watcher")))
+
+    def test_timer_reminder_has_channel_friendly_text(self):
+        detection = _source_detection(
+            source="timer-reminder",
+            droid="Mythic Timer",
+            rarity="60",
+        )
+
+        self.assertEqual("Mythic Timer in 60 seconds", event_text(detection))
+        self.assertEqual("Droid Alerts Timer Reminder", alert_title(detection))
+        self.assertEqual(0xFF3FA8, discord_color(detection))
 
 
 if __name__ == "__main__":

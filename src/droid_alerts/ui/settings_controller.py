@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -10,6 +11,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QFileDialog
 
 from ..alerts import WAKE_ALARM_FILE
+from ..belt.dev_capture import export_dev_session, latest_dev_session
 from ..belt.dev_logging import belt_dev_dir
 from ..belt.sample_collection import belt_template_samples_dir
 from ..capture import list_monitors
@@ -30,7 +32,6 @@ from .state import StateObject
 
 BOOLEAN_FIELDS = {
     "advanced_mode",
-    "extra_checks",
     "start_watcher_on_launch",
     "update_check_enabled",
     "wake_alarm_enabled",
@@ -327,6 +328,43 @@ class SettingsController(StateObject):
         }.get(name)
         if path is not None:
             self.runtime.open_path(path)
+
+    @Slot()
+    def exportBeltCollection(self) -> None:
+        session = latest_dev_session(belt_dev_dir())
+        if session is None:
+            self.runtime.dialogs.show_message(
+                "Export Blueprint Collection",
+                "No Blueprint Collection session has been recorded yet.",
+            )
+            return
+        try:
+            manifest = json.loads(
+                (session / "capture_manifest.json").read_text(encoding="utf-8")
+            )
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            manifest = {}
+        if not isinstance(manifest, dict) or not manifest.get("stopped_at"):
+            self.runtime.dialogs.show_message(
+                "Export Blueprint Collection",
+                "Stop Belt Tracker before exporting so every crop is included.",
+            )
+            return
+        try:
+            output = export_dev_session(session)
+        except Exception as exc:
+            self.runtime.dialogs.show_message(
+                "Export Blueprint Collection",
+                str(exc),
+                tone="danger",
+            )
+            return
+        self.runtime.dialogs.show_message(
+            "Blueprint Collection Exported",
+            "The latest collection is ready to share.",
+            note=str(output),
+        )
+        self.runtime.open_path(output.parent)
 
     @Slot()
     def identifyDisplays(self) -> None:

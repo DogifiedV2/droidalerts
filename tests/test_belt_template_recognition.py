@@ -79,7 +79,7 @@ def synthetic_index() -> BeltTemplateIndex:
     identity_hog = np.stack(
         [identity_features(patterned_art(index + 1)) for index, _name in enumerate(DROID_NAMES)]
     )
-    family_cards = [card(index + 100) for index in range(5)]
+    family_cards = [card(index + 100) for index in range(6)]
     family_descriptors = [family_features(image) for image in family_cards]
     return BeltTemplateIndex(
         identity_hog=identity_hog,
@@ -87,8 +87,8 @@ def synthetic_index() -> BeltTemplateIndex:
         identity_name_offsets=np.arange(len(DROID_NAMES) + 1, dtype=np.int32),
         family_histograms=np.stack([item[0] for item in family_descriptors]),
         family_words=np.stack([item[1] for item in family_descriptors]),
-        family_labels=("Default", "Gold", "Diamond", "Rainbow", "Beskar"),
-        family_offsets=np.arange(6, dtype=np.int32),
+        family_labels=("Default", "Gold", "Diamond", "Rainbow", "Beskar", "Galactic"),
+        family_offsets=np.arange(7, dtype=np.int32),
         card_width_ratio=CARD_WIDTH / HEIGHT,
         art_left_ratio=ART_X / HEIGHT,
         art_top_ratio=ART_Y / HEIGHT,
@@ -105,6 +105,7 @@ class CardFamilyBorderTests(unittest.TestCase):
             "Gold": [(18, 220, 220)],
             "Diamond": [(90, 220, 220)],
             "Rainbow": [(18, 220, 220), (90, 220, 220), (135, 220, 220)],
+            "Galactic": [(140, 220, 220)],
             "Default": [(0, 0, 180)],
             "Beskar": [(90, 30, 180)],
         }
@@ -122,7 +123,7 @@ class CardFamilyBorderTests(unittest.TestCase):
                     ],
                 )
                 family, confidence = classify_card_family_border(frame, name_box, card_box)
-                if expected in {"Gold", "Diamond", "Rainbow"}:
+                if expected in {"Gold", "Diamond", "Rainbow", "Galactic"}:
                     self.assertEqual(expected, family)
                     self.assertGreater(confidence, 0.5)
                 else:
@@ -177,7 +178,10 @@ class BeltTemplateIndexTests(unittest.TestCase):
         self.assertEqual(belt_template_index_path(), BASE_DIR / "templates" / "belt_blueprints.npz")
         self.assertEqual(tuple(DROID_NAMES), index.identity_names)
         self.assertGreaterEqual(index.identity_hog.shape[0], len(DROID_NAMES) * 6)
-        self.assertEqual(5, len(index.family_labels))
+        self.assertEqual(
+            ("Default", "Gold", "Diamond", "Rainbow", "Beskar", "Galactic"),
+            index.family_labels,
+        )
 
 
 class TemplateCardRecognizerTests(unittest.TestCase):
@@ -467,6 +471,38 @@ class TemplateCardRecognizerTests(unittest.TestCase):
 
         self.assertEqual("", family)
         self.assertEqual(0.0, confidence)
+
+    def test_bronze_background_cannot_override_default_template_as_gold(self):
+        index = synthetic_index()
+        histograms = np.zeros_like(index.family_histograms)
+        words = np.zeros_like(index.family_words)
+        words[0, 0] = 1.0
+        words[1, 0] = 0.5
+        recognizer = TemplateCardRecognizer(
+            replace(index, family_histograms=histograms, family_words=words)
+        )
+        query_histogram = np.zeros(histograms.shape[1], dtype=np.float32)
+        query_word = np.zeros(words.shape[1], dtype=np.float32)
+        query_word[0] = 1.0
+
+        with (
+            patch(
+                "droid_alerts.belt.template_recognition.classify_card_family_border",
+                return_value=("Gold", 1.0),
+            ),
+            patch(
+                "droid_alerts.belt.template_recognition.family_features",
+                return_value=(query_histogram, query_word),
+            ),
+        ):
+            family, confidence = recognizer._classify_family(
+                card(1),
+                (ART_X, 168, 120, 28),
+                (0, 0, CARD_WIDTH, HEIGHT),
+            )
+
+        self.assertEqual("Default", family)
+        self.assertGreater(confidence, 0.8)
 
     def test_distinctive_border_needs_a_well_separated_matching_template(self):
         index = synthetic_index()

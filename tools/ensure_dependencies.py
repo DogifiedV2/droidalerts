@@ -31,7 +31,16 @@ def required_modules() -> tuple[str, ...]:
     if sys.platform == "win32":
         modules.extend(("windows_capture", "cv2_enumerate_cameras"))
     elif sys.platform == "darwin":
-        modules.append("AppKit")
+        modules.extend(
+            (
+                "AppKit",
+                "Quartz",
+                "ScreenCaptureKit",
+                "cv2_enumerate_cameras",
+            )
+        )
+    elif sys.platform.startswith("linux"):
+        modules.extend(("Xlib", "cv2_enumerate_cameras"))
     return tuple(modules)
 
 
@@ -46,7 +55,16 @@ def required_distributions() -> tuple[str, ...]:
     if sys.platform == "win32":
         distributions.extend(("windows-capture", "cv2-enumerate-cameras"))
     elif sys.platform == "darwin":
-        distributions.append("pyobjc-framework-Cocoa")
+        distributions.extend(
+            (
+                "pyobjc-framework-Cocoa",
+                "pyobjc-framework-Quartz",
+                "pyobjc-framework-ScreenCaptureKit",
+                "cv2-enumerate-cameras",
+            )
+        )
+    elif sys.platform.startswith("linux"):
+        distributions.extend(("python-xlib", "cv2-enumerate-cameras"))
     return tuple(distributions)
 
 

@@ -44,7 +44,9 @@ from .logging_io import alert_samples_dir, append_event_safely, debug_dir, times
 from .notifications import (
     AlertDelivery,
     enabled_alert_deliveries,
+    event_text,
     load_discord_webhook,
+    load_discord_webhook_for_detection,
     load_phone_alert_credentials,
     ntfy_configured,
     send_discord_alert,
@@ -182,7 +184,7 @@ def run_watch(
         monitor_key=getattr(_capture_area(capture), "key", None),
     )
     box, region_source = resolver.resolve()
-    pipeline = Pipeline(templates_dir(), config.thresholds, extra_checks=config.extra_checks)
+    pipeline = Pipeline(templates_dir(), config.thresholds)
     policy = AlertPolicy(config)
     webhook_url = None
     phone_credentials = None
@@ -193,28 +195,7 @@ def run_watch(
     )
     print(f"Region [{region_source}]: left={box.left} top={box.top} w={box.width} h={box.height}")
     print(f"Targets: {sorted(config.targets)}")
-    print(f"Extra checks (washed-out colors/HDR): {'ENABLED' if config.extra_checks else 'DISABLED'}")
     print(f"Popup alerts: {'ENABLED' if config.popup_enabled else 'DISABLED'}")
-    # The GUI manages the Droid Timers overlay itself; the CLI watcher spawns
-    # a standalone one so `python main.py watch` gets it too.
-    if config.droid_timers_enabled and popup_parent is None:
-        from .timers import start_droid_timers_thread
-
-        start_droid_timers_thread(
-            stop_event,
-            scale=config.droid_timers_scale,
-            center_x_ratio=config.droid_timers_center_x,
-            top_y_ratio=config.droid_timers_top_y,
-            monitor=getattr(capture, "monitor", None),
-            reminders_enabled=config.timer_reminders_enabled,
-            reminder_seconds=config.timer_reminder_seconds,
-            offset_seconds=config.timer_offset_seconds,
-        )
-        print("Droid Timers overlay: ENABLED")
-    elif config.droid_timers_enabled:
-        print("Droid Timers overlay: ENABLED (GUI-managed)")
-    else:
-        print("Droid Timers overlay: DISABLED")
     if config.discord_enabled:
         try:
             webhook_url, webhook_source = load_discord_webhook(config)
@@ -322,10 +303,21 @@ def run_watch(
                     opacity=config.popup_opacity,
                 )
 
+        selected_webhook_url = webhook_url
+        if config.discord_enabled:
+            try:
+                selected_webhook_url, _ = load_discord_webhook_for_detection(
+                    config,
+                    detection,
+                    fallback_url=webhook_url,
+                )
+            except Exception as exc:
+                print(f"[DISCORD] Failed to select webhook: {exc}")
+
         deliveries = enabled_alert_deliveries(
             config,
             detection,
-            webhook_url=webhook_url,
+            webhook_url=selected_webhook_url,
             phone_credentials=phone_credentials,
             ntfy_ready=config.ntfy_enabled and ntfy_configured(config),
             attachment_path=attachment_path,
@@ -339,6 +331,53 @@ def run_watch(
                 args=(delivery, event),
                 daemon=True,
             ).start()
+
+    def fire_timer_reminder(kind: str, remaining: int) -> None:
+        from .timers import timer_reminder_detection
+
+        detection = timer_reminder_detection(kind, remaining)
+        event: dict[str, object] = {
+            "ts": timestamp(),
+            "event_type": "alert",
+            "frame": frame_index,
+            "screen_width": screen_w,
+            "screen_height": screen_h,
+            "monitor_index": active_capture_config.monitor_index,
+            "capture_source": active_capture_config.capture_source,
+            "timer_kind": str(kind).lower(),
+            "timer_remaining_seconds": max(0, int(remaining)),
+            "alerted": True,
+            **detection.to_dict(),
+        }
+        event["is_priority"] = True
+        event["should_alert"] = True
+        log_event(event)
+        emit("alert", event=event)
+        print(f"[ALERT] {event['ts']} {event_text(detection)}")
+        dispatch_alert_channels(detection, event, attachment_path=None)
+
+    # The GUI owns its overlay and supplies its reminder callback. The CLI
+    # watcher uses a standalone Qt process and bridges reminders back here.
+    gui_managed_timers = popup_callback is not None or popup_parent is not None
+    if config.droid_timers_enabled and not gui_managed_timers:
+        from .timers import start_droid_timers_thread
+
+        start_droid_timers_thread(
+            stop_event,
+            scale=config.droid_timers_scale,
+            center_x_ratio=config.droid_timers_center_x,
+            top_y_ratio=config.droid_timers_top_y,
+            monitor=getattr(capture, "monitor", None),
+            reminders_enabled=config.timer_reminders_enabled,
+            reminder_seconds=config.timer_reminder_seconds,
+            offset_seconds=config.timer_offset_seconds,
+            on_reminder=fire_timer_reminder,
+        )
+        print("Droid Timers overlay: ENABLED")
+    elif config.droid_timers_enabled:
+        print("Droid Timers overlay: ENABLED (GUI-managed)")
+    else:
+        print("Droid Timers overlay: DISABLED")
 
     def fire_rebirth_available_alert(
         match: RebirthMatch,
@@ -669,7 +708,6 @@ def run_watch(
                     policy.apply_config(config)
                     telemetry.apply_config(config)
                     pipeline.apply_thresholds(config.thresholds)
-                    pipeline.detector.extra_checks = config.extra_checks
                     log_dedupe_seconds = max(12.0, config.dedupe_seconds)
                     if not config.rebirth_alert_enabled:
                         rebirth_available_gate.reset()

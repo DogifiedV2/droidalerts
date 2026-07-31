@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import multiprocessing
+import queue
 import sys
 import threading
 from collections.abc import Callable
@@ -11,6 +12,7 @@ from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from .capture import MonitorInfo
+from .classifier import Detection
 from .config import AppConfig, save_config
 from .popup import RARITY_COLORS
 from .timer_sync import TIMER_SCHEDULE_CLOCK
@@ -53,6 +55,20 @@ TEXT = "#e9f1f7"
 MUTED = "#8ba0ae"
 ACCENT = "#39c6d8"
 WARNING = "#f4b942"
+
+
+def timer_reminder_detection(kind: str, remaining: int) -> Detection:
+    label = TIMER_LABELS.get(str(kind).lower(), str(kind)).title()
+    return Detection(
+        droid=f"{label} Timer",
+        rarity=str(max(0, int(remaining))),
+        row_box=(0, 0, 0, 0),
+        droid_score=1.0,
+        rarity_score=1.0,
+        rarity_margin=1.0,
+        score=1.0,
+        source="timer-reminder",
+    )
 
 
 def _edit_bar_row_bounds(card_top: int, scale: float) -> tuple[int, int, int, int]:
@@ -193,10 +209,19 @@ class DroidTimersOverlay(QWidget):
             max(0.0, (self.y() - screen.top()) / max(1, screen.height())),
         )
 
-    def _font(self, pixels: int, *, bold: bool = False) -> QFont:
+    def _font(
+        self,
+        points: int,
+        *,
+        bold: bool = False,
+        minimum_points: int = 7,
+    ) -> QFont:
         family = "Segoe UI" if sys.platform == "win32" else "Avenir Next"
         font = QFont(family)
-        font.setPixelSize(max(8, round(pixels * self.scale)))
+        # The 1.3.9 Tk overlay specified its fonts in points. The Qt port used
+        # raw pixels instead, making both labels and countdowns much smaller
+        # on scaled Windows displays.
+        font.setPointSizeF(max(minimum_points, points * self.scale))
         font.setWeight(QFont.Weight.Bold if bold else QFont.Weight.Medium)
         return font
 
@@ -256,14 +281,14 @@ class DroidTimersOverlay(QWidget):
                 )
             remaining = self._remaining.get(kind, 0)
             color = WARNING if remaining <= 60 else TIMER_COLORS[kind]
-            painter.setFont(self._font(10, bold=True))
+            painter.setFont(self._font(12, bold=True))
             painter.setPen(QColor(color))
             painter.drawText(
                 QRect(left, round(10 * self.scale), right - left, round(22 * self.scale)),
                 Qt.AlignmentFlag.AlignCenter,
                 TIMER_LABELS[kind],
             )
-            painter.setFont(self._font(24, bold=True))
+            painter.setFont(self._font(19, bold=True, minimum_points=9))
             painter.setPen(QColor(TEXT))
             painter.drawText(
                 QRect(left, round(29 * self.scale), right - left, round(33 * self.scale)),
@@ -299,7 +324,7 @@ class DroidTimersOverlay(QWidget):
 
         if not self.edit_mode:
             return
-        painter.setFont(self._font(10, bold=True))
+        painter.setFont(self._font(11, bold=True, minimum_points=8))
         for key, rect in self._button_rects().items():
             painter.setBrush(QColor("#17323a" if key == "done" else "#182330"))
             painter.setPen(QPen(QColor(ACCENT), 1))
@@ -333,10 +358,8 @@ class DroidTimersOverlay(QWidget):
         if self._on_reminder is not None:
             try:
                 self._on_reminder(kind, remaining)
-                return
             except Exception as exc:
                 print(f"[TIMERS] Reminder callback failed: {exc}")
-        QApplication.beep()
 
     def _tick(self) -> None:
         if self._stop_event is not None and self._stop_event.is_set():
@@ -450,6 +473,8 @@ def _layout_saver(config: AppConfig) -> Callable[[float, float, float], None]:
 def show_droid_timers(
     config: AppConfig,
     monitor: MonitorInfo | None = None,
+    *,
+    on_reminder: Callable[[str, int], None] | None = None,
 ) -> DroidTimersOverlay | None:
     """Show or refresh the GUI-managed Qt timer strip."""
     global _ACTIVE_TIMER_OVERLAY
@@ -467,6 +492,7 @@ def show_droid_timers(
         reminders_enabled=config.timer_reminders_enabled,
         reminder_seconds=config.timer_reminder_seconds,
         offset_seconds=config.timer_offset_seconds,
+        on_reminder=on_reminder,
     )
     _ACTIVE_TIMER_OVERLAY = overlay
     overlay.show()
@@ -481,10 +507,14 @@ def hide_droid_timers() -> None:
         _ACTIVE_TIMER_OVERLAY = None
 
 
-def adjust_droid_timers(config: AppConfig) -> DroidTimersOverlay | None:
+def adjust_droid_timers(
+    config: AppConfig,
+    *,
+    on_reminder: Callable[[str, int], None] | None = None,
+) -> DroidTimersOverlay | None:
     overlay = _ACTIVE_TIMER_OVERLAY
     if overlay is None or not overlay.alive:
-        overlay = show_droid_timers(config)
+        overlay = show_droid_timers(config, on_reminder=on_reminder)
     if overlay is not None:
         overlay.enter_edit_mode()
     return overlay
@@ -499,6 +529,7 @@ def _run_standalone_timer_overlay(
     reminders_enabled: bool,
     reminder_seconds: int,
     offset_seconds: int,
+    reminder_queue,
 ) -> None:
     app = QApplication([])
     overlay = DroidTimersOverlay(
@@ -510,6 +541,11 @@ def _run_standalone_timer_overlay(
         reminders_enabled=reminders_enabled,
         reminder_seconds=reminder_seconds,
         offset_seconds=offset_seconds,
+        on_reminder=(
+            (lambda kind, remaining: reminder_queue.put((kind, remaining)))
+            if reminder_queue is not None
+            else None
+        ),
     )
     overlay.show()
     app.exec()
@@ -537,10 +573,12 @@ def start_droid_timers_thread(
     reminders_enabled: bool = False,
     reminder_seconds: int = 60,
     offset_seconds: int = 0,
+    on_reminder: Callable[[str, int], None] | None = None,
 ) -> _StandaloneTimerHandle:
     """Start the CLI overlay in its own process so Qt stays on a main thread."""
     context = multiprocessing.get_context("spawn")
     process_stop = context.Event()
+    reminder_queue = context.Queue() if on_reminder is not None else None
     process = context.Process(
         target=_run_standalone_timer_overlay,
         args=(
@@ -552,20 +590,35 @@ def start_droid_timers_thread(
             reminders_enabled,
             reminder_seconds,
             offset_seconds,
+            reminder_queue,
         ),
         name="DroidAlertsTimers",
         daemon=True,
     )
     process.start()
     bridge = None
-    if stop_event is not None:
-        def relay_stop() -> None:
-            stop_event.wait()
-            process_stop.set()
+    if stop_event is not None or reminder_queue is not None:
+        def relay_events() -> None:
+            while process.is_alive():
+                if stop_event is not None and stop_event.is_set():
+                    process_stop.set()
+                    return
+                if reminder_queue is None:
+                    process.join(0.1)
+                    continue
+                try:
+                    kind, remaining = reminder_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if on_reminder is not None:
+                    try:
+                        on_reminder(str(kind), int(remaining))
+                    except Exception as exc:
+                        print(f"[TIMERS] Reminder delivery failed: {exc}")
 
         bridge = threading.Thread(
-            target=relay_stop,
-            name="droid-timers-stop",
+            target=relay_events,
+            name="droid-timers-bridge",
             daemon=True,
         )
         bridge.start()
@@ -585,4 +638,5 @@ __all__ = [
     "seconds_until_next",
     "show_droid_timers",
     "start_droid_timers_thread",
+    "timer_reminder_detection",
 ]

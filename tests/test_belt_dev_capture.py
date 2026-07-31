@@ -70,8 +70,8 @@ def card_candidate(
         context=context,
         accepted=accepted,
         reason=reason,
-        family=family if accepted else "",
-        family_confidence=0.92 if accepted else 0.0,
+        family=family,
+        family_confidence=0.92,
         rarity="Epic",
         rarity_confidence=1.0,
         raw_best_similarity=0.91 if accepted else 0.78,
@@ -138,15 +138,29 @@ class BeltDevCaptureTests(unittest.TestCase):
             self.assertEqual(3, manifest["summary"]["observation_count"])
             self.assertEqual(3, manifest["summary"]["accepted_count"])
             self.assertEqual({"R2": 3}, manifest["summary"]["predicted_names"])
+            self.assertEqual("identified", manifest["summary"]["identity_status"])
+            self.assertEqual("R2", manifest["summary"]["detected_name"])
+            self.assertEqual("Gold", manifest["summary"]["detected_rarity"])
+            self.assertEqual("Epic", manifest["summary"]["detected_class"])
             self.assertEqual([7], manifest["production_track_ids"])
             self.assertTrue(manifest["tracker_events"][0]["alerted"])
             self.assertGreaterEqual(len(manifest["frames"]), 2)
+            self.assertIn(
+                "detected-r2__rarity-gold__class-epic",
+                manifest_path.parent.name,
+            )
+            self.assertTrue(
+                all(
+                    "detected-r2__rarity-gold__class-epic" in frame["image"]
+                    for frame in manifest["frames"]
+                )
+            )
 
-    def test_rejected_identity_candidates_are_saved_for_review(self):
+    def test_rejected_identity_candidates_are_not_saved_automatically(self):
         with tempfile.TemporaryDirectory() as directory:
             session = Path(directory) / "session_rejected"
             recorder = BeltDevCaptureRecorder(session)
-            for frame_number, x in enumerate((70, 100), start=1):
+            for frame_number, x in enumerate((70, 140, 210), start=1):
                 frame = np.full((260, 640, 3), 20, dtype=np.uint8)
                 recorder.observe(
                     frame,
@@ -162,20 +176,16 @@ class BeltDevCaptureTests(unittest.TestCase):
                     now=float(frame_number),
                     frame_number=frame_number,
                 )
-            recorder.close()
+            status = recorder.close()
 
-            manifest_path = next(
-                (session / "tracks").glob("track_*/manifest.json")
-            )
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(0, manifest["summary"]["accepted_count"])
+            self.assertEqual(0, status["written_blueprints"])
+            self.assertEqual(1, status["filtered_tracks"])
             self.assertEqual(
-                {"ambiguous_template_identity": 2},
-                manifest["summary"]["rejection_reasons"],
+                [],
+                list((session / "tracks").glob("track_*/manifest.json")),
             )
-            self.assertTrue(manifest["frames"])
 
-    def test_static_rejected_hud_hypothesis_does_not_fill_review_queue(self):
+    def test_static_rejected_candidate_does_not_fill_collection(self):
         with tempfile.TemporaryDirectory() as directory:
             session = Path(directory) / "session_static"
             recorder = BeltDevCaptureRecorder(session)
@@ -197,12 +207,36 @@ class BeltDevCaptureTests(unittest.TestCase):
                 )
             status = recorder.close()
 
-            self.assertEqual(0, status["written_tracks"])
+            self.assertEqual(0, status["written_blueprints"])
             self.assertEqual(1, status["filtered_tracks"])
             self.assertEqual(
                 [],
                 list((session / "tracks").glob("track_*/manifest.json")),
             )
+
+    def test_single_frame_unknown_is_filtered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = Path(directory) / "session_single_unknown"
+            recorder = BeltDevCaptureRecorder(session)
+            frame = np.full((260, 640, 3), 20, dtype=np.uint8)
+            recorder.observe(
+                frame,
+                (
+                    card_candidate(
+                        frame,
+                        x=70,
+                        accepted=False,
+                        reason="ambiguous_template_identity",
+                    ),
+                ),
+                {},
+                now=1.0,
+                frame_number=1,
+            )
+            status = recorder.close()
+
+            self.assertEqual(0, status["written_blueprints"])
+            self.assertEqual(1, status["filtered_tracks"])
 
     def test_slow_cpu_timeout_keeps_two_real_scans_in_one_track(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -270,13 +304,11 @@ class BeltDevCaptureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             session = Path(directory) / "session_art_split"
             recorder = BeltDevCaptureRecorder(session)
-            for frame_number, x in ((1, 60), (2, 100)):
+            for frame_number, x in ((1, 60), (2, 120), (3, 180)):
                 frame = np.full((260, 640, 3), 20, dtype=np.uint8)
                 candidate = card_candidate(
                     frame,
                     x=x,
-                    accepted=False,
-                    reason="ambiguous_template_identity",
                 )
                 recorder.observe(
                     frame,
@@ -285,14 +317,12 @@ class BeltDevCaptureTests(unittest.TestCase):
                     now=float(frame_number),
                     frame_number=frame_number,
                 )
-            for frame_number, x in ((3, 65), (4, 105)):
+            for frame_number, x in ((4, 65), (5, 125), (6, 185)):
                 frame = np.full((260, 640, 3), 20, dtype=np.uint8)
                 candidate = card_candidate(
                     frame,
                     x=x,
                     name="ARG",
-                    accepted=False,
-                    reason="ambiguous_template_identity",
                 )
                 art_x, art_y, art_width, art_height = candidate.context.art_box
                 art = frame[
@@ -335,8 +365,9 @@ class BeltDevCaptureTests(unittest.TestCase):
                 card_width = max(55, round(card_height * 0.68))
                 x = round(belt_width * 0.18)
                 y = max(2, round((belt_height - card_height) * 0.5))
+                session_name = f"session_{case.name.replace(':', '-')}"
                 recorder = BeltDevCaptureRecorder(
-                    Path(directory) / f"session_{case.name}",
+                    Path(directory) / session_name,
                     maximum_saved_crops=1,
                 )
                 recorder.observe(
@@ -357,7 +388,7 @@ class BeltDevCaptureTests(unittest.TestCase):
                 recorder.close()
 
                 manifest_path = next(
-                    (Path(directory) / f"session_{case.name}" / "tracks").glob(
+                    (Path(directory) / session_name / "tracks").glob(
                         "track_*/manifest.json"
                     )
                 )

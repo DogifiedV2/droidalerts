@@ -20,7 +20,10 @@ from droid_alerts.config import AppConfig
 from droid_alerts.window_capture import (
     WindowDescriptor,
     WindowsGraphicsCapture,
+    X11WindowCapture,
+    _macos_window_image,
     resolve_capture_window,
+    window_capture_available,
     window_capture_key,
 )
 
@@ -111,10 +114,10 @@ class WindowSelectionTests(unittest.TestCase):
             AppConfig.from_dict({"capture_source": "window"}).capture_source,
         )
 
-    def test_capture_factory_routes_window_metadata_to_wgc(self):
+    def test_capture_factory_routes_window_metadata_to_platform_backend(self):
         expected = object()
         with patch(
-            "droid_alerts.window_capture.WindowsGraphicsCapture",
+            "droid_alerts.window_capture.create_window_capture",
             return_value=expected,
         ) as window_capture:
             result = capture_module.create_capture(
@@ -132,6 +135,27 @@ class WindowSelectionTests(unittest.TestCase):
             class_name="UnrealWindow",
             monitor_index=2,
         )
+
+    def test_window_availability_rejects_wayland_but_accepts_x11(self):
+        with (
+            patch("droid_alerts.window_capture.sys.platform", "linux"),
+            patch.dict(
+                "droid_alerts.window_capture.os.environ",
+                {"XDG_SESSION_TYPE": "wayland", "DISPLAY": ":0"},
+                clear=True,
+            ),
+        ):
+            self.assertFalse(window_capture_available())
+
+        with (
+            patch("droid_alerts.window_capture.sys.platform", "linux"),
+            patch.dict(
+                "droid_alerts.window_capture.os.environ",
+                {"XDG_SESSION_TYPE": "x11", "DISPLAY": ":0"},
+                clear=True,
+            ),
+        ):
+            self.assertTrue(window_capture_available())
 
     def test_missing_monitor_capture_fails_instead_of_watching_monitor_one(self):
         fake_mss = SimpleNamespace(
@@ -229,6 +253,106 @@ class WindowFrameTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "No new Fortnite frame arrived"),
         ):
             capture.grab(PixelBox(2, 1, 3, 2))
+
+    def test_x11_backing_pixels_are_returned_as_bgr(self):
+        capture = X11WindowCapture.__new__(X11WindowCapture)
+        expected = np.arange(2 * 3 * 4, dtype=np.uint8).reshape(2, 3, 4)
+        capture._native_window = SimpleNamespace(
+            get_image=lambda *_args: SimpleNamespace(data=expected.tobytes())
+        )
+        xlib = SimpleNamespace(X=SimpleNamespace(ZPixmap=2))
+
+        with patch.dict(sys.modules, {"Xlib": xlib}):
+            result = capture._grab_window_pixels(PixelBox(0, 0, 3, 2))
+
+        np.testing.assert_array_equal(expected[:, :, :3], result)
+
+    def test_macos_image_conversion_removes_alpha_channel(self):
+        expected = np.arange(2 * 3 * 4, dtype=np.uint8).reshape(2, 3, 4)
+        quartz = SimpleNamespace(
+            CGRectNull=object(),
+            kCGWindowListOptionIncludingWindow=1,
+            kCGWindowImageBoundsIgnoreFraming=2,
+            kCGWindowImageBestResolution=4,
+            CGWindowListCreateImage=lambda *_args: object(),
+            CGImageGetWidth=lambda _image: 3,
+            CGImageGetHeight=lambda _image: 2,
+            CGImageGetBytesPerRow=lambda _image: 12,
+            CGImageGetDataProvider=lambda _image: object(),
+            CGDataProviderCopyData=lambda _provider: expected.tobytes(),
+        )
+
+        with patch.dict(sys.modules, {"Quartz": quartz}):
+            result = _macos_window_image(42)
+
+        np.testing.assert_array_equal(expected[:, :, :3], result)
+
+    def test_macos_prefers_screencapturekit_for_window_images(self):
+        expected = np.arange(2 * 3 * 4, dtype=np.uint8).reshape(2, 3, 4)
+        cg_image = object()
+        quartz = SimpleNamespace(
+            CGImageGetWidth=lambda image: 3 if image is cg_image else 0,
+            CGImageGetHeight=lambda image: 2 if image is cg_image else 0,
+            CGImageGetBytesPerRow=lambda image: 12 if image is cg_image else 0,
+            CGImageGetDataProvider=lambda _image: object(),
+            CGDataProviderCopyData=lambda _provider: expected.tobytes(),
+        )
+        window = SimpleNamespace(
+            windowID=lambda: 42,
+            frame=lambda: SimpleNamespace(
+                size=SimpleNamespace(width=3, height=2)
+            ),
+        )
+        content = SimpleNamespace(windows=lambda: [window])
+
+        class ShareableContent:
+            @staticmethod
+            def getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler_(
+                _exclude_desktop,
+                _on_screen_only,
+                handler,
+            ):
+                handler(content, None)
+
+        content_filter = SimpleNamespace(
+            initWithDesktopIndependentWindow_=lambda _window: object()
+        )
+        configuration = SimpleNamespace(
+            setWidth_=Mock(),
+            setHeight_=Mock(),
+            setShowsCursor_=Mock(),
+        )
+        manager = SimpleNamespace(
+            captureImageWithFilter_configuration_completionHandler_=(
+                lambda _filter, _configuration, handler: handler(
+                    cg_image,
+                    None,
+                )
+            )
+        )
+        screen_capture_kit = SimpleNamespace(
+            SCShareableContent=ShareableContent,
+            SCContentFilter=SimpleNamespace(
+                alloc=lambda: content_filter,
+            ),
+            SCStreamConfiguration=SimpleNamespace(
+                alloc=lambda: SimpleNamespace(init=lambda: configuration),
+            ),
+            SCScreenshotManager=manager,
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "Quartz": quartz,
+                "ScreenCaptureKit": screen_capture_kit,
+            },
+        ):
+            result = _macos_window_image(42)
+
+        np.testing.assert_array_equal(expected[:, :, :3], result)
+        configuration.setWidth_.assert_called_once_with(6)
+        configuration.setHeight_.assert_called_once_with(4)
 
 
 if __name__ == "__main__":

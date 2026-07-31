@@ -14,7 +14,7 @@ from droid_alerts.belt.dev_logging import belt_dev_dir
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Export a complete Belt Tracker Developer Mode session."
+        description="Export a complete Belt Tracker Blueprint Collection session."
     )
     parser.add_argument(
         "session",
@@ -28,9 +28,9 @@ def main() -> int:
     if session is None:
         session = latest_dev_session(belt_dev_dir())
         if session is None:
-            parser.error("No Belt Developer Mode sessions were found")
+            parser.error("No Blueprint Collection sessions were found")
     output = export_dev_session(session, arguments.output)
-    print(f"Belt Developer Mode export: {output}")
+    print(f"Blueprint Collection export: {output}")
     return 0
 
 

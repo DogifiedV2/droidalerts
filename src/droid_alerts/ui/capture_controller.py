@@ -22,7 +22,10 @@ from ..device_capture import (
 from ..window_capture import (
     WINDOW_CAPTURE_EXPLANATION,
     list_capture_windows,
+    resolve_capture_window,
+    window_capture_available,
     window_capture_key,
+    window_capture_unavailable_reason,
 )
 from .runtime import ApplicationRuntime
 from .state import StateObject
@@ -34,6 +37,13 @@ class CaptureController(StateObject):
     sourceChanged = Signal()
     displayGeometryChanged = Signal(bool)
 
+    @staticmethod
+    def _device_capture_available() -> bool:
+        return (
+            sys.platform in {"win32", "darwin"}
+            or sys.platform.startswith("linux")
+        )
+
     def __init__(
         self,
         runtime: ApplicationRuntime,
@@ -44,6 +54,7 @@ class CaptureController(StateObject):
         self._monitors_by_key: dict[str, Any] = {}
         self._windows_by_key: dict[str, Any] = {}
         self._devices_by_key: dict[str, Any] = {}
+        self._window_sizes: dict[str, tuple[int, int]] = {}
         self._display_geometry_signature: (
             tuple[tuple[int, int, int, int, int], ...] | None
         ) = None
@@ -54,8 +65,16 @@ class CaptureController(StateObject):
                 "sourceDetail": "",
                 "monitorKey": "",
                 "monitors": [],
-                "windowCaptureAvailable": sys.platform == "win32",
-                "deviceCaptureAvailable": sys.platform == "win32",
+                "windowCaptureAvailable": window_capture_available(),
+                "windowCaptureUnavailableReason": (
+                    "" if window_capture_available()
+                    else window_capture_unavailable_reason()
+                ),
+                "deviceCaptureAvailable": self._device_capture_available(),
+                "deviceCaptureUnavailableReason": (
+                    "" if self._device_capture_available()
+                    else "Capture devices are not available on this platform."
+                ),
                 "busy": False,
             },
             parent=parent,
@@ -236,10 +255,10 @@ class CaptureController(StateObject):
 
     @Slot()
     def chooseWindow(self) -> None:
-        if sys.platform != "win32":
+        if not window_capture_available():
             self.runtime.dialogs.show_message(
                 "Select Window",
-                "Window capture is available in the Windows app.",
+                window_capture_unavailable_reason(),
             )
             return
         self.update_state(busy=True)
@@ -252,7 +271,7 @@ class CaptureController(StateObject):
             if error is not None:
                 self.runtime.dialogs.show_message(
                     "Select Window",
-                    f"Windows could not be listed: {error}",
+                    f"Capture windows could not be listed: {error}",
                     tone="danger",
                 )
                 return
@@ -275,11 +294,26 @@ class CaptureController(StateObject):
                     "No selectable windows were found. Open Fortnite and try again.",
                 )
                 return
+            if sys.platform == "win32":
+                note = (
+                    "Keep Fortnite restored. Windows can pause capture while "
+                    "it is minimized."
+                )
+            elif sys.platform == "darwin":
+                note = (
+                    "Allow Screen Recording access when macOS asks. Minimized "
+                    "windows cannot be captured."
+                )
+            else:
+                note = (
+                    "X11 covered-window capture depends on the window manager. "
+                    "Keep Fortnite visible if frames appear blank."
+                )
             self.runtime.dialogs.choices(
                 "Select Window",
                 WINDOW_CAPTURE_EXPLANATION,
                 options,
-                note="Keep Fortnite restored. Windows can pause capture while it is minimized.",
+                note=note,
                 accept_text="Use window",
                 callback=self._apply_window_choice,
             )
@@ -333,6 +367,12 @@ class CaptureController(StateObject):
             self.refresh()
             self.sourceChanged.emit()
             width, height = result
+            selector_key = window_capture_key(
+                title=window.title,
+                process_name=window.process_name,
+                class_name=window.class_name,
+            )
+            self._window_sizes[selector_key] = (int(width), int(height))
             self.runtime.detailChanged.emit(
                 f'Capturing "{window.title}" at {width} × {height}'
             )
@@ -341,10 +381,10 @@ class CaptureController(StateObject):
 
     @Slot()
     def chooseDevice(self) -> None:
-        if sys.platform != "win32":
+        if not self._device_capture_available():
             self.runtime.dialogs.show_message(
                 "Select Capture Device",
-                "Direct capture-device support is available in the Windows app.",
+                "Capture devices are not available on this platform.",
             )
             return
         self.update_state(busy=True)
@@ -533,16 +573,53 @@ class CaptureController(StateObject):
     def current_belt_source(self, *, open_device: bool = False) -> MonitorInfo | None:
         monitor = self.current_monitor()
         config = self.runtime.config
-        if monitor is None or config.capture_source != "device":
+        if monitor is None or config.capture_source == "monitor":
             return monitor
         capture = None
         try:
-            session = self.runtime.device_capture_session
-            if session is not None and session.matches(**self.device_selector(config)):
-                capture = session.client()
-            elif open_device:
-                capture = self.create_chat_capture(config)
-            width, height = capture.screen_size() if capture is not None else (1920, 1080)
+            if config.capture_source == "device":
+                session = self.runtime.device_capture_session
+                if session is not None and session.matches(
+                    **self.device_selector(config)
+                ):
+                    capture = session.client()
+                elif open_device:
+                    capture = self.create_chat_capture(config)
+                width, height = (
+                    capture.screen_size()
+                    if capture is not None
+                    else (1920, 1080)
+                )
+                key = self.current_capture_key() or "device:unknown"
+                name = config.capture_device_name or "Capture device"
+            else:
+                key = self.current_capture_key() or "window:unknown"
+                if open_device:
+                    capture = self.create_chat_capture(config)
+                    width, height = capture.screen_size()
+                    area = getattr(capture, "capture_area", None)
+                    key = (
+                        str(getattr(area, "key", "") or "")
+                        or self.current_capture_key()
+                        or "window:unknown"
+                    )
+                    self._window_sizes[key] = (int(width), int(height))
+                else:
+                    size = self._window_sizes.get(key)
+                    if size is None:
+                        window = resolve_capture_window(
+                            title=config.capture_window_title,
+                            process_name=config.capture_window_process,
+                            class_name=config.capture_window_class,
+                        )
+                        size = (window.width, window.height)
+                        self._window_sizes[key] = size
+                    width, height = size
+                name = (
+                    config.capture_window_title
+                    or config.capture_window_process
+                    or "Selected window"
+                )
         finally:
             if capture is not None:
                 capture.close()
@@ -552,6 +629,6 @@ class CaptureController(StateObject):
             width=width,
             height=height,
             index=monitor.index,
-            key=self.current_capture_key() or "device:unknown",
-            name=config.capture_device_name or "Capture device",
+            key=key,
+            name=name,
         )

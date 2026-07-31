@@ -25,13 +25,25 @@ from .runtime import ApplicationRuntime
 from .settings_controller import SettingsController
 
 
+DEFAULT_WINDOW_WIDTH = 1470
+DEFAULT_WINDOW_HEIGHT = 1040
+MINIMUM_WINDOW_WIDTH = 980
+MINIMUM_WINDOW_HEIGHT = 650
+
+
 def qml_dir() -> Path:
     return Path(__file__).resolve().parent / "qml"
 
 
 def initial_window_geometry(available: QRect) -> QRect:
-    width = min(1220, max(980, available.width() - 32))
-    height = min(820, max(650, available.height() - 40))
+    width = min(
+        DEFAULT_WINDOW_WIDTH,
+        max(MINIMUM_WINDOW_WIDTH, available.width() - 32),
+    )
+    height = min(
+        DEFAULT_WINDOW_HEIGHT,
+        max(MINIMUM_WINDOW_HEIGHT, available.height() - 40),
+    )
     return QRect(
         available.left() + (available.width() - width) // 2,
         available.top() + (available.height() - height) // 2,
@@ -139,7 +151,11 @@ def run_gui(*, startup_splash=None) -> None:
     if runtime.config.droid_timers_enabled:
         from ..timers import show_droid_timers
 
-        show_droid_timers(runtime.config, monitor=capture.current_monitor())
+        show_droid_timers(
+            runtime.config,
+            monitor=capture.current_monitor(),
+            on_reminder=dashboard.handleTimerReminder,
+        )
     if runtime.config.start_watcher_on_launch:
         QTimer.singleShot(800, dashboard.startWatcher)
     if os.environ.get("DROID_ALERTS_SKIP_STARTUP_PROMPTS") != "1":

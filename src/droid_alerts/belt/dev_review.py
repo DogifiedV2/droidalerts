@@ -44,6 +44,12 @@ def predicted_track_label(
     summary = manifest.get("summary")
     if not isinstance(summary, dict):
         return "", ""
+    detected_name = str(summary.get("detected_name") or "").strip()
+    detected_family = str(summary.get("detected_family") or "").strip()
+    if detected_name:
+        return detected_name, detected_family
+    if str(summary.get("identity_status") or "") == "unknown":
+        return "", ""
     names = summary.get("predicted_names")
     families = summary.get("predicted_families")
     return _majority(names), _majority(families)
@@ -175,6 +181,8 @@ def _write_confirmed_sample(
         "original_prediction": {
             "name": candidate.get("name", ""),
             "family": candidate.get("family", ""),
+            "detected_rarity": candidate.get("detected_rarity", ""),
+            "detected_class": candidate.get("detected_class", ""),
             "rarity": candidate.get("rarity", ""),
             "raw_best_similarity": candidate.get("raw_best_similarity", 0.0),
             "runner_up_identity": candidate.get("runner_up_identity", ""),

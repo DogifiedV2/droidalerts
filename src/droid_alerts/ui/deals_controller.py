@@ -9,7 +9,7 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from ..classifier import Detection
 from ..config import AppConfig, data_dir
 from ..limited_deals import (
-    LIMITED_DEAL_ALERT_FAMILY_ORDER,
+    LIMITED_DEAL_ALERT_RARITY_ORDER,
     LIMITED_DEAL_CUSTOM_ALERT_DROIDS,
     LIMITED_DEAL_PRIORITY_COMBOS,
     LimitedDeal,
@@ -79,14 +79,14 @@ class DealsController(StateObject):
         }
         return [
             {
-                "id": f"{family}|{rarity}",
-                "family": family,
+                "id": f"{rarity}|{droid_class}",
                 "rarity": rarity,
-                "label": f"{family} {rarity}",
-                "enabled": (family, rarity) in selected,
-                "tone": family.lower(),
+                "droidClass": droid_class,
+                "label": f"{rarity} {droid_class}",
+                "enabled": (rarity, droid_class) in selected,
+                "tone": rarity.lower(),
             }
-            for family, rarity in LIMITED_DEAL_PRIORITY_COMBOS
+            for rarity, droid_class in LIMITED_DEAL_PRIORITY_COMBOS
         ]
 
     def _target_rows(self) -> list[dict[str, str]]:
@@ -97,7 +97,7 @@ class DealsController(StateObject):
             {
                 "id": str(droid.id),
                 "droid": droid.name,
-                "rarity": droid.rarity,
+                "droidClass": droid.droid_class,
                 "minimum": limited_deal_target_label(tiers[str(droid.id)]),
                 "tone": tiers[str(droid.id)].lower(),
             }
@@ -129,12 +129,12 @@ class DealsController(StateObject):
             {
                 "available": deal is not None,
                 "offer": (
-                    f"{deal.mutation} {deal.rarity} · {deal.droid}"
+                    f"{deal.rarity} {deal.droid}"
                     if deal is not None
                     else self._error or "Getting limited deal…"
                 ),
                 "sidebarLabel": (
-                    f"{deal.mutation} {deal.droid}" if deal is not None else ""
+                    f"{deal.rarity} {deal.droid}" if deal is not None else ""
                 ),
                 "countdown": self._countdown(),
                 "portrait": (
@@ -178,7 +178,7 @@ class DealsController(StateObject):
         service.mark_alerted(deal)
         detection = Detection(
             droid=deal.droid,
-            rarity=f"{deal.mutation} {deal.rarity}",
+            rarity=f"{deal.rarity} {deal.droid_class}",
             row_box=(0, 0, 0, 0),
             droid_score=1.0,
             rarity_score=1.0,
@@ -194,8 +194,8 @@ class DealsController(StateObject):
             "droid": deal.droid,
             "droid_id": deal.droid_id,
             "rarity": detection.rarity,
-            "deal_mutation": deal.mutation,
-            "droid_rarity": deal.rarity,
+            "deal_rarity": deal.rarity,
+            "droid_class": deal.droid_class,
             "starts_at": deal.starts_at,
             "ends_at": deal.ends_at,
             "alerted": True,
@@ -254,8 +254,8 @@ class DealsController(StateObject):
             self.runtime.config.limited_deal_target_tiers
         )
         choices = [{"id": "", "label": "Off"}] + [
-            {"id": family, "label": limited_deal_target_label(family)}
-            for family in LIMITED_DEAL_ALERT_FAMILY_ORDER
+            {"id": rarity, "label": limited_deal_target_label(rarity)}
+            for rarity in LIMITED_DEAL_ALERT_RARITY_ORDER
         ]
         self.runtime.dialogs.rules(
             "Custom Droid Alerts",
@@ -264,7 +264,7 @@ class DealsController(StateObject):
                 {
                     "id": str(droid.id),
                     "label": droid.name,
-                    "detail": droid.rarity,
+                    "detail": droid.droid_class,
                     "value": rules.get(str(droid.id), ""),
                 }
                 for droid in LIMITED_DEAL_CUSTOM_ALERT_DROIDS

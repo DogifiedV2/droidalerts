@@ -3,10 +3,29 @@ import DroidAlerts.Components 1.0
 
 Rectangle {
     id: chip
-    property alias text: label.text
+    property string text: ""
     property string tone: "muted"
     property bool interactive: false
     signal clicked()
+
+    function rainbowText(value) {
+        var result = ""
+        var colorIndex = 0
+        for (var i = 0; i < value.length; ++i) {
+            var character = value.charAt(i)
+            if (character === " ") {
+                result += "&#160;"
+                continue
+            }
+            if (character === "&") character = "&amp;"
+            else if (character === "<") character = "&lt;"
+            else if (character === ">") character = "&gt;"
+            var color = Theme.rainbowColors[colorIndex % Theme.rainbowColors.length]
+            result += "<font color=\"" + color + "\">" + character + "</font>"
+            colorIndex += 1
+        }
+        return result
+    }
 
     implicitWidth: label.implicitWidth + 20
     implicitHeight: 27
@@ -23,6 +42,8 @@ Rectangle {
     Text {
         id: label
         anchors.centerIn: parent
+        text: chip.tone === "rainbow" ? chip.rainbowText(chip.text) : chip.text
+        textFormat: chip.tone === "rainbow" ? Text.StyledText : Text.PlainText
         color: Theme.toneColor(chip.tone)
         font.family: Theme.bodyFont
         font.pixelSize: 11

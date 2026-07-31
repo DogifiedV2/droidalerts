@@ -52,12 +52,6 @@ ScrollView {
                 Layout.alignment: Qt.AlignTop
 
                 SignalCheck {
-                    text: "Improve detection with HDR / washed-out colours"
-                    checked: settingsController.state.values.extra_checks
-                    onToggled: settingsController.setValue("extra_checks", checked)
-                    Layout.fillWidth: true
-                }
-                SignalCheck {
                     text: "Start watching when Droid Alerts opens"
                     checked: settingsController.state.values.start_watcher_on_launch
                     onToggled: settingsController.setValue(
@@ -266,15 +260,6 @@ ScrollView {
                     columnSpacing: 24
                     rowSpacing: 7
 
-                    SignalCheck {
-                        text: "Timer reminders"
-                        checked: settingsController.state.values.timer_reminders_enabled
-                        enabled: dashboardController.state.timersEnabled
-                        Layout.columnSpan: parent.columns
-                        onToggled: settingsController.setValue(
-                                       "timer_reminders_enabled", checked)
-                    }
-
                     Repeater {
                         model: [
                             { label: "Capture interval", key: "capture_interval_seconds", suffix: "sec" },
@@ -282,7 +267,7 @@ ScrollView {
                             { label: "Duplicate window", key: "dedupe_seconds", suffix: "sec" },
                             { label: "Alert cooldown", key: "alert_cooldown_seconds", suffix: "sec" },
                             { label: "Calibration warning frames", key: "validation_failures_before_calibration_prompt", suffix: "" },
-                            { label: "Timer reminder", key: "timer_reminder_seconds", suffix: "sec" },
+                            { label: "Timer reminder lead time", key: "timer_reminder_seconds", suffix: "sec" },
                             { label: "Timer schedule offset", key: "timer_offset_seconds", suffix: "sec" },
                             { label: "Belt idle scan rate", key: "belt_idle_scan_fps", suffix: "FPS" },
                             { label: "Belt active scan rate", key: "belt_active_scan_fps", suffix: "FPS" }
@@ -407,7 +392,7 @@ ScrollView {
             }
 
             SignalCard {
-                title: "Belt Developer Tools"
+                title: "Blueprint Collection"
                 Layout.fillWidth: true
 
                 GridLayout {
@@ -419,22 +404,27 @@ ScrollView {
                     RowLayout {
                         Layout.fillWidth: true
                         SignalCheck {
-                            text: "Developer logging"
+                            text: "Blueprint collection mode — Windows: press P to capture"
                             checked: settingsController.state.values.belt_dev_mode
                             onToggled: settingsController.setValue("belt_dev_mode", checked)
                             Layout.fillWidth: true
                         }
                         SignalButton {
-                            text: "Open Logs"
+                            text: "Open Collection"
                             compact: true
                             onClicked: settingsController.openPath("belt_logs")
+                        }
+                        SignalButton {
+                            text: "Export ZIP"
+                            compact: true
+                            onClicked: settingsController.exportBeltCollection()
                         }
                     }
 
                     RowLayout {
                         Layout.fillWidth: true
                         SignalCheck {
-                            text: "Save detections for review"
+                            text: "Save confirmed detections"
                             checked: settingsController.state.values.belt_template_collection_enabled
                             onToggled: settingsController.setValue(
                                            "belt_template_collection_enabled", checked)

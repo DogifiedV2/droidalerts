@@ -185,6 +185,73 @@ class BeltDevLogger:
         self.last_saved_reason = actual_reason
         return path.name
 
+    def save_manual_capture(
+        self,
+        frame_bgr: np.ndarray,
+        *,
+        frame_number: int,
+        now: float,
+        detector_snapshot: dict[str, object] | None = None,
+    ) -> str:
+        """Save a lossless belt-region screenshot and its detector state."""
+
+        if self.session_dir is None or self._written_bytes >= MAX_DEV_SESSION_BYTES:
+            return ""
+        capture_dir = self.session_dir / "manual_captures"
+        capture_id = f"capture_{timestamp()}_frame_{int(frame_number):06d}"
+        image_path = capture_dir / f"{capture_id}.png"
+        metadata_path = capture_dir / f"{capture_id}.json"
+        try:
+            success, encoded = cv2.imencode(
+                ".png",
+                frame_bgr,
+                (cv2.IMWRITE_PNG_COMPRESSION, 3),
+            )
+            if not success:
+                return ""
+            payload = encoded.tobytes()
+            metadata = {
+                "version": 1,
+                "created_at": time.time(),
+                "captured_at_monotonic": float(now),
+                "frame": int(frame_number),
+                "image": image_path.name,
+                "source_frame_shape": [
+                    int(value) for value in frame_bgr.shape
+                ],
+                "capture_scope": "selected_belt_region",
+                "capture_source": "manual_p_hotkey",
+                "label_status": "unreviewed",
+                "training_status": "manual_review_required",
+                "detector_snapshot": dict(detector_snapshot or {}),
+            }
+            metadata_payload = (
+                json.dumps(
+                    metadata,
+                    ensure_ascii=False,
+                    indent=2,
+                    default=_json_default,
+                )
+                + "\n"
+            ).encode("utf-8")
+            if (
+                self._written_bytes + len(payload) + len(metadata_payload)
+                > MAX_DEV_SESSION_BYTES
+            ):
+                return ""
+            capture_dir.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(payload)
+            metadata_path.write_bytes(metadata_payload)
+        except (OSError, cv2.error):
+            image_path.unlink(missing_ok=True)
+            metadata_path.unlink(missing_ok=True)
+            return ""
+        self._written_bytes += len(payload) + len(metadata_payload)
+        try:
+            return image_path.relative_to(data_dir()).as_posix()
+        except ValueError:
+            return str(image_path)
+
     def remember_frame(
         self,
         frame_bgr: np.ndarray,

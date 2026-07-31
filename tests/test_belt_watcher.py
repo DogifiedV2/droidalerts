@@ -724,7 +724,7 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual("R2", collector.observe.call_args.args[1][0].canonical_name)
         collector.close.assert_called_once_with()
 
-    def test_dev_mode_records_every_candidate_and_flushes_session(self):
+    def test_dev_mode_saves_accepted_crops_and_manual_detector_snapshot(self):
         frame, name_box = card_frame()
         stop_event = threading.Event()
         capture = OneFrameCapture(frame, stop_event)
@@ -759,11 +759,37 @@ class WatcherTests(unittest.TestCase):
             runner_up_identity="R4",
             identity_margin=0.09,
         )
+        rejected_context = CardContext(
+            art_box=(325, 100, 120, 140),
+            card_box=(300, 80, 180, 260),
+            nameplate_dark_fraction=0.85,
+            art_standard_deviation=45.0,
+            art_edge_density=0.10,
+            frame_line_ratio=0.50,
+            accepted=True,
+            reason="accepted_template",
+        )
+        rejected_candidate = CardCandidate(
+            canonical_name="R4",
+            raw_text="template:R4",
+            identity_confidence=0.72,
+            name_box=(320, 280, 90, 25),
+            context=rejected_context,
+            accepted=False,
+            reason="ambiguous_template_identity",
+            family="Rainbow",
+            family_confidence=0.81,
+            rarity="Legendary",
+            rarity_confidence=1.0,
+            raw_best_similarity=0.78,
+            runner_up_identity="R2",
+            identity_margin=0.02,
+        )
         recognizer = MagicMock()
         recognizer.analyze.return_value = template_result(
             observations=(observation,),
-            candidates=(candidate,),
-            card_window_count=1,
+            candidates=(candidate, rejected_candidate),
+            card_window_count=2,
         )
         dev_logger = MagicMock()
         dev_logger.enabled = True
@@ -771,6 +797,9 @@ class WatcherTests(unittest.TestCase):
         dev_logger.relative_path.return_value = "belt_dev/session_test"
         dev_logger.consume_issue_request.return_value = ""
         dev_logger.save_frame.return_value = ""
+        dev_logger.save_manual_capture.return_value = (
+            "belt_dev/session_test/manual_captures/capture.png"
+        )
         dev_logger.last_saved_reason = ""
         recorder = MagicMock()
         recorder.close.return_value = {
@@ -787,7 +816,7 @@ class WatcherTests(unittest.TestCase):
             patch(
                 "droid_alerts.belt.watcher.HybridCardRecognizer",
                 return_value=recognizer,
-            ),
+            ) as recognizer_factory,
             patch(
                 "droid_alerts.belt.watcher.BeltDevLogger",
                 return_value=dev_logger,
@@ -796,6 +825,10 @@ class WatcherTests(unittest.TestCase):
                 "droid_alerts.belt.watcher.BeltDevCaptureRecorder",
                 return_value=recorder,
             ) as recorder_factory,
+            patch(
+                "droid_alerts.belt.watcher._belt_capture_hotkey",
+                return_value=lambda: True,
+            ),
         ):
             run_belt_watcher(
                 1,
@@ -809,6 +842,7 @@ class WatcherTests(unittest.TestCase):
             dev_logger.session_dir,
             enabled=True,
         )
+        recognizer_factory.assert_called_once_with()
         recorder.set_session_metadata.assert_called_once()
         self.assertEqual(
             [frame.shape[1], frame.shape[0]],
@@ -819,7 +853,21 @@ class WatcherTests(unittest.TestCase):
         recorder.observe.assert_called_once()
         self.assertEqual((candidate,), recorder.observe.call_args.args[1])
         self.assertEqual({0: 1}, recorder.observe.call_args.args[2])
+        dev_logger.save_manual_capture.assert_called_once()
+        detector_snapshot = (
+            dev_logger.save_manual_capture.call_args.kwargs["detector_snapshot"]
+        )
+        self.assertEqual(["R2"], detector_snapshot["detected_names"])
+        self.assertEqual(
+            "R2",
+            detector_snapshot["accepted_detections"][0]["detected_name"],
+        )
+        self.assertEqual(
+            "R4",
+            detector_snapshot["rejected_candidates"][0]["best_guess_name"],
+        )
         recorder.close.assert_called_once_with()
+        self.assertIn("manual_capture", [event["type"] for event in events])
         self.assertIn("dev_capture", [event["type"] for event in events])
 
     def test_template_index_failure_is_reported(self):

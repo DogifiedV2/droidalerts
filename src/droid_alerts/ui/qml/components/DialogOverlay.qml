@@ -136,18 +136,8 @@ Item {
                 }
 
                 ColumnLayout {
-                    spacing: 1
+                    spacing: 0
                     Layout.fillWidth: true
-
-                    Text {
-                        text: dialogController.state.eyebrow.toUpperCase()
-                        color: Theme.toneColor(dialogController.state.tone)
-                        font.family: Theme.monoFont
-                        font.pixelSize: 9
-                        font.letterSpacing: 1.4
-                        Layout.fillWidth: true
-                        elide: Text.ElideRight
-                    }
 
                     Text {
                         text: dialogController.state.title
@@ -342,7 +332,7 @@ Item {
                         visible: text.length > 0
                         color: Theme.muted
                         font.family: Theme.bodyFont
-                        font.pixelSize: 12
+                        font.pixelSize: 15
                         wrapMode: Text.WrapAnywhere
                         textFormat: Text.PlainText
                         Layout.fillWidth: true
@@ -361,7 +351,7 @@ Item {
                          && dialogController.state.note.length <= 260
                 color: Theme.muted
                 font.family: Theme.bodyFont
-                font.pixelSize: 12
+                font.pixelSize: 15
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
             }

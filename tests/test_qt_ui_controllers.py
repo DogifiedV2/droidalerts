@@ -21,9 +21,14 @@ from droid_alerts.belt.region import RelativeRegion
 from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox
 from droid_alerts.config import AppConfig
 from droid_alerts.limited_deals import LimitedDeal
-from droid_alerts.popup import _centered_text_bounds, popup_icon_path
+from droid_alerts.popup import (
+    _caption_text,
+    _centered_text_bounds,
+    _title_segments,
+    popup_icon_path,
+)
 from droid_alerts.classifier import Detection
-from droid_alerts.timers import DroidTimersOverlay
+from droid_alerts.timers import DroidTimersOverlay, timer_reminder_detection
 from droid_alerts.ui.app_controller import AppController
 from droid_alerts.ui.application import initial_window_geometry
 from droid_alerts.ui.belt_controller import BeltController
@@ -210,7 +215,7 @@ class QtUiControllerTests(unittest.TestCase):
 
     def test_main_window_geometry_fits_and_centers_on_smaller_displays(self):
         self.assertEqual(
-            QRect(73, 20, 1220, 688),
+            QRect(16, 20, 1334, 688),
             initial_window_geometry(QRect(0, 0, 1366, 728)),
         )
 
@@ -342,6 +347,38 @@ class QtUiControllerTests(unittest.TestCase):
             controller.state_snapshot()["monitors"][0]["width"],
         )
 
+    def test_capture_controller_uses_window_dimensions_for_belt_regions(self):
+        runtime = RuntimeStub(
+            AppConfig(
+                capture_source="window",
+                capture_window_title="Fortnite",
+                capture_window_process="Fortnite.exe",
+                capture_window_class="UnrealWindow",
+            )
+        )
+        monitor = MonitorDescriptor(1, 0, 0, 2560, 1440, is_primary=True)
+        area = MonitorInfo(0, 0, 1920, 1080, key="window:test")
+        capture = Mock(
+            screen_size=Mock(return_value=(1920, 1080)),
+            capture_area=area,
+        )
+        with (
+            patch(
+                "droid_alerts.ui.capture_controller.list_monitors",
+                return_value=[monitor],
+            ),
+            patch(
+                "droid_alerts.ui.capture_controller.create_configured_capture",
+                return_value=capture,
+            ),
+        ):
+            controller = CaptureController(runtime)
+            source = controller.current_belt_source(open_device=True)
+
+        self.assertEqual((1920, 1080), (source.width, source.height))
+        self.assertEqual("window:test", source.key)
+        capture.close.assert_called_once_with()
+
     def test_settings_are_clamped_and_sound_choices_are_structured(self):
         runtime = RuntimeStub(AppConfig())
         dashboard = DashboardStub()
@@ -383,8 +420,98 @@ class QtUiControllerTests(unittest.TestCase):
         show.assert_called_once_with(
             runtime.config,
             monitor=capture.monitor,
+            on_reminder=controller.handleTimerReminder,
         )
         controller.shutdown()
+
+    def test_dashboard_timer_reminder_requires_the_overlay(self):
+        runtime = RuntimeStub(AppConfig())
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        controller = DashboardController(runtime, capture)
+
+        controller.setTimerRemindersEnabled(True)
+        self.assertFalse(runtime.config.timer_reminders_enabled)
+
+        with patch("droid_alerts.ui.dashboard_controller.show_droid_timers"):
+            controller.setTimersEnabled(True)
+            controller.setTimerRemindersEnabled(True)
+        self.assertTrue(runtime.config.timer_reminders_enabled)
+
+        with patch("droid_alerts.ui.dashboard_controller.hide_droid_timers"):
+            controller.setTimersEnabled(False)
+        self.assertFalse(runtime.config.timer_reminders_enabled)
+        controller.shutdown()
+
+    def test_timer_reminder_is_a_popup_and_channel_alert_without_sound(self):
+        runtime = RuntimeStub(AppConfig(droid_timers_enabled=True))
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        controller = DashboardController(runtime, capture)
+
+        with patch.object(controller, "dispatch_detection") as dispatch:
+            controller.handleTimerReminder("mythic", 60)
+
+        detection = dispatch.call_args.args[0]
+        self.assertEqual("Mythic Timer", detection.droid)
+        self.assertEqual("timer-reminder", detection.source)
+        self.assertEqual("TIMER REMINDER", _caption_text(detection))
+        self.assertEqual([("MYTHIC TIMER", "#ff3fa8")], _title_segments(detection))
+        self.assertFalse(dispatch.call_args.kwargs["include_sound"])
+        controller.shutdown()
+
+    def test_remote_channel_configs_include_timer_reminders(self):
+        runtime = RuntimeStub(
+            AppConfig(channel_disabled_alerts={"discord": ["timer_reminder"]})
+        )
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        controller = DashboardController(runtime, capture)
+
+        _label, discord_options = controller._channel_alert_options("discord")
+        _label, ntfy_options = controller._channel_alert_options("ntfy")
+        discord_timer = next(
+            option for option in discord_options if option["id"] == "timer_reminder"
+        )
+        ntfy_timer = next(
+            option for option in ntfy_options if option["id"] == "timer_reminder"
+        )
+
+        self.assertFalse(discord_timer["selected"])
+        self.assertTrue(ntfy_timer["selected"])
+        controller.shutdown()
+
+    def test_discord_config_saves_optional_limited_deal_webhook(self):
+        runtime = RuntimeStub(AppConfig())
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        controller = DashboardController(runtime, capture)
+        payload = {
+            "webhook": "https://discord.com/api/webhooks/1/main",
+            "limited_deal_webhook": "https://discord.com/api/webhooks/2/deals",
+        }
+
+        with (
+            patch(
+                "droid_alerts.ui.dashboard_controller.save_discord_webhook"
+            ) as save_main,
+            patch(
+                "droid_alerts.ui.dashboard_controller."
+                "save_limited_deal_discord_webhook"
+            ) as save_limited_deals,
+        ):
+            self.assertTrue(controller._save_discord(payload))
+
+        save_main.assert_called_once_with(runtime.config, payload["webhook"])
+        save_limited_deals.assert_called_once_with(
+            runtime.config,
+            payload["limited_deal_webhook"],
+        )
+        self.assertTrue(runtime.config.discord_enabled)
+        controller.shutdown()
+
+    def test_timer_reminder_detection_uses_readable_timer_name(self):
+        detection = timer_reminder_detection("galactic", 45)
+
+        self.assertEqual("Galactic Timer", detection.droid)
+        self.assertEqual("45", detection.rarity)
+        self.assertEqual("timer-reminder", detection.source)
 
     def test_timer_refresh_never_raises_or_reactivates_its_window(self):
         class TimerOverlayProbe(DroidTimersOverlay):
@@ -515,7 +642,6 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual("", controller.state_snapshot()["sidebarLabel"])
         self.assertEqual(
             [
-                "Diamond Mythic",
                 "Rainbow Epic",
                 "Rainbow Legendary",
                 "Rainbow Mythic",
@@ -525,6 +651,7 @@ class QtUiControllerTests(unittest.TestCase):
                 "Galactic Epic",
                 "Galactic Legendary",
                 "Galactic Mythic",
+                "Diamond Mythic",
             ],
             [row["label"] for row in controller.state_snapshot()["priorityRows"]],
         )
@@ -542,10 +669,10 @@ class QtUiControllerTests(unittest.TestCase):
         controller.current_deal = LimitedDeal(
             starts_at="2026-07-30T12:00:00.000Z",
             ends_at="2026-07-30T13:00:00.000Z",
-            mutation="Diamond",
+            rarity="Diamond",
             droid="Mecha Droid",
             droid_id=47,
-            rarity="Legendary",
+            droid_class="Legendary",
         )
 
         controller.refresh()
@@ -553,6 +680,10 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual(
             "Diamond Mecha Droid",
             controller.state_snapshot()["sidebarLabel"],
+        )
+        self.assertEqual(
+            "Diamond Mecha Droid",
+            controller.state_snapshot()["offer"],
         )
         controller.shutdown()
 
@@ -661,7 +792,14 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertNotIn('text: "Device…"', dashboard)
         self.assertNotIn('text: "Position…"', dashboard)
         self.assertNotIn('text: "Add WAV…"', settings)
-        self.assertEqual(2, dashboard.count('ToolTip.text: "Unsupported on MacOS"'))
+        self.assertIn(
+            "ToolTip.text: captureController.state.windowCaptureUnavailableReason",
+            dashboard,
+        )
+        self.assertIn(
+            "ToolTip.text: captureController.state.deviceCaptureUnavailableReason",
+            dashboard,
+        )
         self.assertIn("toastText.implicitWidth + 60", main)
         self.assertNotIn('text: "Alerts"', dashboard)
         self.assertIn("id: regionNudgeGrid", diagnostics)

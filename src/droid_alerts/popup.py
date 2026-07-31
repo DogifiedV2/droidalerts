@@ -168,6 +168,10 @@ def _is_scrap_alert_detection(detection: Detection) -> bool:
     return detection.source in {"scrap-alert", "scrap-inactive"}
 
 
+def _is_timer_reminder_detection(detection: Detection) -> bool:
+    return detection.source == "timer-reminder"
+
+
 def _uses_attribute_rarity(detection: Detection) -> bool:
     return _is_belt_detection(detection) or detection.source == "limited-deal"
 
@@ -177,6 +181,8 @@ def _caption_text(detection: Detection) -> str:
         return "SCRAP ALERT"
     if _is_cb23_mission_detection(detection):
         return "MISSION READY"
+    if _is_timer_reminder_detection(detection):
+        return "TIMER REMINDER"
     if _is_rebirth_detection(detection):
         return (
             "REBIRTH ALERT"
@@ -202,6 +208,13 @@ def _title_segments(detection: Detection) -> list[tuple[str, str]]:
         ]
     if _is_cb23_mission_detection(detection):
         return [("CB23 MISSION", "#f04444")]
+    if _is_timer_reminder_detection(detection):
+        color = {
+            "Beskar Timer": RARITY_COLORS["Beskar"],
+            "Mythic Timer": RARITY_COLORS["Mythic"],
+            "Galactic Timer": RARITY_COLORS["Galactic"],
+        }.get(detection.droid, "#39c6d8")
+        return [(detection.droid.upper(), color)]
     if _is_rebirth_detection(detection):
         return (
             [("REBIRTH DROID AVAILABLE", DROID_TEXT_COLORS["Rebirth"])]
@@ -248,7 +261,7 @@ def popup_icon_path(
     config: AppConfig,
     detection: Detection | None = None,
 ) -> Path:
-    """Use the matching Gonk mutation for normal priority-spawn popups."""
+    """Use the matching Gonk rarity for normal priority-spawn popups."""
 
     if detection is not None and detection.is_priority:
         gonk_file = PRIORITY_GONK_ICONS.get(detection.droid)
@@ -287,6 +300,12 @@ def _accent(detection: Detection) -> tuple[str, str]:
         return "#e7a72f", "#6f4b12"
     if _is_rebirth_ready_detection(detection):
         return "#20f070", "#126b3c"
+    if _is_timer_reminder_detection(detection):
+        return {
+            "Beskar Timer": DROID_ACCENTS["Beskar"],
+            "Mythic Timer": ("#ff3fa8", "#6b1645"),
+            "Galactic Timer": DROID_ACCENTS["Galactic"],
+        }.get(detection.droid, ("#39c6d8", "#17323a"))
     key = (
         "Rebirth"
         if _is_rebirth_available_detection(detection)

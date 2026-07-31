@@ -27,7 +27,7 @@ from droid_alerts.belt.template_recognition import (  # noqa: E402
 )
 
 
-FAMILY_ORDER = ("Default", "Gold", "Diamond", "Rainbow", "Beskar")
+FAMILY_ORDER = ("Default", "Gold", "Diamond", "Rainbow", "Beskar", "Galactic")
 
 
 @dataclass(frozen=True)
@@ -326,17 +326,35 @@ def augment_index(
     family_words: list[np.ndarray] = []
     family_offsets = [0]
     added_family_counts: dict[str, int] = {}
-    for family_index, family in enumerate(base.family_labels):
-        start = int(base.family_offsets[family_index])
-        end = int(base.family_offsets[family_index + 1])
+    for family in FAMILY_ORDER:
+        if family in base.family_labels:
+            family_index = base.family_labels.index(family)
+            start = int(base.family_offsets[family_index])
+            end = int(base.family_offsets[family_index + 1])
+            existing_histograms = base.family_histograms[start:end]
+            existing_words = base.family_words[start:end]
+        else:
+            existing_histograms = np.empty(
+                (0, base.family_histograms.shape[1]),
+                dtype=np.float32,
+            )
+            existing_words = np.empty(
+                (0, base.family_words.shape[1]),
+                dtype=np.float32,
+            )
+        additions = [
+            item
+            for item in samples
+            if item.family == family and item.use_for_family
+        ]
+        if not len(existing_histograms) and not additions:
+            raise ValueError(
+                f"Augmentation must provide a sample for new family {family}"
+            )
         histograms, words, added = _append_unique_family_vectors(
-            base.family_histograms[start:end],
-            base.family_words[start:end],
-            [
-                item
-                for item in samples
-                if item.family == family and item.use_for_family
-            ],
+            existing_histograms,
+            existing_words,
+            additions,
         )
         family_histograms.extend(histograms)
         family_words.extend(words)
@@ -357,7 +375,7 @@ def augment_index(
     }
     family_counts = {
         family: int(previous_family.get(family, 0) or 0) + added_family_counts[family]
-        for family in base.family_labels
+        for family in FAMILY_ORDER
     }
     added_sample_count = max(
         sum(added_identity_counts.values()),
@@ -405,7 +423,7 @@ def augment_index(
             identity_name_offsets=np.asarray(identity_offsets, dtype=np.int32),
             family_histograms=np.stack(family_histograms).astype(np.float32),
             family_words=np.stack(family_words).astype(np.float32),
-            family_labels=np.asarray(base.family_labels),
+            family_labels=np.asarray(FAMILY_ORDER),
             family_offsets=np.asarray(family_offsets, dtype=np.int32),
             manifest_json=np.asarray([json.dumps(manifest, sort_keys=True)]),
             card_width_ratio=np.asarray(base.card_width_ratio, dtype=np.float32),

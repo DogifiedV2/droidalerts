@@ -69,6 +69,10 @@ def _is_scrap_alert_detection(detection: Detection) -> bool:
     return detection.source in {"scrap-alert", "scrap-inactive"}
 
 
+def _is_timer_reminder_detection(detection: Detection) -> bool:
+    return detection.source == "timer-reminder"
+
+
 def alert_type_id(detection: Detection) -> str:
     """Stable ID used by per-channel alert filters."""
     if detection.source == "rebirth-alert":
@@ -83,6 +87,8 @@ def alert_type_id(detection: Detection) -> str:
         return "belt_tracker"
     if detection.source == "limited-deal":
         return "limited_deals"
+    if _is_timer_reminder_detection(detection):
+        return "timer_reminder"
     return f"chat:{detection.droid}:{detection.rarity}"
 
 
@@ -99,6 +105,8 @@ def event_text(detection: Detection) -> str:
         )
     if _is_cb23_mission_detection(detection):
         return "CB23 Mission"
+    if _is_timer_reminder_detection(detection):
+        return f"{detection.droid} in {detection.rarity} seconds"
     if _is_rebirth_detection(detection):
         return (
             "A rebirth droid is available"
@@ -118,6 +126,8 @@ def alert_title(detection: Detection) -> str:
         return "Droid Alerts Scrap Alert"
     if _is_cb23_mission_detection(detection):
         return "Droid Alerts CB23 Mission"
+    if _is_timer_reminder_detection(detection):
+        return "Droid Alerts Timer Reminder"
     if _is_rebirth_detection(detection):
         return (
             "Droid Alerts Rebirth Alert"
@@ -133,6 +143,10 @@ def alert_title(detection: Detection) -> str:
 
 def discord_webhook_path(config: AppConfig) -> Path:
     return config_dir() / config.discord_webhook_file
+
+
+def limited_deal_discord_webhook_path(config: AppConfig) -> Path:
+    return config_dir() / config.limited_deal_discord_webhook_file
 
 
 def phone_credentials_path(config: AppConfig) -> Path:
@@ -157,6 +171,20 @@ def save_discord_webhook(config: AppConfig, webhook_url: str) -> Path:
     return path
 
 
+def save_limited_deal_discord_webhook(
+    config: AppConfig,
+    webhook_url: str,
+) -> Path:
+    path = limited_deal_discord_webhook_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    value = webhook_url.strip().lstrip("\ufeff")
+    if value:
+        path.write_text(value + "\n", encoding="utf-8")
+    elif path.exists():
+        path.unlink()
+    return path
+
+
 def load_discord_webhook(config: AppConfig) -> tuple[str | None, str | Path | None]:
     env_url = os.environ.get(config.discord_env_var, "").strip().lstrip("\ufeff")
     if env_url:
@@ -171,6 +199,42 @@ def load_discord_webhook(config: AppConfig) -> tuple[str | None, str | Path | No
     return value, path
 
 
+def load_limited_deal_discord_webhook(
+    config: AppConfig,
+) -> tuple[str | None, str | Path | None]:
+    env_url = os.environ.get(
+        config.limited_deal_discord_env_var,
+        "",
+    ).strip().lstrip("\ufeff")
+    if env_url:
+        return env_url, "environment"
+
+    path = limited_deal_discord_webhook_path(config)
+    if not path.exists():
+        return None, None
+    value = path.read_text(encoding="utf-8-sig").strip().lstrip("\ufeff")
+    if not value or value.lower().startswith("disabled"):
+        return None, path
+    return value, path
+
+
+def load_discord_webhook_for_detection(
+    config: AppConfig,
+    detection: Detection,
+    *,
+    fallback_url: str | None = None,
+) -> tuple[str | None, str | Path | None]:
+    """Use the optional Limited Deal webhook, otherwise the normal webhook."""
+
+    if _is_limited_deal_detection(detection):
+        dedicated_url, dedicated_source = load_limited_deal_discord_webhook(config)
+        if dedicated_url:
+            return dedicated_url, dedicated_source
+    if fallback_url:
+        return fallback_url, "default webhook"
+    return load_discord_webhook(config)
+
+
 def discord_webhook_configured(config: AppConfig) -> bool:
     webhook_url, _source = load_discord_webhook(config)
     return bool(webhook_url)
@@ -181,6 +245,12 @@ def discord_color(detection: Detection) -> int:
         return 0xE7A72F
     if _is_cb23_mission_detection(detection):
         return 0xF04444
+    if _is_timer_reminder_detection(detection):
+        return {
+            "Beskar Timer": 0xC9CDD9,
+            "Mythic Timer": 0xFF3FA8,
+            "Galactic Timer": 0x9200E0,
+        }.get(detection.droid, 0x39C6D8)
     if _is_rebirth_detection(detection):
         return 0xFFB11B if _is_rebirth_available_detection(detection) else 0x20F070
     if _is_limited_deal_detection(detection):
@@ -232,12 +302,16 @@ def post_discord(webhook_url: str, detection: Detection) -> None:
                             "CB23 Mission"
                             if _is_cb23_mission_detection(detection)
                             else (
-                                "Limited Deal Alert"
-                                if _is_limited_deal_detection(detection)
+                                "Timer Reminder"
+                                if _is_timer_reminder_detection(detection)
                                 else (
-                                    "Belt Tracker Alert"
-                                    if _is_belt_detection(detection)
-                                    else "Droid Tycoon Priority Spawn"
+                                    "Limited Deal Alert"
+                                    if _is_limited_deal_detection(detection)
+                                    else (
+                                        "Belt Tracker Alert"
+                                        if _is_belt_detection(detection)
+                                        else "Droid Tycoon Priority Spawn"
+                                    )
                                 )
                             )
                         )

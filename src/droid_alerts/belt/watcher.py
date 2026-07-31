@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import sys
 from collections import Counter
 from collections.abc import Callable, Mapping
 
@@ -72,6 +73,8 @@ def run_belt_watcher(
 
     dev_logger = BeltDevLogger(dev_mode)
     dev_capture_recorder: BeltDevCaptureRecorder | None = None
+    manual_capture_hotkey = _belt_capture_hotkey() if dev_logger.enabled else None
+    manual_capture_pending = False
     idle_scan_fps, active_scan_fps = normalize_scan_fps(
         idle_scan_fps,
         active_scan_fps,
@@ -256,6 +259,8 @@ def run_belt_watcher(
     try:
         while not stop_event.is_set():
             loop_started = time.monotonic()
+            if manual_capture_hotkey is not None and manual_capture_hotkey():
+                manual_capture_pending = True
             frame_number += 1
             dev_scan_capture = None
             if loop_started >= next_scan:
@@ -309,13 +314,65 @@ def run_belt_watcher(
                         result = recognizer.analyze(frame, now=now)
                         observations = result.observations
                         update = tracker.update(observations, now, region.width)
+                        if manual_capture_pending:
+                            accepted_detections = [
+                                candidate_diagnostics(candidate)
+                                for candidate in result.candidates
+                                if candidate.accepted
+                            ]
+                            rejected_candidates = [
+                                candidate_diagnostics(candidate)
+                                for candidate in result.candidates
+                                if not candidate.accepted
+                            ]
+                            manual_path = dev_logger.save_manual_capture(
+                                frame,
+                                frame_number=frame_number,
+                                now=now,
+                                detector_snapshot={
+                                    "detector": detector_mode,
+                                    "accepted_detection_count": len(
+                                        accepted_detections
+                                    ),
+                                    "rejected_candidate_count": len(
+                                        rejected_candidates
+                                    ),
+                                    "detected_names": [
+                                        item["detected_name"]
+                                        for item in accepted_detections
+                                    ],
+                                    "accepted_detections": accepted_detections,
+                                    "rejected_candidates": rejected_candidates,
+                                    "recognizer_diagnostics": result.diagnostics,
+                                    "tracker": tracker.diagnostic_state(),
+                                },
+                            )
+                            manual_capture_pending = False
+                            if manual_path:
+                                dev_logger.log(
+                                    "manual_capture",
+                                    frame=frame_number,
+                                    path=manual_path,
+                                    accepted_detection_count=len(
+                                        accepted_detections
+                                    ),
+                                    rejected_candidate_count=len(
+                                        rejected_candidates
+                                    ),
+                                )
+                                emit("manual_capture", path=manual_path)
                         if dev_capture_recorder is not None:
+                            accepted_dev_candidates = tuple(
+                                candidate
+                                for candidate in result.candidates
+                                if candidate.accepted
+                            )
                             # Production exit/update decisions are attached
                             # below before this scan is allowed to expire a
                             # diagnostic track.
                             dev_scan_capture = (
                                 frame,
-                                result.candidates,
+                                accepted_dev_candidates,
                                 getattr(
                                     update,
                                     "observation_track_ids",
@@ -467,6 +524,30 @@ def run_belt_watcher(
                         emit("error", message=f"Belt {detector_mode} scan failed: {exc}")
                         update = tracker.predict(time.monotonic(), region.width)
                         next_scan = now + base_interval
+                        if manual_capture_pending:
+                            manual_path = dev_logger.save_manual_capture(
+                                frame,
+                                frame_number=frame_number,
+                                now=now,
+                                detector_snapshot={
+                                    "detector": detector_mode,
+                                    "accepted_detection_count": 0,
+                                    "rejected_candidate_count": 0,
+                                    "detected_names": [],
+                                    "accepted_detections": [],
+                                    "rejected_candidates": [],
+                                    "analysis_error": str(exc),
+                                },
+                            )
+                            manual_capture_pending = False
+                            if manual_path:
+                                dev_logger.log(
+                                    "manual_capture",
+                                    frame=frame_number,
+                                    path=manual_path,
+                                    analysis_error=str(exc),
+                                )
+                                emit("manual_capture", path=manual_path)
             else:
                 # Overlay prediction remains smooth at 12 Hz, but no screen
                 # capture is performed until the recognizer can consume it.
@@ -588,3 +669,27 @@ def run_belt_watcher(
                 **capture_status,
             )
         emit("stopped")
+
+
+def _belt_capture_hotkey() -> Callable[[], bool] | None:
+    """Return a Windows-global edge-triggered P-key reader."""
+
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+    except Exception:
+        return None
+
+    vk_p = 0x50
+
+    def pressed() -> bool:
+        try:
+            return bool(user32.GetAsyncKeyState(vk_p) & 0x0001)
+        except Exception:
+            return False
+
+    pressed()
+    return pressed

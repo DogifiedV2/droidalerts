@@ -18,7 +18,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Preserve the previous fifteen seconds from an active Belt Tracker "
-            "Developer Mode session."
+            "Blueprint Collection session."
         )
     )
     parser.add_argument(
@@ -35,7 +35,7 @@ def main() -> int:
     arguments = parser.parse_args()
     path = request_belt_issue_report(arguments.kind, arguments.note)
     print(f"Belt issue report requested: {path}")
-    print("Keep Belt Tracker Developer Mode running until the request is saved.")
+    print("Keep Blueprint Collection Mode running until the request is saved.")
     return 0
 
 

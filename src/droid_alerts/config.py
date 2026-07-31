@@ -171,6 +171,8 @@ class AppConfig:
     discord_enabled: bool = False
     discord_webhook_file: str = "discord_webhook.txt"
     discord_env_var: str = "DROID_DISCORD_WEBHOOK_URL"
+    limited_deal_discord_webhook_file: str = "limited_deal_discord_webhook.txt"
+    limited_deal_discord_env_var: str = "DROID_LIMITED_DEAL_DISCORD_WEBHOOK_URL"
     ntfy_enabled: bool = False
     ntfy_server_url: str = "https://ntfy.sh"
     ntfy_topic: str = ""
@@ -205,7 +207,6 @@ class AppConfig:
     debug_detection_upload_url: str = "https://gonk.tools/api/droid-alerts/debug-detections"
     update_repo: str = "DogifiedV2/droidalerts"
     advanced_mode: bool = False
-    extra_checks: bool = False
     start_watcher_on_launch: bool = False
     rebirth_alert_enabled: bool = False
     belt_overlay_enabled: bool = True
@@ -332,6 +333,18 @@ class AppConfig:
             discord_enabled=bool(data.get("discord_enabled", False)),
             discord_webhook_file=str(data.get("discord_webhook_file", "discord_webhook.txt")),
             discord_env_var=str(data.get("discord_env_var", "DROID_DISCORD_WEBHOOK_URL")),
+            limited_deal_discord_webhook_file=str(
+                data.get(
+                    "limited_deal_discord_webhook_file",
+                    "limited_deal_discord_webhook.txt",
+                )
+            ),
+            limited_deal_discord_env_var=str(
+                data.get(
+                    "limited_deal_discord_env_var",
+                    "DROID_LIMITED_DEAL_DISCORD_WEBHOOK_URL",
+                )
+            ),
             ntfy_enabled=bool(data.get("ntfy_enabled", False)),
             ntfy_server_url=str(data.get("ntfy_server_url", "https://ntfy.sh")),
             ntfy_topic=str(data.get("ntfy_topic", "")),
@@ -403,7 +416,6 @@ class AppConfig:
             ),
             update_repo=str(data.get("update_repo", "DogifiedV2/droidalerts")),
             advanced_mode=bool(data.get("advanced_mode", False)),
-            extra_checks=bool(data.get("extra_checks", False)),
             start_watcher_on_launch=bool(data.get("start_watcher_on_launch", False)),
             rebirth_alert_enabled=bool(data.get("rebirth_alert_enabled", False)),
             belt_overlay_enabled=bool(data.get("belt_overlay_enabled", True)),
@@ -491,6 +503,8 @@ class AppConfig:
             "discord_enabled": self.discord_enabled,
             "discord_webhook_file": self.discord_webhook_file,
             "discord_env_var": self.discord_env_var,
+            "limited_deal_discord_webhook_file": self.limited_deal_discord_webhook_file,
+            "limited_deal_discord_env_var": self.limited_deal_discord_env_var,
             "ntfy_enabled": self.ntfy_enabled,
             "ntfy_server_url": self.ntfy_server_url,
             "ntfy_topic": self.ntfy_topic,
@@ -527,7 +541,6 @@ class AppConfig:
             "debug_detection_upload_url": self.debug_detection_upload_url,
             "update_repo": self.update_repo,
             "advanced_mode": self.advanced_mode,
-            "extra_checks": self.extra_checks,
             "start_watcher_on_launch": self.start_watcher_on_launch,
             "rebirth_alert_enabled": self.rebirth_alert_enabled,
             "belt_overlay_enabled": self.belt_overlay_enabled,

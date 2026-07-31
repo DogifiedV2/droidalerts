@@ -11,7 +11,6 @@ Install dependencies once with `pip install -r requirements.txt`, then:
 ```
 python main.py gui                    # open the app (same as the .bat file)
 python main.py watch                  # run the watcher in the terminal, no GUI
-python main.py watch --extra-checks   # enable HDR / washed-out color fallback checks
 python main.py watch --debug          # verbose output; numpad + saves a chat-box snapshot
 python main.py calibrate              # drag-select the alert region manually
 python main.py calibrate --reset      # go back to automatic region detection
@@ -76,13 +75,18 @@ where that global hotkey is unreliable, it saves the chat-box region and
 candidate overlay every five seconds. Other platforms log debug detections but
 do not currently offer a global capture hotkey.
 
-That setting diagnoses the chat detector. Belt Tracker has a separate **Dev
-mode** in its Belt Area panel. Enable it before starting Belt Tracker to record
-capture and recognition-stage timings, detector mode, candidate rejection
-reasons, tracker state, and a limited set of frames under `data/belt_dev`.
-The latest session is included when Diagnostics creates a Support Bundle.
+That setting diagnoses the chat detector. Belt Tracker has a separate
+**Blueprint collection mode** under Advanced settings. Enable it before
+starting Belt Tracker to automatically save accepted blueprints under
+`data/belt_dev`. Unknown candidate crops are not saved. On Windows, press `P`
+while the tracker is running to save the complete selected belt region as a
+lossless PNG. The matching JSON sidecar records the accepted detections, rejected candidates,
+name, rarity, confidence, boxes, recognizer diagnostics, and tracker state from
+that exact frame. An empty accepted list means the detector found no accepted
+identity. Stop Belt Tracker before opening the collection over a monitored
+region. Use **Export ZIP** to package the latest session for sharing.
 
-The separate **Save detections for review** switch creates a bounded local
+The separate **Save confirmed detections** switch creates a bounded local
 dataset under `data/belt_template_samples/detections`. Tracking continues to
 use the normal template matcher. For each physical track, the collector retains
 the best fully visible crop and writes at most one image after temporal
