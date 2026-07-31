@@ -87,9 +87,22 @@ class DiagnosticsController(StateObject):
     def showRegion(self) -> None:
         capture = None
         try:
-            capture = self.capture.create_chat_capture()
-            width, height = capture.screen_size()
-            area = getattr(capture, "capture_area", getattr(capture, "monitor", None))
+            if self.runtime.config.capture_source == "device":
+                capture = self.capture.create_chat_capture()
+                width, height = capture.screen_size()
+                area = getattr(
+                    capture,
+                    "capture_area",
+                    getattr(capture, "monitor", None),
+                )
+            else:
+                # The outline only needs source geometry. Opening another WGC
+                # session here can contend with the running watcher and blocks
+                # the UI while that redundant session waits for its first frame.
+                area = self.capture.current_belt_source(open_device=False)
+                if area is None:
+                    raise RuntimeError("The selected capture source is unavailable.")
+                width, height = int(area.width), int(area.height)
             box, source = RegionResolver(
                 width,
                 height,

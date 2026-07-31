@@ -34,6 +34,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from droid_alerts import __version__
+import droid_alerts.popup as popup_module
 from droid_alerts.belt.region import RelativeRegion
 from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox
 from droid_alerts.config import MAX_SAFE_DELAY_SECONDS, AppConfig
@@ -63,6 +64,7 @@ from droid_alerts.ui.belt_controller import BeltController
 from droid_alerts.ui.capture_controller import CaptureController
 from droid_alerts.ui.dashboard_controller import DashboardController
 from droid_alerts.ui.deals_controller import DealsController
+from droid_alerts.ui.diagnostics_controller import DiagnosticsController
 from droid_alerts.ui.dialogs import DialogController
 from droid_alerts.ui.history_controller import HistoryController
 from droid_alerts.ui.runtime import ApplicationRuntime
@@ -220,6 +222,118 @@ class QtUiControllerTests(unittest.TestCase):
         dialogs.action({"action": "modify", "id": "main"})
         manage_action.assert_called_once_with({"action": "modify", "id": "main"})
         dialogs.accept({})
+
+    def test_show_chat_region_does_not_open_a_second_window_capture(self):
+        runtime = RuntimeStub(AppConfig(capture_source="window"))
+        source = MonitorInfo(
+            160,
+            90,
+            1920,
+            1080,
+            index=1,
+            key="window:fortnite",
+        )
+        capture = CaptureStub(source)
+        capture.create_chat_capture = Mock(
+            side_effect=AssertionError("window capture must not be opened")
+        )
+        overlay = Mock()
+
+        with (
+            patch(
+                "droid_alerts.ui.diagnostics_controller.RegionResolver"
+            ) as resolver_type,
+            patch(
+                "droid_alerts.ui.diagnostics_controller.region_outline",
+                return_value=overlay,
+            ),
+        ):
+            resolver_type.return_value.resolve.return_value = (
+                PixelBox(40, 120, 600, 240),
+                "automatic",
+            )
+            controller = DiagnosticsController(runtime, capture)
+            controller.showRegion()
+
+        capture.create_chat_capture.assert_not_called()
+        resolver_type.assert_called_once_with(
+            1920,
+            1080,
+            monitor_key="window:fortnite",
+        )
+        overlay.show_region.assert_called_once_with(
+            200,
+            210,
+            600,
+            240,
+            "Droid Alerts region · automatic",
+        )
+        self.assertTrue(controller.state_snapshot()["regionVisible"])
+        self.assertFalse(runtime.dialogs.state_snapshot()["visible"])
+        controller.shutdown()
+
+    def test_popup_queue_serializes_alerts_and_chat_droids_preempt(self):
+        def detection(droid, rarity, source):
+            return Detection(
+                droid=droid,
+                rarity=rarity,
+                row_box=(0, 0, 480, 44),
+                droid_score=1.0,
+                rarity_score=1.0,
+                rarity_margin=1.0,
+                score=1.0,
+                source=source,
+            )
+
+        rebirth = detection("Rebirth", "Available", "rebirth-alert")
+        belt = detection("C-3PO", "Belt", "belt-tracker")
+        droid = detection("Beskar", "Mythic", "roi:scale-1.0")
+        next_droid = detection("Rainbow", "Legendary", "roi:scale-0.9")
+        try:
+            popup_module.show_popup(rebirth, 30.0)
+            popup_module.show_popup(belt, 30.0)
+
+            self.assertEqual(1, len(popup_module._ACTIVE_POPUPS))
+            self.assertIs(
+                rebirth,
+                popup_module._ACTIVE_POPUPS[0].detection,
+            )
+            self.assertEqual([belt], [item.detection for item in popup_module._POPUP_QUEUE])
+
+            popup_module.show_popup(droid, 30.0)
+            self.app.processEvents()
+
+            self.assertEqual(1, len(popup_module._ACTIVE_POPUPS))
+            self.assertIs(droid, popup_module._ACTIVE_POPUPS[0].detection)
+            self.assertEqual([belt], [item.detection for item in popup_module._POPUP_QUEUE])
+
+            popup_module.show_popup(next_droid, 30.0)
+
+            self.assertEqual(1, len(popup_module._ACTIVE_POPUPS))
+            self.assertIs(droid, popup_module._ACTIVE_POPUPS[0].detection)
+            self.assertEqual(
+                [next_droid, belt],
+                [item.detection for item in popup_module._POPUP_QUEUE],
+            )
+
+            popup_module._ACTIVE_POPUPS[0].close()
+            QTest.qWait(1)
+
+            self.assertEqual(1, len(popup_module._ACTIVE_POPUPS))
+            self.assertIs(next_droid, popup_module._ACTIVE_POPUPS[0].detection)
+            self.assertEqual([belt], [item.detection for item in popup_module._POPUP_QUEUE])
+
+            popup_module._ACTIVE_POPUPS[0].close()
+            QTest.qWait(1)
+
+            self.assertEqual(1, len(popup_module._ACTIVE_POPUPS))
+            self.assertIs(belt, popup_module._ACTIVE_POPUPS[0].detection)
+            self.assertFalse(popup_module._POPUP_QUEUE)
+        finally:
+            for popup in tuple(popup_module._ACTIVE_POPUPS):
+                popup.close()
+            popup_module._POPUP_QUEUE.clear()
+            self.app.processEvents()
 
     def test_dialog_controls_remain_clickable_after_wheel_scroll(self):
         dialogs = DialogController()

@@ -93,6 +93,19 @@ class _PopupLayout:
     show_icon: bool
 
 
+@dataclass(frozen=True)
+class _PopupRequest:
+    detection: Detection
+    popup_seconds: float
+    icon_path: Path | None
+    monitor: MonitorInfo | None
+    position: str
+    center_x_ratio: float | None
+    top_y_ratio: float | None
+    scale: float
+    opacity: float
+
+
 def _calculate_popup_layout(
     screen_width: int,
     screen_height: int,
@@ -186,6 +199,12 @@ def _is_scrap_alert_detection(detection: Detection) -> bool:
 
 def _is_timer_reminder_detection(detection: Detection) -> bool:
     return detection.source == "timer-reminder"
+
+
+def _is_chat_droid_detection(detection: Detection) -> bool:
+    """Return whether this is a spawn detected from Droid Tycoon chat."""
+
+    return detection.source.startswith("roi:")
 
 
 def _uses_attribute_rarity(detection: Detection) -> bool:
@@ -854,13 +873,17 @@ class _PopupWidget(QWidget):
     def closeEvent(self, event) -> None:
         global _ACTIVE_POPUP_EDITOR
         self._tick.stop()
+        was_active = False
         try:
             _ACTIVE_POPUPS.remove(self)
+            was_active = True
         except ValueError:
             pass
         if _ACTIVE_POPUP_EDITOR is self:
             _ACTIVE_POPUP_EDITOR = None
         super().closeEvent(event)
+        if was_active:
+            QTimer.singleShot(0, _show_next_queued_popup)
         if self._standalone:
             app = QApplication.instance()
             if app is not None:
@@ -868,7 +891,42 @@ class _PopupWidget(QWidget):
 
 
 _ACTIVE_POPUPS: list[_PopupWidget] = []
+_POPUP_QUEUE: list[_PopupRequest] = []
 _ACTIVE_POPUP_EDITOR: _PopupWidget | None = None
+
+
+def _show_popup_request(request: _PopupRequest) -> None:
+    popup = _PopupWidget(
+        request.detection,
+        request.popup_seconds,
+        icon_path=request.icon_path,
+        monitor=request.monitor,
+        position=request.position,
+        center_x_ratio=request.center_x_ratio,
+        top_y_ratio=request.top_y_ratio,
+        scale=request.scale,
+        opacity=request.opacity,
+    )
+    _ACTIVE_POPUPS.append(popup)
+    popup.show()
+
+
+def _show_next_queued_popup() -> None:
+    if _ACTIVE_POPUPS or not _POPUP_QUEUE:
+        return
+    _show_popup_request(_POPUP_QUEUE.pop(0))
+
+
+def _queue_popup_request(request: _PopupRequest) -> None:
+    if not _is_chat_droid_detection(request.detection):
+        _POPUP_QUEUE.append(request)
+        return
+    index = 0
+    while index < len(_POPUP_QUEUE) and _is_chat_droid_detection(
+        _POPUP_QUEUE[index].detection
+    ):
+        index += 1
+    _POPUP_QUEUE.insert(index, request)
 
 
 def bring_popup_to_front(
@@ -926,19 +984,36 @@ def show_popup(
 ) -> None:
     app = QApplication.instance()
     if app is not None and QThread.currentThread() is app.thread():
-        popup = _PopupWidget(
+        request = _PopupRequest(
             detection,
             popup_seconds,
-            icon_path=icon_path,
-            monitor=monitor,
-            position=position,
-            center_x_ratio=center_x_ratio,
-            top_y_ratio=top_y_ratio,
-            scale=scale,
-            opacity=opacity,
+            icon_path,
+            monitor,
+            position,
+            center_x_ratio,
+            top_y_ratio,
+            scale,
+            opacity,
         )
-        _ACTIVE_POPUPS.append(popup)
-        popup.show()
+        if _is_chat_droid_detection(detection):
+            active_is_droid = bool(
+                _ACTIVE_POPUPS
+                and _is_chat_droid_detection(_ACTIVE_POPUPS[0].detection)
+            )
+            if active_is_droid:
+                # Preserve FIFO order between chat spawns, ahead of all other
+                # queued alert types.
+                _queue_popup_request(request)
+            else:
+                # A chat spawn replaces a lower-priority alert immediately.
+                # Alerts already waiting remain queued behind chat spawns.
+                for popup in tuple(_ACTIVE_POPUPS):
+                    popup.close()
+                _queue_popup_request(request)
+                _show_next_queued_popup()
+        else:
+            _queue_popup_request(request)
+            _show_next_queued_popup()
         return
     try:
         process = multiprocessing.get_context("spawn").Process(
