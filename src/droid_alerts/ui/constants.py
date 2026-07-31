@@ -26,10 +26,8 @@ PAGES = (
 )
 
 WHATS_NEW_ITEMS = (
-    "Improved detection reliability.",
-    "Redesigned the timer overlay.",
-    "Improved Rebirth Ready alerts.",
-    "Added more screen-resolution support for CB23 Mission alerts.",
-    "Added Scrap Alert for stalled credit income while AFK.",
-    "Added an optional wake-up alarm for Mythic alerts.",
+    "Full port of the app to improve its speed, make it look and feel smoother, "
+    "and add a bunch of features, such as full customisation for all alert types "
+    "for ntfy, Discord, etc. For a full changelog, please join our Discord and "
+    "check there. You can find the Discord link in the bottom left corner of the app.",
 )

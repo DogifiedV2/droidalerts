@@ -11,7 +11,13 @@ from unittest.mock import patch
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from droid_alerts.belt.region import DEFAULT_REGION, RelativeRegion, load_region, save_region
+from droid_alerts.belt.region import (
+    DEFAULT_REGION,
+    RelativeRegion,
+    load_region,
+    load_saved_region,
+    save_region,
+)
 from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox
 
 
@@ -103,6 +109,66 @@ class BeltRegionDefaultTests(unittest.TestCase):
                 save_region(custom_monitor, custom)
                 self.assertEqual(custom, load_region(custom_monitor))
                 self.assertEqual(DEFAULT_REGION, load_region(other_monitor))
+
+    def test_legacy_monitor_region_is_migrated_to_window_coordinates(self):
+        monitor = MonitorInfo(
+            1920,
+            0,
+            2560,
+            1440,
+            index=2,
+            key=r"id:\\?\DISPLAY#MONITOR#UID184581",
+        )
+        stored_monitor = MonitorInfo(
+            1920,
+            0,
+            2560,
+            1440,
+            index=2,
+            key=r"id:\\?\DISPLAY#MONITOR#UID184577",
+        )
+        window = MonitorInfo(
+            2100,
+            100,
+            1600,
+            900,
+            index=2,
+            key="window:fortnite",
+        )
+        legacy = RelativeRegion(
+            left=280 / 2560,
+            top=200 / 1440,
+            width=800 / 2560,
+            height=400 / 1440,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "regions.json"
+            with patch("droid_alerts.belt.region.regions_path", return_value=path):
+                save_region(stored_monitor, legacy)
+                migrated = load_region(window, legacy_monitor=monitor)
+
+                self.assertEqual(PixelBox(100, 100, 800, 400), migrated.to_pixels(window))
+                self.assertEqual(migrated, load_saved_region(window))
+                self.assertEqual(legacy, load_saved_region(stored_monitor))
+
+    def test_existing_window_region_wins_over_legacy_monitor_region(self):
+        monitor = MonitorInfo(0, 0, 1920, 1080, key="id:legacy-monitor")
+        window = MonitorInfo(100, 50, 1600, 900, key="window:fortnite")
+        legacy = RelativeRegion(0.1, 0.1, 0.5, 0.4)
+        current = RelativeRegion(0.2, 0.2, 0.6, 0.5)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "regions.json"
+            with patch("droid_alerts.belt.region.regions_path", return_value=path):
+                save_region(monitor, legacy)
+                save_region(window, current)
+
+                self.assertEqual(
+                    current,
+                    load_region(window, legacy_monitor=monitor),
+                )
+                self.assertEqual(legacy, load_saved_region(monitor))
 
     def test_default_scales_across_resolutions(self):
         cases = (

@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict, dataclass
 import math
 from pathlib import Path
+import re
 
 from ..capture import MonitorDescriptor, MonitorInfo, PixelBox
 from ..config import config_dir
@@ -72,19 +73,124 @@ DEFAULT_REGION = RelativeRegion(
 )
 
 
-def load_region(monitor: Monitor) -> RelativeRegion:
-    path = regions_path()
+def _region_from_item(item: object) -> RelativeRegion | None:
+    if not isinstance(item, dict):
+        return None
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
-            return DEFAULT_REGION
-        item = raw.get(monitor.key)
-        if not isinstance(item, dict) or int(item.get("version", 1)) < 2:
-            return DEFAULT_REGION
+        if int(item.get("version", 1)) < 2:
+            return None
         region = RelativeRegion(**item)
-        return region if region.is_valid() else DEFAULT_REGION
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return region if region.is_valid() else None
+
+
+def _saved_regions() -> dict[str, object]:
+    try:
+        raw = json.loads(regions_path().read_text(encoding="utf-8"))
     except (OSError, OverflowError, ValueError, TypeError):
-        return DEFAULT_REGION
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def load_saved_region(monitor: Monitor) -> RelativeRegion | None:
+    """Return only a valid region explicitly saved for ``monitor``."""
+
+    return _region_from_item(_saved_regions().get(monitor.key))
+
+
+def _legacy_monitor_region(monitor: Monitor) -> RelativeRegion | None:
+    """Find a 1.3.9 monitor entry even if Windows changed its UID suffix."""
+
+    raw = _saved_regions()
+    exact = _region_from_item(raw.get(monitor.key))
+    if exact is not None:
+        return exact
+
+    candidates = [
+        (key, region)
+        for key, item in raw.items()
+        if not str(key).startswith(("window:", "device:"))
+        and (region := _region_from_item(item)) is not None
+    ]
+    normalized_key = re.sub(r"UID\d+", "UID*", monitor.key, flags=re.IGNORECASE)
+    hardware_matches = [
+        region
+        for key, region in candidates
+        if re.sub(r"UID\d+", "UID*", str(key), flags=re.IGNORECASE)
+        == normalized_key
+    ]
+    if len(hardware_matches) == 1:
+        return hardware_matches[0]
+    if len(candidates) == 1:
+        return candidates[0][1]
+    return None
+
+
+def migrate_legacy_monitor_region(
+    source: Monitor,
+    legacy_monitor: Monitor,
+) -> RelativeRegion | None:
+    """Copy a 1.3.9 monitor region into 1.4.0 window coordinates.
+
+    Version 1.3.9 saved window-capture selections relative to the physical
+    monitor. Version 1.4.0 saves them relative to the selected window. Keep the
+    original monitor entry and add a translated window entry on first use.
+    """
+
+    if source.key == legacy_monitor.key:
+        return None
+    legacy = _legacy_monitor_region(legacy_monitor)
+    if legacy is None:
+        return None
+
+    legacy_box = legacy.to_pixels(legacy_monitor)
+    left = legacy_monitor.left + legacy_box.left - source.left
+    top = legacy_monitor.top + legacy_box.top - source.top
+    right = left + legacy_box.width
+    bottom = top + legacy_box.height
+
+    # A window may have moved or changed size since 1.3.9. Preserve the part
+    # of the old selection that still lies inside its current capture area.
+    clipped_left = max(0, left)
+    clipped_top = max(0, top)
+    clipped_right = min(source.width, right)
+    clipped_bottom = min(source.height, bottom)
+    if clipped_right <= clipped_left or clipped_bottom <= clipped_top:
+        return None
+
+    migrated = RelativeRegion.from_pixels(
+        PixelBox(
+            left=clipped_left,
+            top=clipped_top,
+            width=clipped_right - clipped_left,
+            height=clipped_bottom - clipped_top,
+        ),
+        source,
+    )
+    if not migrated.is_valid():
+        return None
+    try:
+        save_region(source, migrated)
+    except OSError:
+        # A read-only or temporarily locked config must not prevent tracking.
+        pass
+    return migrated
+
+
+def load_region(
+    monitor: Monitor,
+    *,
+    legacy_monitor: Monitor | None = None,
+) -> RelativeRegion:
+    saved = load_saved_region(monitor)
+    if saved is not None:
+        return saved
+    if legacy_monitor is not None:
+        migrated = migrate_legacy_monitor_region(monitor, legacy_monitor)
+        if migrated is not None:
+            return migrated
+    return DEFAULT_REGION
 
 
 def save_region(monitor: Monitor, region: RelativeRegion) -> None:

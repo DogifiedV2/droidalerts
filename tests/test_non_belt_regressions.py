@@ -95,6 +95,34 @@ class OptimizationRegressionTests(unittest.TestCase):
 
 
 class RuntimeResilienceTests(unittest.TestCase):
+    def test_watcher_settings_signature_tracks_cached_credentials(self):
+        config = AppConfig()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(watcher, "config_dir", return_value=root):
+                baseline = watcher._settings_signature(config)
+
+                (root / config.discord_webhook_file).write_text(
+                    "https://discord.com/api/webhooks/1/new\n",
+                    encoding="utf-8",
+                )
+                discord_changed = watcher._settings_signature(config)
+
+                (root / config.phone_credentials_file).write_text(
+                    '{"token": "new", "user": "new"}\n',
+                    encoding="utf-8",
+                )
+                phone_changed = watcher._settings_signature(config)
+
+        self.assertNotEqual(baseline, discord_changed)
+        self.assertNotEqual(discord_changed, phone_changed)
+
+    def test_config_rejects_non_finite_delays(self):
+        for key in ("capture_interval_seconds", "popup_seconds"):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(ValueError, "must be finite"):
+                    AppConfig.from_dict({key: float("inf")})
+
     def test_unrecoverable_config_is_preserved_before_defaults_are_restored(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

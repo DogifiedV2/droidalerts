@@ -29,9 +29,11 @@ from ..belt.dev_logging import belt_dev_dir
 from ..belt.sample_collection import belt_template_samples_dir
 from ..capture import list_monitors
 from ..config import (
+    MAX_SAFE_DELAY_SECONDS,
     AppConfig,
     config_dir,
     normalize_belt_scan_fps,
+    normalize_finite_float,
     sounds_dir,
     user_sounds_dir,
 )
@@ -77,11 +79,11 @@ BOOLEAN_FIELDS = {
 }
 
 FLOAT_RANGES = {
-    "capture_interval_seconds": (0.05, None),
+    "capture_interval_seconds": (0.05, MAX_SAFE_DELAY_SECONDS),
     "rebirth_scan_interval_seconds": (2.0, 30.0),
     "dedupe_seconds": (0.0, None),
     "alert_cooldown_seconds": (0.0, None),
-    "popup_seconds": (0.5, None),
+    "popup_seconds": (0.5, MAX_SAFE_DELAY_SECONDS),
     "popup_scale": (0.7, 1.5),
     "popup_opacity": (0.55, 1.0),
 }
@@ -222,12 +224,14 @@ class SettingsController(StateObject):
                     normalized = False
             elif key in FLOAT_RANGES:
                 low, high = FLOAT_RANGES[key]
-                normalized = max(low, float(value))
-                if high is not None:
-                    normalized = min(high, normalized)
+                normalized = normalize_finite_float(
+                    value,
+                    minimum=low,
+                    maximum=high,
+                )
             elif key in INT_RANGES:
                 low, high = INT_RANGES[key]
-                normalized = max(low, int(float(value)))
+                normalized = max(low, int(normalize_finite_float(value)))
                 if high is not None:
                     normalized = min(high, normalized)
             elif key in STRING_FIELDS:
@@ -252,7 +256,7 @@ class SettingsController(StateObject):
                     normalized = normalized or "DogifiedV2/droidalerts"
             else:
                 return
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             self.runtime.dialogs.show_message(
                 "Settings",
                 f"Invalid value for {key.replace('_', ' ')}.",
@@ -553,6 +557,63 @@ class SettingsController(StateObject):
 
     @Slot()
     def configureDiscordRoutes(self) -> None:
+        try:
+            main_webhook, _ = load_discord_webhook(self.runtime.config)
+        except Exception as exc:
+            self.runtime.dialogs.show_message(
+                "Discord Webhooks",
+                str(exc),
+                tone="danger",
+            )
+            return
+        if not main_webhook:
+            self._show_initial_discord_webhook_setup()
+            return
+        self._configure_discord_routes(None)
+
+    def _show_initial_discord_webhook_setup(self) -> None:
+        self.runtime.dialogs.form(
+            "Set Up Discord Webhooks",
+            "Add the Main webhook before configuring Discord destinations.",
+            [
+                {
+                    "id": "webhook",
+                    "label": "Main webhook URL",
+                    "value": "",
+                    "password": True,
+                }
+            ],
+            note="The Main webhook is the default destination for Discord alerts.",
+            callback=self._save_initial_discord_webhook,
+        )
+
+    def _save_initial_discord_webhook(
+        self,
+        payload: dict[str, Any] | None,
+    ) -> None:
+        if payload is None:
+            return
+        webhook = str(payload.get("webhook") or "").strip().lstrip("\ufeff")
+        if not valid_discord_webhook_url(webhook):
+            self.runtime.dialogs.show_message(
+                "Discord Webhooks",
+                "That does not look like a Discord webhook URL.",
+                tone="danger",
+                callback=lambda _payload: self._show_initial_discord_webhook_setup(),
+            )
+            return
+        try:
+            save_discord_webhook(self.runtime.config, webhook)
+        except OSError as exc:
+            self.runtime.dialogs.show_message(
+                "Discord Webhooks",
+                str(exc),
+                tone="danger",
+                callback=lambda _payload: self._show_initial_discord_webhook_setup(),
+            )
+            return
+        self.runtime.update_config(discord_enabled=True)
+        self.runtime.detailChanged.emit("Main Discord webhook configured")
         self._configure_discord_routes(None)
 
     def _configure_discord_routes(
@@ -562,7 +623,7 @@ class SettingsController(StateObject):
         try:
             destinations = discord_destination_names(self.runtime.config)
         except Exception as exc:
-            self.runtime.dialogs.show_message("Discord Routing", str(exc), tone="danger")
+            self.runtime.dialogs.show_message("Discord Webhooks", str(exc), tone="danger")
             return
         routes = self.runtime.config.discord_alert_destinations
         draft = (
@@ -572,7 +633,7 @@ class SettingsController(StateObject):
         )
         has_limited_destination = "Limited Deals" in destinations
         self.runtime.dialogs.rules(
-            "Discord Routing",
+            "Discord Webhooks",
             "Optional: use different webhooks for different alerts.",
             [
                 {
@@ -607,6 +668,7 @@ class SettingsController(StateObject):
             limited_webhook, _ = load_limited_deal_discord_webhook(
                 self.runtime.config
             )
+            named_webhooks = load_discord_destinations(self.runtime.config)
         except Exception as exc:
             self.runtime.dialogs.show_message(
                 "Discord Webhooks",
@@ -615,68 +677,78 @@ class SettingsController(StateObject):
                 callback=lambda _payload: self._configure_discord_routes(draft),
             )
             return
-        self.runtime.dialogs.choices(
-            "Discord Webhooks",
-            "Choose a webhook to configure, or add a named webhook.",
-            [
-                {
-                    "id": "main",
-                    "label": "Main webhook",
-                    "detail": "Configured" if main_webhook else "Not configured",
-                    "selected": False,
-                },
+        rows: list[dict[str, str]] = []
+        if main_webhook:
+            rows.append(
+                {"id": "main", "label": "Main", "detail": "Default destination"}
+            )
+        if limited_webhook:
+            rows.append(
                 {
                     "id": "limited_deals",
-                    "label": "Limited Deals webhook",
-                    "detail": "Configured" if limited_webhook else "Optional",
-                    "selected": False,
-                },
-                {
-                    "id": "add_named",
-                    "label": "Add named webhook",
-                    "detail": "Create another destination for selected alerts",
-                    "selected": False,
-                },
-            ],
-            accept_text="Continue",
-            callback=self._choose_discord_webhook_action,
+                    "label": "Limited Deals",
+                    "detail": "Named destination",
+                }
+            )
+        rows.extend(
+            {
+                "id": f"named:{name}",
+                "label": name,
+                "detail": "Named destination",
+            }
+            for name in sorted(named_webhooks, key=str.casefold)
+            if name.casefold() not in {"main", "limited deals"}
+        )
+        self.runtime.dialogs.manage(
+            "Discord Webhooks",
+            "Modify or delete an existing webhook, or add a new one.",
+            rows,
+            action_callback=self._handle_discord_webhook_action,
+            callback=lambda _payload: self._configure_discord_routes(draft),
         )
 
-    def _choose_discord_webhook_action(
+    def _handle_discord_webhook_action(
         self,
         payload: dict[str, Any] | None,
     ) -> None:
         draft = self._discord_route_draft or {}
-        if payload is None:
-            self._configure_discord_routes(draft)
-            return
-        selected = str(payload.get("selected") or "")
-        if selected == "add_named":
+        action = str((payload or {}).get("action") or "")
+        destination_id = str((payload or {}).get("id") or "")
+        if action == "add":
             self._show_add_discord_destination(draft)
-        elif selected in {"main", "limited_deals"}:
-            self._show_builtin_discord_webhook(selected, draft)
+        elif action == "modify" and destination_id:
+            self._show_modify_discord_destination(destination_id)
+        elif action == "delete" and destination_id:
+            self._confirm_delete_discord_destination(destination_id)
         else:
             self._show_manage_discord_webhooks(draft)
 
-    def _show_builtin_discord_webhook(
-        self,
-        destination: str,
-        draft: dict[str, Any],
-    ) -> None:
-        self._discord_route_draft = draft
+    def _show_modify_discord_destination(self, destination_id: str) -> None:
+        draft = self._discord_route_draft or {}
+        fields: list[dict[str, Any]] = []
         try:
-            if destination == "main":
+            if destination_id == "main":
                 current, _ = load_discord_webhook(self.runtime.config)
-                title = "Main Discord Webhook"
-                message = "Set the default webhook used by Discord alerts."
-                note = "The Main webhook is required when an alert has no other destination."
-            else:
+                name = "Main"
+            elif destination_id == "limited_deals":
                 current, _ = load_limited_deal_discord_webhook(
                     self.runtime.config
                 )
-                title = "Limited Deals Webhook"
-                message = "Optionally send Limited Deal alerts to a separate webhook."
-                note = "Leave the URL blank and save to remove this dedicated webhook."
+                name = "Limited Deals"
+            elif destination_id.startswith("named:"):
+                name = destination_id.removeprefix("named:")
+                current = load_discord_destinations(self.runtime.config).get(name)
+                fields.append(
+                    {
+                        "id": "name",
+                        "label": "Webhook name",
+                        "value": name,
+                        "password": False,
+                    }
+                )
+            else:
+                self._show_manage_discord_webhooks(draft)
+                return
         except Exception as exc:
             self.runtime.dialogs.show_message(
                 "Discord Webhooks",
@@ -685,27 +757,30 @@ class SettingsController(StateObject):
                 callback=lambda _payload: self._show_manage_discord_webhooks(draft),
             )
             return
+        if not current:
+            self._show_manage_discord_webhooks(draft)
+            return
+        fields.append(
+            {
+                "id": "webhook",
+                "label": "Webhook URL",
+                "value": current,
+                "password": True,
+            }
+        )
         self.runtime.dialogs.form(
-            title,
-            message,
-            [
-                {
-                    "id": "webhook",
-                    "label": "Webhook URL",
-                    "value": current or "",
-                    "password": True,
-                }
-            ],
-            note=note,
-            callback=lambda values: self._save_builtin_discord_webhook(
-                destination,
+            f"Modify {name}",
+            "Update this Discord webhook.",
+            fields,
+            callback=lambda values: self._save_modified_discord_destination(
+                destination_id,
                 values,
             ),
         )
 
-    def _save_builtin_discord_webhook(
+    def _save_modified_discord_destination(
         self,
-        destination: str,
+        destination_id: str,
         payload: dict[str, Any] | None,
     ) -> None:
         draft = self._discord_route_draft or {}
@@ -713,83 +788,86 @@ class SettingsController(StateObject):
             self._show_manage_discord_webhooks(draft)
             return
         webhook = str(payload.get("webhook") or "").strip().lstrip("\ufeff")
-        if destination == "main" and not webhook:
-            self.runtime.dialogs.show_message(
-                "Discord Webhooks",
-                "Enter the Main Discord webhook URL.",
-                tone="danger",
-                callback=lambda _payload: self._show_builtin_discord_webhook(
-                    destination,
-                    draft,
-                ),
-            )
-            return
-        if webhook and not valid_discord_webhook_url(webhook):
+        if not valid_discord_webhook_url(webhook):
             self.runtime.dialogs.show_message(
                 "Discord Webhooks",
                 "That does not look like a Discord webhook URL.",
                 tone="danger",
-                callback=lambda _payload: self._show_builtin_discord_webhook(
-                    destination,
-                    draft,
+                callback=lambda _payload: self._show_modify_discord_destination(
+                    destination_id
                 ),
             )
             return
         try:
-            if destination == "main":
+            if destination_id == "main":
                 save_discord_webhook(self.runtime.config, webhook)
-                self.runtime.update_config(discord_enabled=True)
-                detail = "Main Discord webhook saved"
-            else:
+                detail = "Main Discord webhook updated"
+            elif destination_id == "limited_deals":
                 save_limited_deal_discord_webhook(self.runtime.config, webhook)
-                detail = (
-                    "Limited Deals webhook saved"
-                    if webhook
-                    else "Limited Deals webhook removed"
-                )
-        except OSError as exc:
+                detail = "Limited Deals Discord webhook updated"
+            elif destination_id.startswith("named:"):
+                original_name = destination_id.removeprefix("named:")
+                name = " ".join(str(payload.get("name") or "").split())[:64]
+                if not name or name.casefold() in {"main", "limited deals"}:
+                    raise ValueError("Enter a unique webhook name.")
+                destinations = load_discord_destinations(self.runtime.config)
+                if any(
+                    existing.casefold() == name.casefold()
+                    and existing.casefold() != original_name.casefold()
+                    for existing in destinations
+                ):
+                    raise ValueError(f'A webhook named "{name}" already exists.')
+                destinations = {
+                    existing: url
+                    for existing, url in destinations.items()
+                    if existing.casefold() != original_name.casefold()
+                }
+                destinations[name] = webhook
+                save_discord_destinations(self.runtime.config, destinations)
+                if name != original_name:
+                    self._rename_discord_destination(original_name, name)
+                detail = f"Discord webhook updated: {name}"
+            else:
+                self._show_manage_discord_webhooks(draft)
+                return
+        except (OSError, ValueError) as exc:
             self.runtime.dialogs.show_message(
                 "Discord Webhooks",
                 str(exc),
                 tone="danger",
-                callback=lambda _payload: self._show_builtin_discord_webhook(
-                    destination,
-                    draft,
-                ),
+                callback=lambda _payload: self._show_modify_discord_destination(
+                    destination_id
+                )
             )
             return
-
-        if destination == "limited_deals":
-            values = draft.get("values")
-            if isinstance(values, dict):
-                if webhook:
-                    if (
-                        "limited_deals"
-                        not in self.runtime.config.discord_alert_destinations
-                    ):
-                        values["limited_deals"] = "Limited Deals"
-                else:
-                    for alert_id, assigned in list(values.items()):
-                        if str(assigned).casefold() == "limited deals":
-                            values[alert_id] = "Main"
-            if not webhook:
-                routes = {
-                    alert_id: assigned
-                    for alert_id, assigned in (
-                        self.runtime.config.discord_alert_destinations.items()
-                    )
-                    if assigned.casefold() != "limited deals"
-                }
-                self.runtime.update_config(discord_alert_destinations=routes)
-
+        self.runtime.update_config(discord_enabled=True)
         self.runtime.detailChanged.emit(detail)
-        self._configure_discord_routes(draft)
+        self._show_manage_discord_webhooks(draft)
+
+    def _rename_discord_destination(self, old_name: str, new_name: str) -> None:
+        routes = {
+            alert_id: (
+                new_name
+                if assigned.casefold() == old_name.casefold()
+                else assigned
+            )
+            for alert_id, assigned in (
+                self.runtime.config.discord_alert_destinations.items()
+            )
+        }
+        self.runtime.update_config(discord_alert_destinations=routes)
+        draft = self._discord_route_draft or {}
+        values = draft.get("values")
+        if isinstance(values, dict):
+            for alert_id, assigned in list(values.items()):
+                if str(assigned).casefold() == old_name.casefold():
+                    values[alert_id] = new_name
 
     def _show_add_discord_destination(self, draft: dict[str, Any]) -> None:
         self._discord_route_draft = draft
         self.runtime.dialogs.form(
             "Add Discord Webhook",
-            "Give this webhook a clear name. You can assign it to alerts next.",
+            "Give this webhook a clear name.",
             [
                 {
                     "id": "name",
@@ -808,48 +886,151 @@ class SettingsController(StateObject):
         )
 
     def _save_discord_destination(self, payload: dict[str, Any] | None) -> None:
-        draft = self._discord_route_draft
-        self._discord_route_draft = None
+        draft = self._discord_route_draft or {}
         if payload is None:
-            self._configure_discord_routes(draft)
+            self._show_manage_discord_webhooks(draft)
             return
         name = " ".join(str(payload.get("name") or "").split())[:64]
         webhook = str(payload.get("webhook") or "").strip().lstrip("\ufeff")
-        if not name or name.casefold() in {"main", "limited deals"}:
+        if not name:
             self.runtime.dialogs.show_message(
-                "Discord Routing",
-                "Enter a unique name other than Main or Limited Deals.",
+                "Discord Webhooks",
+                "Enter a webhook name.",
                 tone="danger",
-                callback=lambda _payload: self._configure_discord_routes(draft),
+                callback=lambda _payload: self._show_add_discord_destination(draft),
             )
             return
         if not valid_discord_webhook_url(webhook):
             self.runtime.dialogs.show_message(
-                "Discord Routing",
+                "Discord Webhooks",
                 "That does not look like a Discord webhook URL.",
                 tone="danger",
-                callback=lambda _payload: self._configure_discord_routes(draft),
+                callback=lambda _payload: self._show_add_discord_destination(draft),
             )
             return
         try:
+            main_webhook, _ = load_discord_webhook(self.runtime.config)
+            limited_webhook, _ = load_limited_deal_discord_webhook(
+                self.runtime.config
+            )
             destinations = load_discord_destinations(self.runtime.config)
-            destinations = {
-                existing_name: url
-                for existing_name, url in destinations.items()
-                if existing_name.casefold() != name.casefold()
-            }
-            destinations[name] = webhook
-            save_discord_destinations(self.runtime.config, destinations)
+            folded = name.casefold()
+            built_in_exists = (
+                (folded == "main" and bool(main_webhook))
+                or (folded == "limited deals" and bool(limited_webhook))
+            )
+            named_exists = any(
+                existing.casefold() == folded for existing in destinations
+            )
+            if built_in_exists or named_exists:
+                raise ValueError(f'A webhook named "{name}" already exists.')
+            if folded == "main":
+                save_discord_webhook(self.runtime.config, webhook)
+                saved_name = "Main"
+            elif folded == "limited deals":
+                save_limited_deal_discord_webhook(self.runtime.config, webhook)
+                saved_name = "Limited Deals"
+            else:
+                destinations[name] = webhook
+                save_discord_destinations(self.runtime.config, destinations)
+                saved_name = name
         except (OSError, ValueError) as exc:
             self.runtime.dialogs.show_message(
-                "Discord Routing",
+                "Discord Webhooks",
                 str(exc),
                 tone="danger",
-                callback=lambda _payload: self._configure_discord_routes(draft),
+                callback=lambda _payload: self._show_add_discord_destination(draft),
             )
             return
-        self.runtime.detailChanged.emit(f"Discord webhook added: {name}")
-        self._configure_discord_routes(draft)
+        self.runtime.update_config(discord_enabled=True)
+        self.runtime.detailChanged.emit(f"Discord webhook added: {saved_name}")
+        self._show_manage_discord_webhooks(draft)
+
+    def _confirm_delete_discord_destination(self, destination_id: str) -> None:
+        draft = self._discord_route_draft or {}
+        name = {
+            "main": "Main",
+            "limited_deals": "Limited Deals",
+        }.get(destination_id, destination_id.removeprefix("named:"))
+        self.runtime.dialogs.confirm(
+            "Delete Discord Webhook",
+            f'Delete "{name}"?',
+            tone="danger",
+            accept_text="Delete",
+            callback=lambda payload: self._delete_discord_destination(
+                destination_id,
+                payload,
+            ),
+        )
+
+    def _delete_discord_destination(
+        self,
+        destination_id: str,
+        payload: dict[str, Any] | None,
+    ) -> None:
+        draft = self._discord_route_draft or {}
+        if payload is None:
+            self._show_manage_discord_webhooks(draft)
+            return
+        removed_name = ""
+        try:
+            if destination_id == "main":
+                save_discord_webhook(self.runtime.config, "")
+                removed_name = "Main"
+            elif destination_id == "limited_deals":
+                save_limited_deal_discord_webhook(self.runtime.config, "")
+                removed_name = "Limited Deals"
+            elif destination_id.startswith("named:"):
+                removed_name = destination_id.removeprefix("named:")
+                destinations = {
+                    name: url
+                    for name, url in load_discord_destinations(
+                        self.runtime.config
+                    ).items()
+                    if name.casefold() != removed_name.casefold()
+                }
+                save_discord_destinations(self.runtime.config, destinations)
+            else:
+                self._show_manage_discord_webhooks(draft)
+                return
+            if removed_name.casefold() != "main":
+                self._remove_discord_destination_routes(removed_name)
+            main_webhook, _ = load_discord_webhook(self.runtime.config)
+            limited_webhook, _ = load_limited_deal_discord_webhook(
+                self.runtime.config
+            )
+            named_webhooks = load_discord_destinations(self.runtime.config)
+        except (OSError, ValueError) as exc:
+            self.runtime.dialogs.show_message(
+                "Discord Webhooks",
+                str(exc),
+                tone="danger",
+                callback=lambda _payload: self._show_manage_discord_webhooks(draft),
+            )
+            return
+        self.runtime.update_config(
+            discord_enabled=bool(
+                main_webhook or limited_webhook or named_webhooks
+            )
+        )
+        self.runtime.detailChanged.emit(f"Discord webhook deleted: {removed_name}")
+        self._show_manage_discord_webhooks(draft)
+
+    def _remove_discord_destination_routes(self, name: str) -> None:
+        routes = {
+            alert_id: assigned
+            for alert_id, assigned in (
+                self.runtime.config.discord_alert_destinations.items()
+            )
+            if assigned.casefold() != name.casefold()
+        }
+        self.runtime.update_config(discord_alert_destinations=routes)
+        draft = self._discord_route_draft or {}
+        values = draft.get("values")
+        if isinstance(values, dict):
+            for alert_id, assigned in list(values.items()):
+                if str(assigned).casefold() == name.casefold():
+                    values[alert_id] = "Main"
 
     def _save_discord_routes(self, payload: dict[str, Any] | None) -> None:
         if payload is None:
@@ -909,33 +1090,14 @@ class SettingsController(StateObject):
         mention_type, mention_id = mentions.pop() if shared_mention else ("", "")
         self.runtime.dialogs.form(
             "Discord Message Rules",
-            f"Choose which settings to change for {len(alert_ids)} selected alert(s). Existing mixed values are kept unless you replace or remove them.",
+            f"Set the message options for {len(alert_ids)} selected alert(s). "
+            "Saving applies these values to every selected alert.",
             [
-                {
-                    "id": "prefix_action",
-                    "label": "Prefix change",
-                    "value": "set" if shared_prefix else "keep",
-                    "choices": [
-                        {"id": "keep", "label": "Keep each current prefix"},
-                        {"id": "set", "label": "Use prefix below"},
-                        {"id": "clear", "label": "Remove prefix"},
-                    ],
-                },
                 {
                     "id": "prefix",
                     "label": "Message prefix (optional)",
                     "value": prefix,
                     "password": False,
-                },
-                {
-                    "id": "mention_action",
-                    "label": "Mention change",
-                    "value": "set" if shared_mention and mention_type else "keep",
-                    "choices": [
-                        {"id": "keep", "label": "Keep each current mention"},
-                        {"id": "set", "label": "Use mention below"},
-                        {"id": "clear", "label": "Remove mention"},
-                    ],
                 },
                 {
                     "id": "mention_type",
@@ -964,29 +1126,9 @@ class SettingsController(StateObject):
     ) -> None:
         if payload is None:
             return
-        prefix_action = str(
-            payload.get(
-                "prefix_action",
-                "set" if "prefix" in payload else "keep",
-            )
-        ).casefold()
-        mention_action = str(
-            payload.get(
-                "mention_action",
-                "set"
-                if "mention_type" in payload or "mention_id" in payload
-                else "keep",
-            )
-        ).casefold()
         mention_type = str(payload.get("mention_type") or "").strip().casefold()
         mention_id = str(payload.get("mention_id") or "").strip()
-        if prefix_action not in {"keep", "set", "clear"} or mention_action not in {
-            "keep",
-            "set",
-            "clear",
-        }:
-            return
-        if mention_action == "set":
+        if mention_type:
             if (
                 mention_type not in {"user", "role"}
                 or not mention_id.isdigit()
@@ -1002,16 +1144,13 @@ class SettingsController(StateObject):
         prefix = " ".join(str(payload.get("prefix") or "").split())[:160]
         mentions = dict(self.runtime.config.discord_mentions)
         for alert_id in alert_ids:
-            if prefix_action == "set":
-                if prefix:
-                    prefixes[alert_id] = prefix
-                else:
-                    prefixes.pop(alert_id, None)
-            elif prefix_action == "clear":
+            if prefix:
+                prefixes[alert_id] = prefix
+            else:
                 prefixes.pop(alert_id, None)
-            if mention_action == "set":
+            if mention_type:
                 mentions[alert_id] = {"type": mention_type, "id": mention_id}
-            elif mention_action == "clear":
+            else:
                 mentions.pop(alert_id, None)
         self.runtime.update_config(
             discord_message_prefixes=normalize_discord_message_prefixes(prefixes),

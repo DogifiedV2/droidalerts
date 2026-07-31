@@ -12,20 +12,36 @@ from unittest.mock import Mock, patch
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from PySide6.QtCore import QObject, QRect, Signal
+from PySide6.QtCore import (
+    QByteArray,
+    QCoreApplication,
+    QEvent,
+    QObject,
+    QPoint,
+    QPointF,
+    QRect,
+    QUrl,
+    Qt,
+    Signal,
+)
+from PySide6.QtGui import QWheelEvent
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from droid_alerts import __version__
 from droid_alerts.belt.region import RelativeRegion
 from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox
-from droid_alerts.config import AppConfig
+from droid_alerts.config import MAX_SAFE_DELAY_SECONDS, AppConfig
 from droid_alerts.limited_deals import LimitedDeal
 from droid_alerts.notifications import (
     DeliveryResult,
     load_discord_destinations,
+    load_discord_webhook,
     load_limited_deal_discord_webhook,
     load_ntfy_token,
     save_ntfy_token,
@@ -39,7 +55,7 @@ from droid_alerts.popup import (
 from droid_alerts.classifier import Detection
 from droid_alerts.timers import DroidTimersOverlay, timer_reminder_detection
 from droid_alerts.ui.app_controller import AppController
-from droid_alerts.ui.application import initial_window_geometry
+from droid_alerts.ui.application import initial_window_geometry, qml_dir
 from droid_alerts.ui.belt_controller import BeltController
 from droid_alerts.ui.capture_controller import CaptureController
 from droid_alerts.ui.dashboard_controller import DashboardController
@@ -188,6 +204,231 @@ class QtUiControllerTests(unittest.TestCase):
             {"values": {"alert": "sound.wav"}}
         )
 
+        manage_action = Mock()
+        dialogs.manage(
+            "Discord Webhooks",
+            "Manage destinations",
+            [{"id": "main", "label": "Main"}],
+            action_callback=manage_action,
+        )
+        self.assertEqual("manage", dialogs.state_snapshot()["kind"])
+        self.assertEqual("Add New", dialogs.state_snapshot()["actionText"])
+        self.assertEqual("Exit", dialogs.state_snapshot()["acceptText"])
+        dialogs.action({"action": "modify", "id": "main"})
+        manage_action.assert_called_once_with({"action": "modify", "id": "main"})
+        dialogs.accept({})
+
+    def test_dialog_controls_remain_clickable_after_wheel_scroll(self):
+        dialogs = DialogController()
+        accepted = Mock()
+        engine = QQmlApplicationEngine()
+        engine.addImportPath(str(qml_dir()))
+        engine.rootContext().setContextProperty("dialogController", dialogs)
+        engine.loadData(
+            QByteArray(
+                b"import QtQuick 2.15\n"
+                b"import QtQuick.Controls 2.15\n"
+                b"import DroidAlerts.Components 1.0\n"
+                b"ApplicationWindow { width: 1000; height: 650; visible: true; "
+                b"DialogOverlay { anchors.fill: parent } }"
+            ),
+            QUrl.fromLocalFile(str(qml_dir()) + "/"),
+        )
+        self.assertTrue(engine.rootObjects())
+        window = engine.rootObjects()[0]
+        dialogs.choices(
+            "Discord Message Rules",
+            "Select alerts",
+            [
+                {"id": str(index), "label": f"Alert {index}", "selected": False}
+                for index in range(40)
+            ],
+            multi=True,
+            callback=accepted,
+        )
+        for _ in range(5):
+            self.app.processEvents()
+
+        def descendants(item):
+            for child in item.childItems():
+                yield child
+                yield from descendants(child)
+
+        items = list(descendants(window.contentItem()))
+        checkboxes = [
+            item
+            for item in items
+            if "SignalCheck" in item.metaObject().className()
+            and item.property("visible")
+        ]
+
+        def click_item(item):
+            position = item.mapToScene(
+                QPoint(round(item.width() / 2), round(item.height() / 2))
+            )
+            QTest.mouseClick(
+                window,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+                position.toPoint(),
+            )
+            self.app.processEvents()
+
+        select_all = next(
+            item
+            for item in items
+            if "SignalButton" in item.metaObject().className()
+            and item.property("text") == "Select all"
+        )
+        deselect_all = next(
+            item
+            for item in items
+            if "SignalButton" in item.metaObject().className()
+            and item.property("text") == "Deselect all"
+        )
+        click_item(select_all)
+        self.assertTrue(all(item.property("checked") for item in checkboxes))
+        click_item(deselect_all)
+        self.assertFalse(any(item.property("checked") for item in checkboxes))
+
+        scroll = next(
+            item
+            for item in items
+            if "Flickable" in item.metaObject().className()
+        )
+        position = scroll.mapToScene(
+            QPoint(round(scroll.width() / 2), round(scroll.height() / 2))
+        )
+        for _ in range(4):
+            event = QWheelEvent(
+                QPointF(position),
+                QPointF(position),
+                QPoint(),
+                QPoint(0, -120),
+                Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.NoModifier,
+                Qt.ScrollPhase.NoScrollPhase,
+                False,
+            )
+            QApplication.sendEvent(window, event)
+            self.app.processEvents()
+
+        self.assertGreater(float(scroll.property("contentY")), 0.0)
+        scroll_top = scroll.mapToScene(QPoint()).y()
+        scroll_bottom = scroll_top + scroll.height()
+        checkbox = next(
+            item
+            for item in items
+            if "SignalCheck" in item.metaObject().className()
+            and scroll_top <= item.mapToScene(QPoint()).y()
+            and item.mapToScene(QPoint()).y() + item.height() <= scroll_bottom
+        )
+        click_item(checkbox)
+        self.assertTrue(checkbox.property("checked"))
+
+        save_button = next(
+            item
+            for item in items
+            if "SignalButton" in item.metaObject().className()
+            and item.property("visible")
+            and item.property("text") == "Save"
+        )
+        click_item(save_button)
+        accepted.assert_called_once()
+
+        channel_accepted = Mock()
+        dialogs.channel_settings(
+            "Configure Discord alerts",
+            "Choose connection and delivery settings.",
+            [],
+            [
+                {"id": str(index), "label": f"Alert {index}", "selected": False}
+                for index in range(3)
+            ],
+            callback=channel_accepted,
+        )
+        self.app.processEvents()
+        items = list(descendants(window.contentItem()))
+        checkboxes = [
+            item
+            for item in items
+            if "SignalCheck" in item.metaObject().className()
+            and item.property("visible")
+        ]
+        select_all = next(
+            item
+            for item in items
+            if "SignalButton" in item.metaObject().className()
+            and item.property("visible")
+            and item.property("text") == "Select all"
+        )
+        click_item(select_all)
+        self.assertTrue(all(item.property("checked") for item in checkboxes))
+        save_button = next(
+            item
+            for item in items
+            if "SignalButton" in item.metaObject().className()
+            and item.property("visible")
+            and item.property("text") == "Save"
+        )
+        click_item(save_button)
+        self.assertEqual(
+            ["0", "1", "2"],
+            channel_accepted.call_args.args[0]["selected"],
+        )
+
+        window.close()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.app.processEvents()
+
+    def test_rule_search_is_cleared_when_another_dialog_opens(self):
+        dialogs = DialogController()
+        engine = QQmlApplicationEngine()
+        engine.addImportPath(str(qml_dir()))
+        engine.rootContext().setContextProperty("dialogController", dialogs)
+        engine.loadData(
+            QByteArray(
+                b"import QtQuick 2.15\n"
+                b"import QtQuick.Controls 2.15\n"
+                b"import DroidAlerts.Components 1.0\n"
+                b"ApplicationWindow { width: 800; height: 600; visible: true; "
+                b"DialogOverlay { anchors.fill: parent } }"
+            ),
+            QUrl.fromLocalFile(str(qml_dir()) + "/"),
+        )
+        self.assertTrue(engine.rootObjects())
+        window = engine.rootObjects()[0]
+
+        def descendants(item):
+            for child in item.childItems():
+                yield child
+                yield from descendants(child)
+
+        dialogs.rules("Belt Tracker", "Choose targets", [], [])
+        for _ in range(3):
+            self.app.processEvents()
+        search = next(
+            item
+            for item in descendants(window.contentItem())
+            if "SignalField" in item.metaObject().className()
+            and item.property("visible")
+        )
+        search.setProperty("text", "belt")
+        self.assertEqual("belt", search.property("text"))
+
+        dialogs.cancel()
+        dialogs.rules("Discord Webhooks", "Choose destinations", [], [])
+        for _ in range(3):
+            self.app.processEvents()
+        self.assertEqual("", search.property("text"))
+
+        dialogs.cancel()
+        window.close()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.app.processEvents()
+
     def test_channel_dialog_combines_connection_fields_and_alert_choices(self):
         dialogs = DialogController()
         accepted = Mock()
@@ -314,6 +555,10 @@ class QtUiControllerTests(unittest.TestCase):
 
         self.assertEqual(__version__, runtime.config.last_seen_version)
         self.assertEqual("What's new", runtime.dialogs.state_snapshot()["title"])
+        message = runtime.dialogs.state_snapshot()["message"]
+        self.assertIn("Full port of the app", message)
+        self.assertIn("full customisation for all alert types", message)
+        self.assertIn("Discord link in the bottom left corner", message)
 
     def test_fresh_install_records_version_then_starts_intro(self):
         runtime = RuntimeStub(
@@ -506,6 +751,29 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual(8, runtime.config.belt_active_scan_fps)
         self.assertIn({"id": "custom.wav", "label": "custom.wav"}, choices)
         self.assertNotIn("ui_theme", controller.state_snapshot()["values"])
+
+    def test_settings_reject_non_finite_numbers_and_cap_delays(self):
+        runtime = RuntimeStub(AppConfig())
+        controller = SettingsController(runtime, DashboardStub())
+
+        controller.setValue("capture_interval_seconds", "1e309")
+        self.assertEqual(0.25, runtime.config.capture_interval_seconds)
+        self.assertEqual("Settings", runtime.dialogs.state_snapshot()["title"])
+        runtime.dialogs.cancel()
+
+        controller.setValue("retention_days", "1e309")
+        self.assertEqual(30, runtime.config.retention_days)
+        self.assertEqual("Settings", runtime.dialogs.state_snapshot()["title"])
+        runtime.dialogs.cancel()
+
+        controller.setValue(
+            "capture_interval_seconds",
+            str(MAX_SAFE_DELAY_SECONDS * 2),
+        )
+        self.assertEqual(
+            MAX_SAFE_DELAY_SECONDS,
+            runtime.config.capture_interval_seconds,
+        )
 
     def test_dashboard_timer_toggle_controls_the_qt_overlay(self):
         runtime = RuntimeStub(AppConfig())
@@ -947,6 +1215,15 @@ class QtUiControllerTests(unittest.TestCase):
                 "https://discord.com/api/webhooks/1/belt",
                 load_discord_destinations(runtime.config)["Belt Team"],
             )
+            self.assertEqual("manage", runtime.dialogs.state_snapshot()["kind"])
+            self.assertEqual(
+                ["Belt Team"],
+                [
+                    option["label"]
+                    for option in runtime.dialogs.state_snapshot()["options"]
+                ],
+            )
+            runtime.dialogs.accept({})
             route_options = runtime.dialogs.state_snapshot()["options"]
             self.assertEqual(
                 "Belt Team",
@@ -956,6 +1233,116 @@ class QtUiControllerTests(unittest.TestCase):
                     if option["id"] == draft_alert
                 ),
             )
+
+        settings.shutdown()
+        dashboard.shutdown()
+
+    def test_discord_webhooks_require_main_webhook_before_routes(self):
+        runtime = RuntimeStub(AppConfig())
+        dashboard = DashboardController(
+            runtime,
+            CaptureStub(MonitorInfo(0, 0, 1920, 1080)),
+        )
+        settings = SettingsController(runtime, dashboard)
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "droid_alerts.notifications.config_dir", return_value=Path(directory)
+        ):
+            settings.configureDiscordRoutes()
+            state = runtime.dialogs.state_snapshot()
+            self.assertEqual("form", state["kind"])
+            self.assertEqual("Set Up Discord Webhooks", state["title"])
+            self.assertEqual("webhook", state["fields"][0]["id"])
+
+            runtime.dialogs.accept({"webhook": "not-a-webhook"})
+            self.assertEqual(
+                "That does not look like a Discord webhook URL.",
+                runtime.dialogs.state_snapshot()["message"],
+            )
+            runtime.dialogs.accept({})
+            self.assertEqual(
+                "Set Up Discord Webhooks",
+                runtime.dialogs.state_snapshot()["title"],
+            )
+
+            runtime.dialogs.accept(
+                {"webhook": "https://discord.com/api/webhooks/1/main"}
+            )
+
+            self.assertEqual(
+                "https://discord.com/api/webhooks/1/main",
+                load_discord_webhook(runtime.config)[0],
+            )
+            self.assertTrue(runtime.config.discord_enabled)
+            state = runtime.dialogs.state_snapshot()
+            self.assertEqual("rules", state["kind"])
+            self.assertEqual("Discord Webhooks", state["title"])
+
+        settings.shutdown()
+        dashboard.shutdown()
+
+    def test_discord_destination_can_be_modified_and_deleted(self):
+        alert_id = "chat:Rainbow:Mythic"
+        runtime = RuntimeStub(
+            AppConfig(discord_alert_destinations={alert_id: "Belt Team"})
+        )
+        dashboard = DashboardController(
+            runtime,
+            CaptureStub(MonitorInfo(0, 0, 1920, 1080)),
+        )
+        settings = SettingsController(runtime, dashboard)
+        draft = {"values": {alert_id: "Belt Team"}}
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "droid_alerts.notifications.config_dir", return_value=Path(directory)
+        ):
+            settings._show_add_discord_destination(draft)
+            settings._save_discord_destination(
+                {
+                    "name": "Belt Team",
+                    "webhook": "https://discord.com/api/webhooks/1/old",
+                }
+            )
+            runtime.dialogs.action(
+                {"action": "modify", "id": "named:Belt Team"}
+            )
+            self.assertEqual(
+                "Modify Belt Team",
+                runtime.dialogs.state_snapshot()["title"],
+            )
+            settings._save_modified_discord_destination(
+                "named:Belt Team",
+                {
+                    "name": "Private Alerts",
+                    "webhook": "https://discord.com/api/webhooks/1/new",
+                },
+            )
+
+            destinations = load_discord_destinations(runtime.config)
+            self.assertNotIn("Belt Team", destinations)
+            self.assertEqual(
+                "https://discord.com/api/webhooks/1/new",
+                destinations["Private Alerts"],
+            )
+            self.assertEqual(
+                "Private Alerts",
+                runtime.config.discord_alert_destinations[alert_id],
+            )
+            self.assertEqual("Private Alerts", draft["values"][alert_id])
+
+            runtime.dialogs.action(
+                {"action": "delete", "id": "named:Private Alerts"}
+            )
+            self.assertEqual(
+                "Delete Discord Webhook",
+                runtime.dialogs.state_snapshot()["title"],
+            )
+            runtime.dialogs.accept({})
+
+            self.assertEqual({}, load_discord_destinations(runtime.config))
+            self.assertNotIn(alert_id, runtime.config.discord_alert_destinations)
+            self.assertEqual("Main", draft["values"][alert_id])
+            self.assertEqual("manage", runtime.dialogs.state_snapshot()["kind"])
 
         settings.shutdown()
         dashboard.shutdown()
@@ -971,24 +1358,31 @@ class QtUiControllerTests(unittest.TestCase):
         ):
             draft = {"values": {"limited_deals": "Main"}}
             settings._show_manage_discord_webhooks(draft)
+            self.assertEqual([], runtime.dialogs.state_snapshot()["options"])
+
+            settings._save_discord_destination(
+                {
+                    "name": "Main",
+                    "webhook": "https://discord.com/api/webhooks/1/main",
+                }
+            )
             self.assertEqual(
-                ["main", "limited_deals", "add_named"],
+                "https://discord.com/api/webhooks/1/main",
+                load_discord_webhook(runtime.config)[0],
+            )
+            self.assertEqual(
+                ["Main"],
                 [
-                    option["id"]
+                    option["label"]
                     for option in runtime.dialogs.state_snapshot()["options"]
                 ],
             )
 
-            settings._choose_discord_webhook_action(
-                {"selected": "limited_deals"}
-            )
-            self.assertEqual(
-                "Limited Deals Webhook",
-                runtime.dialogs.state_snapshot()["title"],
-            )
-            settings._save_builtin_discord_webhook(
-                "limited_deals",
-                {"webhook": "https://discord.com/api/webhooks/2/deals"},
+            settings._save_discord_destination(
+                {
+                    "name": "Limited Deals",
+                    "webhook": "https://discord.com/api/webhooks/2/deals",
+                }
             )
 
             webhook, _source = load_limited_deal_discord_webhook(runtime.config)
@@ -996,12 +1390,11 @@ class QtUiControllerTests(unittest.TestCase):
                 "https://discord.com/api/webhooks/2/deals",
                 webhook,
             )
-            self.assertEqual("Limited Deals", draft["values"]["limited_deals"])
-            self.assertIn(
-                "Limited Deals",
+            self.assertEqual(
+                ["Main", "Limited Deals"],
                 [
-                    choice["id"]
-                    for choice in runtime.dialogs.state_snapshot()["choices"]
+                    option["label"]
+                    for option in runtime.dialogs.state_snapshot()["options"]
                 ],
             )
 
@@ -1009,13 +1402,21 @@ class QtUiControllerTests(unittest.TestCase):
                 "limited_deals": "Limited Deals",
                 "belt_tracker": "Limited Deals",
             }
-            settings._save_builtin_discord_webhook(
+            draft["values"] = {
+                "limited_deals": "Limited Deals",
+                "belt_tracker": "Limited Deals",
+            }
+            settings._delete_discord_destination(
                 "limited_deals",
-                {"webhook": ""},
+                {},
             )
             webhook, _source = load_limited_deal_discord_webhook(runtime.config)
             self.assertIsNone(webhook)
             self.assertEqual({}, runtime.config.discord_alert_destinations)
+            self.assertEqual(
+                {"limited_deals": "Main", "belt_tracker": "Main"},
+                draft["values"],
+            )
 
         settings.shutdown()
         dashboard.shutdown()
@@ -1162,7 +1563,7 @@ class QtUiControllerTests(unittest.TestCase):
         settings.shutdown()
         dashboard.shutdown()
 
-    def test_mixed_discord_message_rules_are_kept_without_explicit_changes(self):
+    def test_discord_message_rules_override_all_selected_or_cancel(self):
         first = "chat:Rainbow:Epic"
         second = "chat:Beskar:Mythic"
         runtime = RuntimeStub(
@@ -1178,23 +1579,47 @@ class QtUiControllerTests(unittest.TestCase):
         dashboard = DashboardController(runtime, capture)
         settings = SettingsController(runtime, dashboard)
 
-        settings._save_discord_message_rules(
-            [first, second],
-            {
-                "prefix_action": "keep",
-                "prefix": "",
-                "mention_action": "keep",
-                "mention_type": "",
-                "mention_id": "",
-            },
+        settings._choose_discord_message_rule(
+            {"selected": [first, second]}
         )
-
+        fields = runtime.dialogs.state_snapshot()["fields"]
+        self.assertEqual(
+            ["prefix", "mention_type", "mention_id"],
+            [field["id"] for field in fields],
+        )
+        runtime.dialogs.cancel()
         self.assertEqual(
             {first: "First", second: "Second"},
             runtime.config.discord_message_prefixes,
         )
         self.assertEqual("role", runtime.config.discord_mentions[first]["type"])
         self.assertEqual("user", runtime.config.discord_mentions[second]["type"])
+
+        settings._save_discord_message_rules(
+            [first, second],
+            {
+                "prefix": "Priority spawn",
+                "mention_type": "role",
+                "mention_id": "323456789012345678",
+            },
+        )
+        self.assertEqual(
+            {first: "Priority spawn", second: "Priority spawn"},
+            runtime.config.discord_message_prefixes,
+        )
+        self.assertEqual("role", runtime.config.discord_mentions[first]["type"])
+        self.assertEqual("role", runtime.config.discord_mentions[second]["type"])
+        self.assertEqual(
+            "323456789012345678",
+            runtime.config.discord_mentions[second]["id"],
+        )
+
+        settings._save_discord_message_rules(
+            [first, second],
+            {"prefix": "", "mention_type": "", "mention_id": ""},
+        )
+        self.assertEqual({}, runtime.config.discord_message_prefixes)
+        self.assertEqual({}, runtime.config.discord_mentions)
         settings.shutdown()
         dashboard.shutdown()
 
@@ -1299,6 +1724,59 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual(PixelBox(100, 200, 800, 260), region)
         controller.shutdown()
 
+    def test_belt_start_does_not_open_window_capture_on_the_ui_thread(self):
+        runtime = RuntimeStub(
+            AppConfig(
+                capture_source="window",
+                capture_window_title="Fortnite",
+                capture_window_process="FortniteClient-Win64-Shipping.exe",
+                capture_window_class="UnrealWindow",
+            )
+        )
+        monitor = MonitorInfo(0, 0, 1920, 1080, key="id:monitor")
+        window = MonitorInfo(0, 0, 1920, 1080, key="window:fortnite")
+        capture = CaptureStub(monitor)
+
+        def current_belt_source(*, open_device=False):
+            if open_device:
+                raise RuntimeError("Fortnite did not provide a capture frame")
+            return window
+
+        capture.current_belt_source = Mock(side_effect=current_belt_source)
+        context = Mock()
+        process = Mock()
+        process.is_alive.return_value = False
+        context.Event.return_value = Mock()
+        context.Queue.return_value = Mock()
+        context.Process.return_value = process
+
+        with (
+            patch(
+                "droid_alerts.ui.belt_controller.load_region",
+                return_value=RelativeRegion(0.0, 0.0, 1.0, 1.0),
+            ),
+            patch(
+                "droid_alerts.ui.belt_controller.multiprocessing.get_context",
+                return_value=context,
+            ),
+            patch("droid_alerts.ui.overlays.belt_overlay"),
+        ):
+            controller = BeltController(runtime, capture, DashboardStub())
+            capture.current_belt_source.reset_mock()
+
+            controller.startTracking()
+
+        process.start.assert_called_once_with()
+        self.assertTrue(capture.current_belt_source.call_args_list)
+        self.assertTrue(
+            all(
+                call.kwargs.get("open_device", False) is False
+                for call in capture.current_belt_source.call_args_list
+            )
+        )
+        self.assertEqual("Running", controller.status)
+        controller.shutdown()
+
     def test_belt_page_preview_and_cpu_notice_are_acknowledged_explicitly(self):
         runtime = RuntimeStub(AppConfig(belt_cpu_warning_confirmed=False))
         capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
@@ -1351,6 +1829,66 @@ class QtUiControllerTests(unittest.TestCase):
 
         later.assert_called_once_with(150, controller.startTracking)
         controller.shutdown()
+
+    def test_belt_capture_change_during_startup_is_not_reported_as_a_crash(self):
+        runtime = RuntimeStub(AppConfig())
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        with (
+            patch(
+                "droid_alerts.ui.belt_controller.load_region",
+                return_value=RelativeRegion(0.0, 0.0, 1.0, 1.0),
+            ),
+            patch("droid_alerts.ui.belt_controller.QTimer.singleShot") as later,
+            patch("droid_alerts.ui.overlays.belt_overlay"),
+        ):
+            controller = BeltController(runtime, capture, DashboardStub())
+            process = Mock(exitcode=-15)
+            process.is_alive.side_effect = [True, False]
+            controller.process = process
+            controller.stop_event = Mock()
+            controller._worker_ready = False
+
+            capture.sourceChanged.emit()
+            controller._poll_process()
+
+            process.terminate.assert_called_once()
+            self.assertEqual("Stopped", controller.status)
+            self.assertFalse(runtime.dialogs.state_snapshot()["visible"])
+            later.assert_called_once_with(150, controller.startTracking)
+            controller.shutdown()
+
+    def test_belt_region_save_failure_restores_the_main_window(self):
+        runtime = RuntimeStub(AppConfig())
+        runtime.main_window = Mock()
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        with (
+            patch(
+                "droid_alerts.ui.belt_controller.load_region",
+                return_value=RelativeRegion(0.0, 0.0, 1.0, 1.0),
+            ),
+            patch(
+                "droid_alerts.ui.belt_controller.save_region",
+                side_effect=OSError("disk full"),
+            ),
+            patch("droid_alerts.ui.overlays.belt_overlay"),
+        ):
+            controller = BeltController(runtime, capture, DashboardStub())
+            original_region = controller.region
+            controller.selector = Mock()
+
+            controller._region_selected(
+                PixelBox(10, 20, 400, 160),
+                capture.monitor,
+            )
+
+            runtime.main_window.show.assert_called_once()
+            runtime.main_window.raise_.assert_called_once()
+            runtime.main_window.requestActivate.assert_called_once()
+            self.assertIsNone(controller.selector)
+            self.assertEqual(original_region, controller.region)
+            self.assertEqual("Belt Region", runtime.dialogs.state_snapshot()["title"])
+            self.assertIn("disk full", runtime.dialogs.state_snapshot()["message"])
+            controller.shutdown()
 
     def test_limited_deal_rules_update_without_starting_network_service(self):
         runtime = RuntimeStub(AppConfig())
@@ -1558,6 +2096,8 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertNotIn('title: "Interface"', settings)
         self.assertIn('valueRoleName: "key"', dashboard)
         self.assertIn('text: "Configure"', dashboard)
+        self.assertIn('text: "Discord Webhooks"', dashboard)
+        self.assertNotIn("Discord Webhooks & Routing", dashboard)
         self.assertNotIn('text: "Configure…"', dashboard)
         self.assertNotIn('text: "Window…"', dashboard)
         self.assertNotIn('text: "Device…"', dashboard)

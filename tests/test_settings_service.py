@@ -107,10 +107,20 @@ class SettingsServiceTests(unittest.TestCase):
 
     def test_invalid_numeric_value_raises_typed_error_without_mutating_input(self):
         persisted = AppConfig(monitor_index=7)
-        with self.assertRaises(SettingsValidationError):
-            build_settings_update(
-                persisted, AppConfig(), values(capture_interval_seconds="bad"), [], []
-            )
+        for overrides in (
+            {"capture_interval_seconds": "bad"},
+            {"capture_interval_seconds": "1e309"},
+            {"retention_days": "1e309"},
+        ):
+            with self.subTest(overrides=overrides):
+                with self.assertRaises(SettingsValidationError):
+                    build_settings_update(
+                        persisted,
+                        AppConfig(),
+                        values(**overrides),
+                        [],
+                        [],
+                    )
         self.assertEqual(7, persisted.monitor_index)
 
 

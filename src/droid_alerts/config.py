@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -28,6 +29,30 @@ from .limited_deals import (
     normalize_limited_deal_target_tiers,
 )
 from .ui_theme import DEFAULT_THEME_KEY, normalize_theme_key
+
+
+# QTimer intervals are stored as signed 32-bit milliseconds. Keeping delays at
+# whole seconds below that ceiling also leaves Event.wait()/time.sleep() with a
+# platform-safe timeout.
+MAX_SAFE_DELAY_SECONDS = 2_147_483.0
+
+
+def normalize_finite_float(
+    value: object,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    """Convert and clamp a numeric setting, rejecting NaN and infinities."""
+
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("numeric setting must be finite")
+    if minimum is not None:
+        number = max(minimum, number)
+    if maximum is not None:
+        number = min(maximum, number)
+    return number
 
 
 def app_root() -> Path:
@@ -333,7 +358,11 @@ class AppConfig:
             capture_device_vid=capture_device_vid,
             capture_device_pid=capture_device_pid,
             capture_device_backend=capture_device_backend,
-            capture_interval_seconds=float(data.get("capture_interval_seconds", 0.25)),
+            capture_interval_seconds=normalize_finite_float(
+                data.get("capture_interval_seconds", 0.25),
+                minimum=0.05,
+                maximum=MAX_SAFE_DELAY_SECONDS,
+            ),
             rebirth_ready_alert_enabled=bool(
                 data.get("rebirth_ready_alert_enabled", False)
             ),
@@ -341,12 +370,17 @@ class AppConfig:
             cb23_mission_alert_enabled=bool(
                 data.get("cb23_mission_alert_enabled", False)
             ),
-            rebirth_scan_interval_seconds=min(
-                30.0,
-                max(2.0, float(data.get("rebirth_scan_interval_seconds", 5.0))),
+            rebirth_scan_interval_seconds=normalize_finite_float(
+                data.get("rebirth_scan_interval_seconds", 5.0),
+                minimum=2.0,
+                maximum=30.0,
             ),
-            dedupe_seconds=float(data.get("dedupe_seconds", 12.0)),
-            alert_cooldown_seconds=float(data.get("alert_cooldown_seconds", 10.0)),
+            dedupe_seconds=normalize_finite_float(
+                data.get("dedupe_seconds", 12.0), minimum=0.0
+            ),
+            alert_cooldown_seconds=normalize_finite_float(
+                data.get("alert_cooldown_seconds", 10.0), minimum=0.0
+            ),
             sound_enabled=bool(data.get("sound_enabled", True)),
             wake_alarm_enabled=bool(data.get("wake_alarm_enabled", False)),
             wake_alarm_beskar_mythic=bool(
@@ -357,14 +391,28 @@ class AppConfig:
             ),
             popup_enabled=bool(data.get("popup_enabled", True)),
             droid_timers_enabled=bool(data.get("droid_timers_enabled", False)),
-            droid_timers_scale=float(data.get("droid_timers_scale", 1.0)),
-            droid_timers_center_x=float(data.get("droid_timers_center_x", 0.5)),
-            droid_timers_top_y=float(data.get("droid_timers_top_y", 0.006)),
-            popup_seconds=float(data.get("popup_seconds", 8.0)),
+            droid_timers_scale=normalize_finite_float(
+                data.get("droid_timers_scale", 1.0)
+            ),
+            droid_timers_center_x=normalize_finite_float(
+                data.get("droid_timers_center_x", 0.5)
+            ),
+            droid_timers_top_y=normalize_finite_float(
+                data.get("droid_timers_top_y", 0.006)
+            ),
+            popup_seconds=normalize_finite_float(
+                data.get("popup_seconds", 8.0),
+                minimum=0.5,
+                maximum=MAX_SAFE_DELAY_SECONDS,
+            ),
             popup_icon_file=str(data.get("popup_icon_file", "signals_icon.png")),
             popup_position=str(data.get("popup_position", "top_center")),
-            popup_scale=float(data.get("popup_scale", 1.0)),
-            popup_opacity=float(data.get("popup_opacity", 1.0)),
+            popup_scale=normalize_finite_float(
+                data.get("popup_scale", 1.0), minimum=0.7, maximum=1.5
+            ),
+            popup_opacity=normalize_finite_float(
+                data.get("popup_opacity", 1.0), minimum=0.55, maximum=1.0
+            ),
             sound_file=str(data.get("sound_file", "")),
             save_alert_samples=bool(data.get("save_alert_samples", False)),
             save_debug_screenshots=bool(data.get("save_debug_screenshots", False)),
@@ -522,10 +570,14 @@ class AppConfig:
                 data.get("validation_failures_before_calibration_prompt", 30)
             ),
             thresholds=Thresholds(
-                rarity_threshold=float(thresholds.get("rarity_threshold", 0.35)),
-                droid_threshold=float(thresholds.get("droid_threshold", 0.15)),
-                scale_min=float(thresholds.get("scale_min", 0.4)),
-                scale_max=float(thresholds.get("scale_max", 2.5)),
+                rarity_threshold=normalize_finite_float(
+                    thresholds.get("rarity_threshold", 0.35)
+                ),
+                droid_threshold=normalize_finite_float(
+                    thresholds.get("droid_threshold", 0.15)
+                ),
+                scale_min=normalize_finite_float(thresholds.get("scale_min", 0.4)),
+                scale_max=normalize_finite_float(thresholds.get("scale_max", 2.5)),
             ),
         )
         if isinstance(data.get("alert_targets"), list):
@@ -746,11 +798,11 @@ def load_config() -> AppConfig:
 
     try:
         return parse(path)
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+    except (OSError, OverflowError, json.JSONDecodeError, TypeError, ValueError):
         backup = path.with_suffix(path.suffix + ".bak")
         try:
             return parse(backup)
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        except (OSError, OverflowError, json.JSONDecodeError, TypeError, ValueError):
             # Keep the broken file for support instead of preventing the app
             # from opening. Atomic saves will rebuild a valid config below.
             corrupt = path.with_suffix(path.suffix + ".corrupt")
@@ -769,7 +821,10 @@ def save_config(config: AppConfig) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
     backup = path.with_suffix(path.suffix + ".bak")
-    temp.write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
+    temp.write_text(
+        json.dumps(config.to_dict(), indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
     if path.exists():
         try:
             json.loads(path.read_text(encoding="utf-8-sig"))

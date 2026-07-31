@@ -58,6 +58,7 @@ class BeltController(StateObject):
         self._sample_status = "Template collection is off"
         self._overlay_requested = False
         self._restart_after_capture_change = False
+        self._stopping = False
         super().__init__({}, parent=parent)
         self._poll = QTimer(self)
         self._poll.setInterval(50)
@@ -81,18 +82,21 @@ class BeltController(StateObject):
             self._status = status
             self.statusChanged.emit(status)
 
-    def load_region(self, *, open_source: bool = False) -> None:
+    def load_region(self) -> None:
         try:
-            monitor = self.capture.current_belt_source(
-                open_device=open_source,
-            )
+            monitor = self.capture.current_belt_source(open_device=False)
         except Exception:
             self.region = None
             return
         if monitor is None:
             self.region = None
             return
-        relative = load_region(monitor)
+        legacy_monitor = (
+            self.capture.current_monitor()
+            if self.runtime.config.capture_source == "window"
+            else None
+        )
+        relative = load_region(monitor, legacy_monitor=legacy_monitor)
         self.region = relative.to_pixels(monitor)
 
     def _target_rows(self) -> list[dict[str, str]]:
@@ -178,7 +182,10 @@ class BeltController(StateObject):
                 self._set_status("Error")
                 self.update_state(detail=str(exc))
                 return
-        self.load_region(open_source=config.capture_source == "window")
+        # Do not open Windows Graphics Capture on Qt's UI thread. The Belt
+        # Tracker worker owns capture startup and reports failures while it
+        # retries, so clicking Start remains responsive.
+        self.load_region()
         if self.region is None:
             self.update_state(detail="Select the belt region first.")
             return
@@ -186,6 +193,7 @@ class BeltController(StateObject):
         self.stop_event = context.Event()
         self.status_queue = context.Queue()
         self._worker_ready = False
+        self._stopping = False
         self._error = ""
         self._visible_tracks = []
         self.telemetry = AnonymousBeltTelemetryClient(config)
@@ -241,7 +249,7 @@ class BeltController(StateObject):
         self._drain_status()
         error = (
             RuntimeError(f"Belt Tracker process exited with code {process.exitcode}")
-            if process.exitcode not in (None, 0)
+            if process.exitcode not in (None, 0) and not self._stopping
             else None
         )
         self._worker_finished(error, process)
@@ -356,6 +364,7 @@ class BeltController(StateObject):
     def stopTracking(self) -> None:
         if self.stop_event is None:
             return
+        self._stopping = True
         self.stop_event.set()
         process = self.process
         if not self._worker_ready and process is not None and process.is_alive():
@@ -383,9 +392,16 @@ class BeltController(StateObject):
         self.stop_event = None
         self._worker_ready = False
         self._visible_tracks = []
-        message = str(error) if error is not None else self._error
+        stopping = self._stopping
+        if stopping:
+            message = ""
+        elif error is not None:
+            message = str(error)
+        else:
+            message = self._error
         restart = self._restart_after_capture_change and not message
         self._restart_after_capture_change = False
+        self._stopping = False
         self._error = ""
         if message:
             self._set_status("Error")
@@ -481,7 +497,20 @@ class BeltController(StateObject):
 
     def _region_selected(self, box: PixelBox, monitor) -> None:
         self.selector = None
-        save_region(monitor, RelativeRegion.from_pixels(box, monitor))
+        try:
+            relative = RelativeRegion.from_pixels(box, monitor)
+            save_region(monitor, relative)
+        except Exception as exc:
+            self._restore_window()
+            self.update_state(detail=f"Could not save the belt region: {exc}")
+            self.refresh()
+            self._update_overlay()
+            self.runtime.dialogs.show_message(
+                "Belt Region",
+                f"Could not save the region: {exc}",
+                tone="danger",
+            )
+            return
         self.region = box
         self._restore_window()
         self.update_state(detail="Ready to track the selected blueprint belt region.")

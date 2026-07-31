@@ -107,6 +107,24 @@ def _report_log_error(
         emit("log_error", message=str(exc), failed_event_type=event.get("event_type", ""))
 
 
+def _settings_signature(config: AppConfig) -> tuple[int, ...]:
+    """Return mtimes for every file whose values are cached by the watcher."""
+
+    def mtime(path: Path) -> int:
+        try:
+            return path.stat().st_mtime_ns
+        except OSError:
+            return 0
+
+    root = config_dir()
+    return (
+        mtime(root / CONFIG_FILE),
+        mtime(root / CALIBRATION_FILE),
+        mtime(root / config.discord_webhook_file),
+        mtime(root / config.phone_credentials_file),
+    )
+
+
 def run_watch(
     *,
     debug: bool = False,
@@ -624,22 +642,9 @@ def run_watch(
         print(f"[ALERT] {event['ts']} CB23 Mission score={match.score:.2f}")
         dispatch_alert_channels(detection, event, attachment_path=sample_path)
 
-    # Live settings: the GUI autosaves config.json (and region nudges save
-    # calibration.json); watching the file mtimes lets changes apply on the
-    # next frame instead of requiring a watcher restart.
-    def _settings_signature() -> tuple[int, int]:
-        def mtime(path) -> int:
-            try:
-                return path.stat().st_mtime_ns
-            except OSError:
-                return 0
-
-        return (
-            mtime(config_dir() / CONFIG_FILE),
-            mtime(config_dir() / CALIBRATION_FILE),
-        )
-
-    settings_signature = _settings_signature()
+    # Live settings: watch every file whose contents are cached locally so GUI
+    # edits apply on the next frame instead of requiring a watcher restart.
+    settings_signature = _settings_signature(config)
     pending_capture_config: AppConfig | None = None
     next_capture_retry_at = 0.0
 
@@ -684,7 +689,7 @@ def run_watch(
             started = time.monotonic()
             frame_index += 1
 
-            new_signature = _settings_signature()
+            new_signature = _settings_signature(config)
             if new_signature != settings_signature:
                 try:
                     new_config = load_config()
@@ -692,12 +697,12 @@ def run_watch(
                     # Mid-write race with the GUI's save; retry next frame.
                     print(f"[CONFIG] reload failed, will retry: {exc}")
                 else:
-                    settings_signature = new_signature
                     capture_changed = (
                         _capture_target_signature(new_config)
                         != _capture_target_signature(active_capture_config)
                     )
                     config = new_config
+                    settings_signature = _settings_signature(config)
                     policy.apply_config(config)
                     telemetry.apply_config(config)
                     pipeline.apply_thresholds(config.thresholds)

@@ -163,6 +163,29 @@ class DialogController(StateObject):
             callback=callback,
         )
 
+    def manage(
+        self,
+        title: str,
+        message: str,
+        options: Sequence[Mapping[str, Any]],
+        *,
+        action_callback: DialogActionCallback,
+        callback: DialogCallback | None = None,
+    ) -> None:
+        self._open(
+            kind="manage",
+            title=title,
+            message=message,
+            tone="info",
+            note="",
+            accept_text="Exit",
+            cancel_text="",
+            options=options,
+            action_text="Add New",
+            action_callback=action_callback,
+            callback=callback,
+        )
+
     def channel_settings(
         self,
         title: str,
@@ -213,7 +236,14 @@ class DialogController(StateObject):
             return "Limited deals", "deals"
         if any(word in lowered for word in ("history", "storage", "export", "data")):
             return "Data", "history"
-        if kind in {"form", "choice", "multi-choice", "rules", "channel"}:
+        if kind in {
+            "form",
+            "choice",
+            "multi-choice",
+            "rules",
+            "channel",
+            "manage",
+        }:
             return "Settings", "settings"
         return "Droid Alerts", "info"
 

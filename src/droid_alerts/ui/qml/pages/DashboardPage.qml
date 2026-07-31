@@ -296,7 +296,7 @@ ScrollView {
                             onClicked: settingsController.configureAlertSounds()
                         }
                         SignalButton {
-                            text: "Discord Webhooks & Routing"
+                            text: "Discord Webhooks"
                             tone: "ghost"
                             compact: true
                             Layout.fillWidth: true

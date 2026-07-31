@@ -52,6 +52,14 @@ Item {
     function acceptDialog() {
         dialogController.accept(dialogPayload())
     }
+
+    function setAllChoices(checked) {
+        for (var i = 0; i < choiceRepeater.count; ++i) {
+            var choice = choiceRepeater.itemAt(i)
+            if (choice)
+                choice.checked = checked
+        }
+    }
     // qmllint enable missing-property
 
     Rectangle {
@@ -89,7 +97,7 @@ Item {
 
     Rectangle {
         id: panel
-        readonly property bool wide: ["choice", "multi-choice", "rules", "channel"]
+        readonly property bool wide: ["choice", "multi-choice", "rules", "channel", "manage"]
                                      .indexOf(dialogController.state.kind) >= 0
         readonly property int preferredWidth: wide ? 700
                                                     : dialogController.state.kind === "form"
@@ -180,6 +188,7 @@ Item {
                          || dialogController.state.kind === "choice"
                          || dialogController.state.kind === "multi-choice"
                          || dialogController.state.kind === "rules"
+                         || dialogController.state.kind === "manage"
                          || dialogController.state.note.length > 260
                 Layout.fillWidth: true
                 Layout.preferredHeight: Math.min(480, innerColumn.implicitHeight)
@@ -189,6 +198,20 @@ Item {
                 contentHeight: innerColumn.implicitHeight
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar {}
+
+                WheelHandler {
+                    target: null
+                    onWheel: function(event) {
+                        var delta = event.pixelDelta.y
+                        if (delta === 0)
+                            delta = event.angleDelta.y
+                        var maximum = Math.max(0, scroll.contentHeight - scroll.height)
+                        scroll.contentY = Math.max(
+                                    0,
+                                    Math.min(maximum, scroll.contentY - delta))
+                        event.accepted = true
+                    }
+                }
 
                 ColumnLayout {
                     id: innerColumn
@@ -279,6 +302,30 @@ Item {
                         font.letterSpacing: 1.3
                     }
 
+                    RowLayout {
+                        visible: (dialogController.state.kind === "multi-choice"
+                                  || dialogController.state.kind === "channel")
+                                 && choiceRepeater.count > 0
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Item { Layout.fillWidth: true }
+
+                        SignalButton {
+                            text: "Select all"
+                            compact: true
+                            tone: "ghost"
+                            onClicked: overlay.setAllChoices(true)
+                        }
+
+                        SignalButton {
+                            text: "Deselect all"
+                            compact: true
+                            tone: "ghost"
+                            onClicked: overlay.setAllChoices(false)
+                        }
+                    }
+
                     Repeater {
                         id: choiceRepeater
                         model: dialogController.state.kind === "choice"
@@ -352,6 +399,73 @@ Item {
                         }
                     }
 
+                    Repeater {
+                        id: manageRepeater
+                        model: dialogController.state.kind === "manage"
+                               ? dialogController.state.options : []
+
+                        Rectangle {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 52
+                            radius: 8
+                            color: Theme.bg2
+                            border.color: Theme.line
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 12
+                                anchors.rightMargin: 8
+                                spacing: 8
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 1
+
+                                    Text {
+                                        text: modelData.label
+                                        color: Theme.ink
+                                        font.family: Theme.bodyFont
+                                        font.pixelSize: 13
+                                        font.weight: Font.DemiBold
+                                        Layout.fillWidth: true
+                                        elide: Text.ElideRight
+                                    }
+
+                                    Text {
+                                        text: modelData.detail || ""
+                                        visible: text.length > 0
+                                        color: Theme.muted
+                                        font.family: Theme.bodyFont
+                                        font.pixelSize: 10
+                                        Layout.fillWidth: true
+                                        elide: Text.ElideRight
+                                    }
+                                }
+
+                                SignalButton {
+                                    text: "Modify"
+                                    compact: true
+                                    tone: "ghost"
+                                    onClicked: dialogController.action({
+                                        "action": "modify",
+                                        "id": String(modelData.id)
+                                    })
+                                }
+
+                                SignalButton {
+                                    text: "Delete"
+                                    compact: true
+                                    tone: "danger"
+                                    onClicked: dialogController.action({
+                                        "action": "delete",
+                                        "id": String(modelData.id)
+                                    })
+                                }
+                            }
+                        }
+                    }
+
                     Text {
                         text: dialogController.state.note
                         visible: text.length > 0
@@ -402,7 +516,10 @@ Item {
                     visible: dialogController.state.actionText.length > 0
                     text: dialogController.state.actionText
                     tone: "ghost"
-                    onClicked: dialogController.action(overlay.dialogPayload())
+                    onClicked: dialogController.action(
+                                   dialogController.state.kind === "manage"
+                                   ? {"action": "add"}
+                                   : overlay.dialogPayload())
                 }
 
                 SignalButton {
@@ -434,6 +551,17 @@ Item {
                     StandardKey.InsertLineSeparator]
         enabled: overlay.visible
         onActivated: overlay.acceptDialog()
+    }
+
+    Connections {
+        target: dialogController
+
+        function onStateChanged() {
+            if (dialogController.state.visible) {
+                ruleSearch.clear()
+                scroll.contentY = 0
+            }
+        }
     }
 
     onVisibleChanged: {
