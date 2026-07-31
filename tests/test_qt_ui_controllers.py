@@ -4,7 +4,9 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -22,8 +24,11 @@ from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox
 from droid_alerts.config import AppConfig
 from droid_alerts.limited_deals import LimitedDeal
 from droid_alerts.notifications import (
+    DeliveryResult,
     load_discord_destinations,
     load_limited_deal_discord_webhook,
+    load_ntfy_token,
+    save_ntfy_token,
 )
 from droid_alerts.popup import (
     _caption_text,
@@ -41,8 +46,10 @@ from droid_alerts.ui.dashboard_controller import DashboardController
 from droid_alerts.ui.deals_controller import DealsController
 from droid_alerts.ui.dialogs import DialogController
 from droid_alerts.ui.history_controller import HistoryController
+from droid_alerts.ui.runtime import ApplicationRuntime
 from droid_alerts.ui.settings_controller import SettingsController
 from droid_alerts.ui.state import UiDispatcher
+from droid_alerts.window_capture import WindowDescriptor
 
 
 class RuntimeStub(QObject):
@@ -238,6 +245,36 @@ class QtUiControllerTests(unittest.TestCase):
             initial_window_geometry(QRect(0, 0, 1366, 728)),
         )
 
+    def test_main_window_geometry_never_exceeds_the_available_display(self):
+        available = QRect(0, 0, 800, 600)
+        self.assertTrue(available.contains(initial_window_geometry(available)))
+
+    def test_runtime_reports_save_failures_and_keeps_a_retry_pending(self):
+        with (
+            patch(
+                "droid_alerts.ui.runtime.load_config",
+                return_value=AppConfig(),
+            ),
+            patch("droid_alerts.ui.runtime.AnonymousAppTelemetryClient"),
+            patch(
+                "droid_alerts.ui.runtime.save_config",
+                side_effect=OSError("disk full"),
+            ),
+        ):
+            runtime = ApplicationRuntime()
+            details: list[str] = []
+            runtime.detailChanged.connect(details.append)
+            runtime.update_config(sound_enabled=False)
+            runtime._save_timer.stop()
+            runtime.save_now()
+
+            self.assertIn("disk full", details[-1])
+            self.assertTrue(runtime._config_dirty)
+            self.assertTrue(runtime._save_timer.isActive())
+            runtime._save_timer.stop()
+            runtime._closed = True
+            runtime.dispatcher.close()
+
     def test_shell_page_selection_status_and_links(self):
         runtime = RuntimeStub()
         dashboard = DashboardStub()
@@ -397,6 +434,49 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual((1920, 1080), (source.width, source.height))
         self.assertEqual("window:test", source.key)
         capture.close.assert_called_once_with()
+
+    def test_window_capture_uses_the_window_display_and_desktop_position(self):
+        runtime = RuntimeStub(
+            AppConfig(
+                monitor_index=1,
+                capture_source="window",
+                capture_window_title="Fortnite",
+                capture_window_process="Fortnite.exe",
+                capture_window_class="UnrealWindow",
+            )
+        )
+        monitors = [
+            MonitorDescriptor(1, 0, 0, 1920, 1080, is_primary=True),
+            MonitorDescriptor(2, 1920, 0, 2560, 1440),
+        ]
+        window = WindowDescriptor(
+            hwnd=42,
+            title="Fortnite",
+            process_name="Fortnite.exe",
+            class_name="UnrealWindow",
+            process_id=100,
+            left=2100,
+            top=100,
+            width=1600,
+            height=900,
+        )
+        with (
+            patch(
+                "droid_alerts.ui.capture_controller.list_monitors",
+                return_value=monitors,
+            ),
+            patch(
+                "droid_alerts.ui.capture_controller.resolve_capture_window",
+                return_value=window,
+            ),
+        ):
+            controller = CaptureController(runtime)
+            monitor = controller.current_monitor()
+            source = controller.current_belt_source()
+
+        self.assertEqual(2, monitor.index)
+        self.assertEqual((2100, 100), (source.left, source.top))
+        self.assertEqual((1600, 900), (source.width, source.height))
 
     def test_settings_are_clamped_and_sound_choices_are_structured(self):
         runtime = RuntimeStub(AppConfig())
@@ -605,6 +685,132 @@ class QtUiControllerTests(unittest.TestCase):
         sound.assert_not_called()
         controller.shutdown()
 
+    def test_ntfy_settings_preserve_or_explicitly_remove_a_saved_token(self):
+        runtime = RuntimeStub(
+            AppConfig(
+                ntfy_server_url="https://ntfy.example",
+                ntfy_topic="private",
+            )
+        )
+        controller = DashboardController(
+            runtime,
+            CaptureStub(MonitorInfo(0, 0, 1920, 1080)),
+        )
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "droid_alerts.notifications.config_dir",
+            return_value=Path(directory),
+        ):
+            save_ntfy_token(runtime.config, "existing-secret")
+            self.assertTrue(
+                controller._save_ntfy(
+                    {
+                        "server": "https://ntfy.example",
+                        "topic": "private",
+                        "token": "",
+                        "token_action": "keep",
+                    }
+                )
+            )
+            self.assertEqual("existing-secret", load_ntfy_token(runtime.config)[0])
+
+            controller._save_ntfy(
+                {
+                    "server": "https://ntfy.example",
+                    "topic": "private",
+                    "token": "",
+                    "token_action": "remove",
+                }
+            )
+            self.assertIsNone(load_ntfy_token(runtime.config)[0])
+        controller.shutdown()
+
+    def test_watcher_popups_use_current_runtime_customization(self):
+        runtime = RuntimeStub(
+            AppConfig(popup_seconds=5.0, popup_position="top-right")
+        )
+        runtime.dispatcher.post = lambda callback: callback()
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        capture.create_runtime_capture = Mock()
+        controller = DashboardController(runtime, capture)
+        snapshot = AppConfig.from_dict(runtime.config.to_dict())
+        runtime.update_config(
+            popup_seconds=20.0,
+            popup_position="bottom-left",
+        )
+        detection = Detection(
+            droid="Beskar",
+            rarity="Mythic",
+            row_box=(0, 0, 1, 1),
+            droid_score=1.0,
+            rarity_score=1.0,
+            rarity_margin=1.0,
+            score=1.0,
+            source="test",
+        )
+
+        def invoke_popup(**kwargs):
+            kwargs["popup_callback"](detection)
+
+        with (
+            patch(
+                "droid_alerts.ui.dashboard_controller.run_watch",
+                side_effect=invoke_popup,
+            ),
+            patch.object(controller, "_show_popup") as show_popup,
+        ):
+            controller._watch_worker(snapshot, threading.Event())
+
+        popup_config = show_popup.call_args.args[1]
+        self.assertEqual(20.0, popup_config.popup_seconds)
+        self.assertEqual("bottom-left", popup_config.popup_position)
+        controller.shutdown()
+
+    def test_dashboard_remote_delivery_retries_a_transient_failure(self):
+        runtime = RuntimeStub(AppConfig(discord_enabled=True))
+        controller = DashboardController(
+            runtime,
+            CaptureStub(MonitorInfo(0, 0, 1920, 1080)),
+        )
+        detection = Detection(
+            droid="R2",
+            rarity="Rainbow Epic",
+            row_box=(0, 0, 1, 1),
+            droid_score=1.0,
+            rarity_score=1.0,
+            rarity_margin=1.0,
+            score=1.0,
+            source="limited-deal",
+        )
+        results = [
+            DeliveryResult("Discord", False, "connection timeout"),
+            DeliveryResult("Discord", True, "Delivered"),
+        ]
+        outcomes = Mock()
+        with (
+            patch(
+                "droid_alerts.ui.dashboard_controller.load_discord_webhook_for_detection",
+                return_value=("https://discord.com/api/webhooks/1/main", "test"),
+            ),
+            patch(
+                "droid_alerts.ui.dashboard_controller.send_discord_alert",
+                side_effect=results,
+            ) as send,
+            patch(
+                "droid_alerts.ui.dashboard_controller.time.sleep",
+                return_value=None,
+            ),
+        ):
+            controller.dispatch_detection(
+                detection,
+                source="limited_deal",
+                include_local=False,
+                on_complete=outcomes,
+            )
+
+        self.assertEqual(2, send.call_count)
+        outcomes.assert_called_once_with({"Discord": True})
+        controller.shutdown()
+
     def test_timer_reminder_detection_uses_readable_timer_name(self):
         detection = timer_reminder_detection("galactic", 45)
 
@@ -698,6 +904,23 @@ class QtUiControllerTests(unittest.TestCase):
             "Belt Team", runtime.config.discord_alert_destinations["belt_tracker"]
         )
         self.assertEqual("AFK", runtime.config.active_notification_profile)
+        settings.shutdown()
+        dashboard.shutdown()
+
+    def test_notification_profile_limit_is_reported_without_invalid_active_name(self):
+        profiles = {f"Profile {index:02d}": {} for index in range(20)}
+        runtime = RuntimeStub(AppConfig(notification_profiles=profiles))
+        dashboard = DashboardController(
+            runtime,
+            CaptureStub(MonitorInfo(0, 0, 1920, 1080)),
+        )
+        settings = SettingsController(runtime, dashboard)
+
+        settings._save_notification_profile({"name": "New Profile"})
+
+        self.assertNotIn("New Profile", runtime.config.notification_profiles)
+        self.assertNotEqual("New Profile", runtime.config.active_notification_profile)
+        self.assertIn("up to 20 profiles", runtime.dialogs.state_snapshot()["message"])
         settings.shutdown()
         dashboard.shutdown()
 
@@ -1043,6 +1266,39 @@ class QtUiControllerTests(unittest.TestCase):
         controller.process = None
         controller.shutdown()
 
+    def test_belt_overlay_anchors_directly_to_a_window_capture_area(self):
+        runtime = RuntimeStub(
+            AppConfig(capture_source="window", belt_overlay_enabled=True)
+        )
+        capture = CaptureStub(MonitorInfo(1920, 0, 2560, 1440, index=2))
+        window_source = MonitorInfo(
+            2100,
+            100,
+            1600,
+            900,
+            index=2,
+            key="window:test",
+        )
+        capture.current_belt_source = lambda **_kwargs: window_source
+        with patch(
+            "droid_alerts.ui.belt_controller.load_region",
+            return_value=RelativeRegion(0.0, 0.0, 1.0, 1.0),
+        ):
+            controller = BeltController(runtime, capture, DashboardStub())
+        controller._overlay_requested = True
+        controller.region = PixelBox(100, 200, 800, 260)
+        overlay = Mock()
+        with patch(
+            "droid_alerts.ui.overlays.belt_overlay",
+            return_value=overlay,
+        ):
+            controller._update_overlay()
+
+        monitor, region, _tracks = overlay.show_tracks.call_args.args
+        self.assertEqual(window_source, monitor)
+        self.assertEqual(PixelBox(100, 200, 800, 260), region)
+        controller.shutdown()
+
     def test_belt_page_preview_and_cpu_notice_are_acknowledged_explicitly(self):
         runtime = RuntimeStub(AppConfig(belt_cpu_warning_confirmed=False))
         capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
@@ -1147,6 +1403,59 @@ class QtUiControllerTests(unittest.TestCase):
             "Diamond Mecha Droid",
             controller.state_snapshot()["offer"],
         )
+        controller.shutdown()
+
+    def test_limited_deal_is_marked_alerted_only_after_failed_channels_retry(self):
+        runtime = RuntimeStub(
+            AppConfig(
+                discord_enabled=True,
+                limited_deal_priority_alerts=[["Rainbow", "Epic"]],
+            )
+        )
+        dashboard = DashboardStub()
+        dispatches: list[dict[str, object]] = []
+
+        def dispatch_detection(_detection, **kwargs):
+            dispatches.append(kwargs)
+            kwargs["on_complete"]({"Discord": len(dispatches) > 1})
+
+        dashboard.dispatch_detection = Mock(side_effect=dispatch_detection)
+        with patch.object(DealsController, "start"):
+            controller = DealsController(runtime, dashboard)
+        start = datetime.now(timezone.utc).replace(
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        deal = LimitedDeal(
+            starts_at=start.isoformat(timespec="milliseconds").replace(
+                "+00:00",
+                "Z",
+            ),
+            ends_at=(start + timedelta(hours=1)).isoformat(
+                timespec="milliseconds"
+            ).replace("+00:00", "Z"),
+            rarity="Rainbow",
+            droid="R2",
+            droid_id=17,
+            droid_class="Epic",
+        )
+        service = Mock()
+        service.was_alerted.return_value = False
+        controller.service = service
+        controller.current_deal = deal
+
+        with patch("droid_alerts.ui.deals_controller.append_event_safely"):
+            controller._evaluate_current()
+        service.mark_alerted.assert_not_called()
+        self.assertTrue(controller._alert_retry_timer.isActive())
+        self.assertTrue(dispatches[0]["include_local"])
+
+        controller._alert_retry_timer.stop()
+        controller._retry_pending_alert()
+        service.mark_alerted.assert_called_once_with(deal)
+        self.assertFalse(dispatches[1]["include_local"])
+        self.assertEqual({"Discord"}, dispatches[1]["remote_channels"])
         controller.shutdown()
 
     def test_limited_deal_rule_picker_excludes_default_and_gold(self):

@@ -45,11 +45,18 @@ class DealsController(StateObject):
         self.current_deal: LimitedDeal | None = None
         self._portrait: Path | None = None
         self._error = ""
+        self._alert_in_flight = ""
+        self._alert_retry_deal: LimitedDeal | None = None
+        self._alert_retry_channels: set[str] = set()
+        self._alert_retry_attempt = 0
         super().__init__({}, parent=parent)
         self._timer = QTimer(self)
         self._timer.setInterval(250)
         self._timer.timeout.connect(self.refresh)
         self._timer.start()
+        self._alert_retry_timer = QTimer(self)
+        self._alert_retry_timer.setSingleShot(True)
+        self._alert_retry_timer.timeout.connect(self._retry_pending_alert)
         runtime.configChanged.connect(self._rules_changed)
         runtime.register_shutdown(self.shutdown)
         self.start()
@@ -173,20 +180,15 @@ class DealsController(StateObject):
             config.limited_deal_target_tiers,
         ):
             return
-        if service.was_alerted(deal):
+        if service.was_alerted(deal) or self._alert_in_flight == deal.starts_at:
             return
-        service.mark_alerted(deal)
-        detection = Detection(
-            droid=deal.droid,
-            rarity=f"{deal.rarity} {deal.droid_class}",
-            row_box=(0, 0, 0, 0),
-            droid_score=1.0,
-            rarity_score=1.0,
-            rarity_margin=1.0,
-            score=1.0,
-            source="limited-deal",
-            shape_score=1.0,
-        )
+        self._alert_in_flight = deal.starts_at
+        if (
+            self._alert_retry_deal is None
+            or self._alert_retry_deal.starts_at != deal.starts_at
+        ):
+            self._alert_retry_attempt = 0
+        detection = self._alert_detection(deal)
         event = {
             "ts": timestamp(),
             "event_type": "limited_deal",
@@ -207,13 +209,100 @@ class DealsController(StateObject):
             on_error=lambda exc: print(f"[LOG] Failed to write limited_deal: {exc}"),
         )
         self.runtime.detailChanged.emit(event_text(detection))
+        self._dispatch_alert(deal, detection, include_local=True)
+        self.historyChanged.emit()
+
+    @staticmethod
+    def _alert_detection(deal: LimitedDeal) -> Detection:
+        return Detection(
+            droid=deal.droid,
+            rarity=f"{deal.rarity} {deal.droid_class}",
+            row_box=(0, 0, 0, 0),
+            droid_score=1.0,
+            rarity_score=1.0,
+            rarity_margin=1.0,
+            score=1.0,
+            source="limited-deal",
+            shape_score=1.0,
+        )
+
+    def _dispatch_alert(
+        self,
+        deal: LimitedDeal,
+        detection: Detection,
+        *,
+        include_local: bool,
+        remote_channels: set[str] | None = None,
+    ) -> None:
         self.dashboard.dispatch_detection(
             detection,
             source="limited_deal",
             rarity=detection.rarity,
             extra_fields={"starts_at": deal.starts_at},
+            include_local=include_local,
+            remote_channels=remote_channels,
+            on_complete=lambda outcomes: self._alert_delivery_finished(
+                deal,
+                outcomes,
+            ),
         )
-        self.historyChanged.emit()
+
+    def _alert_delivery_finished(
+        self,
+        deal: LimitedDeal,
+        outcomes: dict[str, bool],
+    ) -> None:
+        if self._alert_in_flight != deal.starts_at:
+            return
+        self._alert_in_flight = ""
+        failed = {label for label, success in outcomes.items() if not success}
+        service = self.service
+        if not failed:
+            if service is not None:
+                service.mark_alerted(deal)
+            self._alert_retry_timer.stop()
+            self._alert_retry_deal = None
+            self._alert_retry_channels = set()
+            self._alert_retry_attempt = 0
+            return
+        if service is None or not deal.is_current():
+            return
+        self._alert_retry_deal = deal
+        self._alert_retry_channels = failed
+        delay_seconds = min(300, 30 * (2**self._alert_retry_attempt))
+        self._alert_retry_attempt += 1
+        self._alert_retry_timer.start(delay_seconds * 1000)
+        self.runtime.detailChanged.emit(
+            "Limited Deal delivery will retry: " + ", ".join(sorted(failed))
+        )
+
+    def _retry_pending_alert(self) -> None:
+        service, deal = self.service, self._alert_retry_deal
+        if (
+            service is None
+            or deal is None
+            or service.was_alerted(deal)
+            or not deal.is_current()
+        ):
+            self._alert_retry_deal = None
+            self._alert_retry_channels = set()
+            return
+        config = AppConfig.from_dict(self.runtime.config.to_dict())
+        if not limited_deal_matches(
+            deal,
+            config.limited_deal_priority_alerts,
+            config.limited_deal_target_tiers,
+        ):
+            self._alert_retry_deal = None
+            self._alert_retry_channels = set()
+            return
+        self._alert_in_flight = deal.starts_at
+        self._dispatch_alert(
+            deal,
+            self._alert_detection(deal),
+            include_local=False,
+            remote_channels=set(self._alert_retry_channels),
+        )
 
     @Slot(str, bool)
     def setPriority(self, combo_id: str, enabled: bool) -> None:
@@ -312,6 +401,7 @@ class DealsController(StateObject):
 
     def shutdown(self) -> None:
         self._timer.stop()
+        self._alert_retry_timer.stop()
         if self.service is not None:
             self.service.stop()
             self.service = None

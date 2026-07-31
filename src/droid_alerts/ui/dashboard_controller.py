@@ -4,7 +4,7 @@ import threading
 import time
 from datetime import datetime
 from functools import partial
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
@@ -24,6 +24,7 @@ from ..notifications import (
     event_text,
     load_discord_webhook,
     load_discord_webhook_for_detection,
+    load_ntfy_token,
     load_phone_alert_credentials,
     ntfy_configured,
     phone_alerts_configured,
@@ -281,7 +282,10 @@ class DashboardController(StateObject):
                 stop_event=stop_event,
                 popup_parent=None,
                 popup_callback=lambda detection: self.runtime.dispatcher.post(
-                    lambda value=detection: self._show_popup(value, config)
+                    lambda value=detection: self._show_popup(
+                        value,
+                        AppConfig.from_dict(self.runtime.config.to_dict()),
+                    )
                 ),
                 status_callback=lambda event: self.runtime.dispatcher.post(
                     lambda value=event: self._handle_status(value)
@@ -531,6 +535,10 @@ class DashboardController(StateObject):
                 ),
             )
         elif channel == "ntfy":
+            try:
+                existing_token, _ = load_ntfy_token(self.runtime.config)
+            except Exception:
+                existing_token = None
             self.runtime.dialogs.channel_settings(
                 "Configure ntfy alerts",
                 "Subscribe to a hard-to-guess topic in the ntfy app, then enter it here.",
@@ -548,8 +556,24 @@ class DashboardController(StateObject):
                         "password": False,
                     },
                     {
+                        "id": "token_action",
+                        "label": "Access token",
+                        "value": "keep",
+                        "choices": [
+                            {
+                                "id": "keep",
+                                "label": (
+                                    "Keep saved token"
+                                    if existing_token
+                                    else "No saved token"
+                                ),
+                            },
+                            {"id": "remove", "label": "Remove saved token"},
+                        ],
+                    },
+                    {
                         "id": "token",
-                        "label": "Access token (optional)",
+                        "label": "New access token (optional)",
                         "value": "",
                         "password": True,
                     },
@@ -629,7 +653,12 @@ class DashboardController(StateObject):
                 tone="danger",
             )
             return False
-        save_ntfy_token(self.runtime.config, str(payload.get("token") or ""))
+        token = str(payload.get("token") or "").strip()
+        token_action = str(payload.get("token_action") or "keep").casefold()
+        if token:
+            save_ntfy_token(self.runtime.config, token)
+        elif token_action == "remove":
+            save_ntfy_token(self.runtime.config, "")
         self.runtime.update_config(
             ntfy_server_url=server,
             ntfy_topic=topic,
@@ -889,14 +918,18 @@ class DashboardController(StateObject):
         rarity: str = "",
         extra_fields: dict[str, object] | None = None,
         include_sound: bool = True,
+        include_local: bool = True,
+        remote_channels: set[str] | None = None,
+        on_complete: Callable[[dict[str, bool]], None] | None = None,
     ) -> None:
         """Send a Belt or Limited Deal alert through the enabled channels."""
         config = AppConfig.from_dict(self.runtime.config.to_dict())
         alert_id = alert_type_id(detection)
-        if config.channel_allows_alert("sound", alert_id):
+        if include_local and config.channel_allows_alert("sound", alert_id):
             self._maybe_start_wake_alarm(detection.droid, detection.rarity)
         if (
-            include_sound
+            include_local
+            and include_sound
             and config.sound_enabled
             and config.channel_allows_alert("sound", alert_id)
             and not self.wake_alarm.active
@@ -906,11 +939,36 @@ class DashboardController(StateObject):
                 lambda _value, error: self._dispatch_sound_done(error),
                 name=f"DroidAlerts{source.title()}Sound",
             )
-        if config.popup_enabled and config.channel_allows_alert("popup", alert_id):
+        if (
+            include_local
+            and config.popup_enabled
+            and config.channel_allows_alert("popup", alert_id)
+        ):
             self._show_popup(detection, config)
 
+        requested_channels = (
+            {str(channel).casefold() for channel in remote_channels}
+            if remote_channels is not None
+            else None
+        )
+        expected_channels: list[str] = []
+        for label, enabled, channel in (
+            ("Discord", config.discord_enabled, "discord"),
+            ("ntfy", config.ntfy_enabled, "ntfy"),
+            ("Pushover", config.phone_alerts_enabled, "pushover"),
+        ):
+            if (
+                enabled
+                and config.channel_allows_alert(channel, alert_id)
+                and (
+                    requested_channels is None
+                    or label.casefold() in requested_channels
+                )
+            ):
+                expected_channels.append(label)
+
         webhook = None
-        if config.discord_enabled and config.channel_allows_alert("discord", alert_id):
+        if "Discord" in expected_channels:
             try:
                 webhook, _ = load_discord_webhook_for_detection(
                     config,
@@ -919,7 +977,7 @@ class DashboardController(StateObject):
             except Exception as exc:
                 self._channel_status["Discord"] = f"Failed · {str(exc)[:70]}"
         credentials = None
-        if config.phone_alerts_enabled and config.channel_allows_alert("pushover", alert_id):
+        if "Pushover" in expected_channels:
             try:
                 credentials, _ = load_phone_alert_credentials(config)
             except Exception as exc:
@@ -935,22 +993,48 @@ class DashboardController(StateObject):
             ntfy_sender=send_ntfy_alert,
             phone_sender=send_phone_alert,
         )
+        deliveries = [
+            delivery
+            for delivery in deliveries
+            if delivery.label in expected_channels
+        ]
+        outcomes = {label: False for label in expected_channels}
+        remaining = {"count": len(deliveries)}
+
+        def delivery_finished(item, execution, error) -> None:
+            self._delivery_done(
+                item.label,
+                execution,
+                error,
+                detection,
+                source,
+                rarity,
+                extra_fields or {},
+            )
+            outcomes[item.label] = bool(
+                error is None
+                and execution is not None
+                and execution.result.success
+            )
+            remaining["count"] -= 1
+            if remaining["count"] == 0 and on_complete is not None:
+                on_complete(dict(outcomes))
+
+        if not deliveries and on_complete is not None:
+            on_complete(dict(outcomes))
         for delivery in deliveries:
             self._channel_status[delivery.label] = "Sending…"
             self.runtime.run_background(
                 lambda item=delivery: execute_alert_delivery(
                     item,
-                    wait_before_retry=lambda _seconds: False,
-                    max_attempts=1,
+                    wait_before_retry=lambda seconds: (
+                        time.sleep(seconds) or False
+                    ),
                 ),
-                lambda execution, error, item=delivery: self._delivery_done(
-                    item.label,
+                lambda execution, error, item=delivery: delivery_finished(
+                    item,
                     execution,
                     error,
-                    detection,
-                    source,
-                    rarity,
-                    extra_fields or {},
                 ),
                 name=f"DroidAlerts{source.title()}{delivery.label}",
             )

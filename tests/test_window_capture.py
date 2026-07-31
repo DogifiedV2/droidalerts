@@ -15,13 +15,14 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts import capture as capture_module
 from droid_alerts import watcher
-from droid_alerts.capture import MSSCapture, MonitorInfo, PixelBox
+from droid_alerts.capture import MSSCapture, MonitorDescriptor, MonitorInfo, PixelBox
 from droid_alerts.config import AppConfig
 from droid_alerts.window_capture import (
     WindowDescriptor,
     WindowsGraphicsCapture,
     X11WindowCapture,
     _macos_window_image,
+    _refresh_window_capture_placement,
     resolve_capture_window,
     window_capture_available,
     window_capture_key,
@@ -241,6 +242,46 @@ class WindowFrameTests(unittest.TestCase):
 
         np.testing.assert_array_equal(crop, frame_buffer[1:3, 2:5, :3])
         self.assertEqual((2, 3, 3), crop.shape)
+
+    def test_capture_placement_follows_a_window_to_another_monitor(self):
+        original = descriptor(
+            42,
+            title="Fortnite",
+            process="Fortnite.exe",
+        )
+        moved = WindowDescriptor(
+            **{
+                **original.__dict__,
+                "left": 2100,
+                "top": 100,
+                "width": 1600,
+                "height": 900,
+            }
+        )
+        capture = SimpleNamespace(
+            window=original,
+            capture_area=MonitorInfo(0, 0, 1600, 900, index=1),
+            monitor=MonitorInfo(0, 0, 1920, 1080, index=1),
+            _last_placement_refresh_at=0.0,
+        )
+        monitors = [
+            MonitorDescriptor(1, 0, 0, 1920, 1080, is_primary=True),
+            MonitorDescriptor(2, 1920, 0, 2560, 1440),
+        ]
+        with (
+            patch(
+                "droid_alerts.window_capture.list_capture_windows",
+                return_value=[moved],
+            ),
+            patch(
+                "droid_alerts.window_capture.list_monitors",
+                return_value=monitors,
+            ),
+        ):
+            _refresh_window_capture_placement(capture, now=2.0)
+
+        self.assertEqual((2100, 100), (capture.capture_area.left, capture.capture_area.top))
+        self.assertEqual(2, capture.monitor.index)
 
     def test_grab_does_not_replay_a_stale_frame_when_capture_pauses(self):
         capture = self.make_capture()

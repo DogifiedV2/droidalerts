@@ -550,14 +550,42 @@ class CaptureController(StateObject):
         return str(monitor.key) if monitor is not None else None
 
     def current_monitor(self) -> MonitorInfo | None:
+        config = self.runtime.config
         index = max(1, int(self.runtime.config.monitor_index))
+        descriptor = None
         try:
+            monitors = list(list_monitors())
             descriptor = next(
-                (item for item in list_monitors() if item.index == index),
+                (item for item in monitors if item.index == index),
                 None,
             )
+            if config.capture_source == "window":
+                window = resolve_capture_window(
+                    title=config.capture_window_title,
+                    process_name=config.capture_window_process,
+                    class_name=config.capture_window_class,
+                )
+
+                def intersection_area(item) -> int:
+                    left = max(window.left, item.left)
+                    top = max(window.top, item.top)
+                    right = min(window.left + window.width, item.left + item.width)
+                    bottom = min(window.top + window.height, item.top + item.height)
+                    return max(0, right - left) * max(0, bottom - top)
+
+                window_monitor = max(monitors, key=intersection_area, default=None)
+                if (
+                    window_monitor is not None
+                    and intersection_area(window_monitor) > 0
+                ):
+                    descriptor = window_monitor
+            elif config.capture_source == "device" and descriptor is None:
+                descriptor = next(
+                    (item for item in monitors if item.is_primary),
+                    monitors[0] if monitors else None,
+                )
         except Exception:
-            descriptor = None
+            pass
         if descriptor is None:
             return None
         return MonitorInfo(
@@ -576,6 +604,8 @@ class CaptureController(StateObject):
         if monitor is None or config.capture_source == "monitor":
             return monitor
         capture = None
+        source_left = monitor.left
+        source_top = monitor.top
         try:
             if config.capture_source == "device":
                 session = self.runtime.device_capture_session
@@ -598,6 +628,8 @@ class CaptureController(StateObject):
                     capture = self.create_chat_capture(config)
                     width, height = capture.screen_size()
                     area = getattr(capture, "capture_area", None)
+                    source_left = int(getattr(area, "left", source_left))
+                    source_top = int(getattr(area, "top", source_top))
                     key = (
                         str(getattr(area, "key", "") or "")
                         or self.current_capture_key()
@@ -605,15 +637,15 @@ class CaptureController(StateObject):
                     )
                     self._window_sizes[key] = (int(width), int(height))
                 else:
-                    size = self._window_sizes.get(key)
-                    if size is None:
-                        window = resolve_capture_window(
-                            title=config.capture_window_title,
-                            process_name=config.capture_window_process,
-                            class_name=config.capture_window_class,
-                        )
-                        size = (window.width, window.height)
-                        self._window_sizes[key] = size
+                    window = resolve_capture_window(
+                        title=config.capture_window_title,
+                        process_name=config.capture_window_process,
+                        class_name=config.capture_window_class,
+                    )
+                    size = (window.width, window.height)
+                    self._window_sizes[key] = size
+                    source_left = window.left
+                    source_top = window.top
                     width, height = size
                 name = (
                     config.capture_window_title
@@ -624,8 +656,8 @@ class CaptureController(StateObject):
             if capture is not None:
                 capture.close()
         return MonitorInfo(
-            left=monitor.left,
-            top=monitor.top,
+            left=source_left,
+            top=source_top,
             width=width,
             height=height,
             index=monitor.index,

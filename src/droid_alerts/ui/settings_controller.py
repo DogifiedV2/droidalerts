@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QFileDialog
 
 from ..alert_customization import (
     ALERT_CHANNELS,
+    MAX_NOTIFICATION_PROFILES,
     PROFILE_FIELDS,
     alert_id_aliases,
     normalize_clock,
@@ -424,12 +425,21 @@ class SettingsController(StateObject):
             )
             return
         profiles = deepcopy(self.runtime.config.notification_profiles)
+        if name not in profiles and len(profiles) >= MAX_NOTIFICATION_PROFILES:
+            self.runtime.dialogs.show_message(
+                "Notification Profile",
+                f"You can save up to {MAX_NOTIFICATION_PROFILES} profiles. "
+                "Delete one before creating another.",
+                tone="danger",
+            )
+            return
         profiles[name] = {
             field: deepcopy(getattr(self.runtime.config, field))
             for field in PROFILE_FIELDS
         }
+        normalized_profiles = normalize_notification_profiles(profiles)
         self.runtime.update_config(
-            notification_profiles=normalize_notification_profiles(profiles),
+            notification_profiles=normalized_profiles,
             active_notification_profile=name,
         )
         self.refresh()

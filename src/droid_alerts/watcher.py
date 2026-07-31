@@ -326,6 +326,15 @@ def run_watch(
                 )
             except Exception as exc:
                 print(f"[DISCORD] Failed to select webhook: {exc}")
+                selected_webhook_url = None
+                emit(
+                    "delivery",
+                    result={
+                        "channel": "Discord",
+                        "success": False,
+                        "detail": str(exc),
+                    },
+                )
 
         deliveries = enabled_alert_deliveries(
             config,

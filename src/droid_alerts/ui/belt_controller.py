@@ -545,7 +545,13 @@ class BeltController(StateObject):
                 source = self.capture.current_belt_source()
                 region = self.region
                 tracks = self._visible_tracks
-                if monitor is not None and source is not None and (
+                overlay_monitor = monitor
+                if (
+                    self.runtime.config.capture_source == "window"
+                    and source is not None
+                ):
+                    overlay_monitor = source
+                elif monitor is not None and source is not None and (
                     monitor.width != source.width or monitor.height != source.height
                 ):
                     scale = min(
@@ -571,7 +577,7 @@ class BeltController(StateObject):
                         for track in tracks
                     ]
                 belt_overlay().show_tracks(
-                    monitor,
+                    overlay_monitor,
                     region,
                     tracks,
                 )

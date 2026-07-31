@@ -281,11 +281,17 @@ def load_discord_webhook_for_detection(
         dedicated_url, dedicated_source = load_limited_deal_discord_webhook(config)
         if dedicated_url:
             return dedicated_url, dedicated_source
+        raise ValueError(
+            'Discord destination "Limited Deals" is configured but has no webhook.'
+        )
     elif destination:
         custom = load_discord_destinations(config)
         for name, url in custom.items():
             if name.casefold() == destination.casefold():
                 return url, discord_destinations_path(config)
+        raise ValueError(
+            f'Discord destination "{destination}" is configured but has no webhook.'
+        )
     if _is_limited_deal_detection(detection) and not destination:
         dedicated_url, dedicated_source = load_limited_deal_discord_webhook(config)
         if dedicated_url:

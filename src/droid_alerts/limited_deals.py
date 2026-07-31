@@ -47,6 +47,7 @@ LIMITED_DEAL_PRIORITY_COMBOS = (
     ("Diamond", "Mythic"),
 )
 FETCH_SECOND = 10
+FETCH_RETRY_SECONDS = 30
 REQUEST_TIMEOUT_SECONDS = 4.0
 USER_AGENT = f"DroidAlerts/{__version__}"
 
@@ -299,6 +300,21 @@ def next_limited_deal_fetch_at(
     return scheduled if current < scheduled else current
 
 
+def next_limited_deal_retry_at(now: datetime) -> datetime:
+    """Retry within the current offer window without crossing the next refresh."""
+
+    current = _as_utc(now)
+    next_hour_fetch = current.replace(
+        minute=0,
+        second=0,
+        microsecond=0,
+    ) + timedelta(hours=1, seconds=FETCH_SECOND)
+    return min(
+        current + timedelta(seconds=FETCH_RETRY_SECONDS),
+        next_hour_fetch,
+    )
+
+
 def fetch_current_limited_deal(endpoint_url: str) -> LimitedDeal:
     request = urllib.request.Request(
         endpoint_url,
@@ -423,6 +439,7 @@ class LimitedDealService:
     def _run(self) -> None:
         now = _as_utc(self._clock())
         attempted_hour: datetime | None = None
+        retry_at: datetime | None = None
         cached = self._read_cache(now)
         if cached is not None:
             cached_portrait = self._cached_portrait(cached)
@@ -443,19 +460,26 @@ class LimitedDealService:
             due = (
                 now
                 if fetch_on_start
-                else next_limited_deal_fetch_at(now, attempted_hour=attempted_hour)
+                else (
+                    retry_at
+                    if retry_at is not None
+                    else next_limited_deal_fetch_at(
+                        now,
+                        attempted_hour=attempted_hour,
+                    )
+                )
             )
             fetch_on_start = False
             delay = max(0.0, (due - now).total_seconds())
             if delay > 0 and self._stop_event.wait(delay):
                 return
             now = _as_utc(self._clock())
-            attempted_hour = now.replace(minute=0, second=0, microsecond=0)
             try:
                 deal = self._fetcher(self._endpoint_url)
                 if not deal.is_current(now):
                     raise ValueError("Server returned a Limited Deal outside the current hour")
             except (OSError, ValueError, urllib.error.URLError, TimeoutError) as exc:
+                retry_at = next_limited_deal_retry_at(now)
                 current_deal = self.current_deal
                 if current_deal is not None and not current_deal.is_current(now):
                     current_deal = None
@@ -465,7 +489,7 @@ class LimitedDealService:
                         source="network",
                         error=str(exc) or "Could not fetch the current Limited Deal",
                         checked_at=now,
-                        next_fetch_at=next_limited_deal_fetch_at(now, attempted_hour=attempted_hour),
+                        next_fetch_at=retry_at,
                         portrait_path=(
                             self._cached_portrait(current_deal)
                             if current_deal is not None
@@ -475,6 +499,8 @@ class LimitedDealService:
                 )
                 continue
 
+            retry_at = None
+            attempted_hour = now.replace(minute=0, second=0, microsecond=0)
             with self._lock:
                 self._deal = deal
                 self._write_cache_locked()

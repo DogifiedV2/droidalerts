@@ -26,6 +26,7 @@ from droid_alerts.limited_deals import (
     limited_deal_matches,
     limited_deal_portrait_url,
     next_limited_deal_fetch_at,
+    next_limited_deal_retry_at,
     normalize_limited_deal_priority_alerts,
     normalize_limited_deal_target_tiers,
 )
@@ -237,6 +238,31 @@ class LimitedDealRuleTests(unittest.TestCase):
             fallback_url, _ = load_discord_webhook_for_detection(config, limited)
             self.assertEqual("https://discord.com/api/webhooks/1/main", fallback_url)
 
+    def test_explicit_missing_discord_destination_does_not_fall_back_to_main(self):
+        config = AppConfig(
+            discord_alert_destinations={"limited_deals": "Private Guild"}
+        )
+        limited = Detection(
+            droid="R2",
+            rarity="Rainbow Epic",
+            row_box=(0, 0, 1, 1),
+            droid_score=1.0,
+            rarity_score=1.0,
+            rarity_margin=1.0,
+            score=1.0,
+            source="limited-deal",
+        )
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "droid_alerts.notifications.config_dir",
+            return_value=Path(directory),
+        ):
+            save_discord_webhook(
+                config,
+                "https://discord.com/api/webhooks/1/main",
+            )
+            with self.assertRaisesRegex(ValueError, "Private Guild"):
+                load_discord_webhook_for_detection(config, limited)
+
 class LimitedDealSchedulingTests(unittest.TestCase):
     def test_fetch_uses_a_bundled_ca_context(self):
         response = Mock()
@@ -298,13 +324,51 @@ class LimitedDealSchedulingTests(unittest.TestCase):
         after = datetime(2026, 7, 18, 14, 37, 25, tzinfo=timezone.utc)
         self.assertEqual(after, next_limited_deal_fetch_at(after))
 
-    def test_an_attempted_hour_never_fetches_again_until_next_hour(self):
+    def test_a_successful_hour_never_fetches_again_until_next_hour(self):
         now = datetime(2026, 7, 18, 14, 37, 25, tzinfo=timezone.utc)
         attempted = datetime(2026, 7, 18, 14, 0, 10, tzinfo=timezone.utc)
         self.assertEqual(
             datetime(2026, 7, 18, 15, 0, 10, tzinfo=timezone.utc),
             next_limited_deal_fetch_at(now, attempted_hour=attempted),
         )
+
+    def test_failed_fetch_retries_within_the_current_hour(self):
+        now = datetime(2026, 7, 18, 14, 37, 25, tzinfo=timezone.utc)
+        self.assertEqual(
+            datetime(2026, 7, 18, 14, 37, 55, tzinfo=timezone.utc),
+            next_limited_deal_retry_at(now),
+        )
+
+    def test_service_retries_a_transient_fetch_failure(self):
+        now = datetime.now(timezone.utc).replace(minute=30, second=0, microsecond=0)
+        attempts = 0
+        fetched = threading.Event()
+
+        def fetcher(_url: str) -> LimitedDeal:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise TimeoutError("temporary timeout")
+            fetched.set()
+            return current_deal()
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "droid_alerts.limited_deals.FETCH_RETRY_SECONDS",
+            0,
+        ):
+            service = LimitedDealService(
+                "https://example.test/limited-deal",
+                Path(directory) / "limited_deal.json",
+                lambda _status: None,
+                fetcher=fetcher,
+                portrait_fetcher=lambda _url, _deal, cache: cache / "portrait.png",
+                clock=lambda: now,
+            )
+            service.start()
+            self.assertTrue(fetched.wait(1.0))
+            service.stop()
+
+        self.assertEqual(2, attempts)
 
     def test_current_cache_is_shown_then_refreshed_when_the_app_starts(self):
         now = datetime(2026, 7, 18, 14, 30, 0, tzinfo=timezone.utc)

@@ -40,10 +40,12 @@ def initial_window_geometry(available: QRect) -> QRect:
         DEFAULT_WINDOW_WIDTH,
         max(MINIMUM_WINDOW_WIDTH, available.width() - 32),
     )
+    width = min(width, max(1, available.width()))
     height = min(
         DEFAULT_WINDOW_HEIGHT,
         max(MINIMUM_WINDOW_HEIGHT, available.height() - 40),
     )
+    height = min(height, max(1, available.height()))
     return QRect(
         available.left() + (available.width() - width) // 2,
         available.top() + (available.height() - height) // 2,

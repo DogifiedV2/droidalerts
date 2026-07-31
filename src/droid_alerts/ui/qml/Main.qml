@@ -1,6 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import QtQuick.Window 2.15
 import DroidAlerts.Components 1.0
 import "pages"
 
@@ -11,8 +12,8 @@ ApplicationWindow {
     id: window
     width: 1470
     height: 1040
-    minimumWidth: 980
-    minimumHeight: 650
+    minimumWidth: Math.max(1, Math.min(980, Screen.desktopAvailableWidth))
+    minimumHeight: Math.max(1, Math.min(650, Screen.desktopAvailableHeight))
     visible: true
     title: "Droid Alerts"
     color: Theme.bg0
@@ -22,8 +23,8 @@ ApplicationWindow {
     readonly property real preferredUiScale: 1470 / 1220
     readonly property real uiScale: Math.min(
         preferredUiScale,
-        width / minimumWidth,
-        height / minimumHeight
+        width / 980,
+        height / 650
     )
 
     onClosing: function(close) {

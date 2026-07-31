@@ -22,6 +22,7 @@ WINDOW_CAPTURE_EXPLANATION = (
 _MAX_WINDOW_TEXT = 512
 _FRAME_WAIT_SECONDS = 5.0
 _CROP_REFRESH_SECONDS = 0.05
+_PLACEMENT_REFRESH_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -547,6 +548,32 @@ def _physical_monitor_for_window(
     )
 
 
+def _refresh_window_capture_placement(capture, now: float | None = None) -> None:
+    """Refresh desktop placement without disturbing capture-surface dimensions."""
+
+    current = time.monotonic() if now is None else now
+    last = float(getattr(capture, "_last_placement_refresh_at", 0.0))
+    if current - last < _PLACEMENT_REFRESH_SECONDS:
+        return
+    capture._last_placement_refresh_at = current
+    try:
+        live = next(
+            window
+            for window in list_capture_windows()
+            if window.hwnd == capture.window.hwnd
+        )
+    except Exception:
+        return
+    capture.window = live
+    capture.capture_area.left = live.left
+    capture.capture_area.top = live.top
+    capture.monitor = _physical_monitor_for_window(
+        live,
+        capture.monitor.index,
+    )
+    capture.capture_area.index = capture.monitor.index
+
+
 class X11WindowCapture:
     """Capture one X11 window, using its backing pixels when available."""
 
@@ -593,6 +620,7 @@ class X11WindowCapture:
         )
         self._mss = _mss_instance()
         self._closed = False
+        self._last_placement_refresh_at = 0.0
         self._refresh_geometry()
 
     def _refresh_geometry(self) -> tuple[int, int, int, int]:
@@ -614,6 +642,25 @@ class X11WindowCapture:
         self.capture_area.top = top
         self.capture_area.width = width
         self.capture_area.height = height
+        self.window = WindowDescriptor(
+            hwnd=self.window.hwnd,
+            title=self.window.title,
+            process_name=self.window.process_name,
+            class_name=self.window.class_name,
+            process_id=self.window.process_id,
+            left=left,
+            top=top,
+            width=width,
+            height=height,
+        )
+        now = time.monotonic()
+        if now - self._last_placement_refresh_at >= _PLACEMENT_REFRESH_SECONDS:
+            self._last_placement_refresh_at = now
+            self.monitor = _physical_monitor_for_window(
+                self.window,
+                self.monitor.index,
+            )
+            self.capture_area.index = self.monitor.index
         return left, top, width, height
 
     def screen_size(self) -> tuple[int, int]:
@@ -857,6 +904,7 @@ class MacOSWindowCapture:
             name=self.window.title,
         )
         self._closed = False
+        self._last_placement_refresh_at = 0.0
         self._screencapturekit_source = None
         try:
             import ScreenCaptureKit
@@ -871,6 +919,7 @@ class MacOSWindowCapture:
         self._update_size(self._latest_frame)
 
     def _capture_frame(self) -> np.ndarray:
+        _refresh_window_capture_placement(self)
         if self._screencapturekit_source is not None:
             return _macos_screencapturekit_image(
                 self.window.hwnd,
@@ -964,6 +1013,7 @@ class WindowsGraphicsCapture:
         self._crop_sequence = 0
         self._returned_sequence = 0
         self._last_crop_at = 0.0
+        self._last_placement_refresh_at = 0.0
         self._closed = False
         self._error = ""
 
@@ -1003,6 +1053,7 @@ class WindowsGraphicsCapture:
             if width <= 0 or height <= 0:
                 return
             now = time.monotonic()
+            _refresh_window_capture_placement(self, now)
             with self._condition:
                 size_changed = self._capture_size != (width, height)
                 self._capture_size = (width, height)

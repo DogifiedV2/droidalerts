@@ -32,6 +32,7 @@ class ApplicationRuntime(QObject):
         self.main_window = None
         self.device_capture_session: DeviceCaptureSession | None = None
         self._closed = False
+        self._config_dirty = False
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(500)
@@ -62,16 +63,26 @@ class ApplicationRuntime(QObject):
                 changed = True
         if not changed:
             return
+        if save:
+            self._config_dirty = True
         self.configChanged.emit()
         if save:
-            self._save_timer.start()
+            self._save_timer.start(500)
             if announce:
                 self.detailChanged.emit("Settings save automatically")
 
     def save_now(self) -> None:
         if self._closed:
             return
-        save_config(self.config)
+        try:
+            save_config(self.config)
+        except (OSError, TypeError, ValueError) as exc:
+            self._config_dirty = True
+            self.detailChanged.emit(f"Settings not saved: {exc}")
+            self._save_timer.start(5000)
+            return
+        self._config_dirty = False
+        self._save_timer.setInterval(500)
         self.detailChanged.emit("Settings saved")
 
     def run_background(
@@ -129,7 +140,14 @@ class ApplicationRuntime(QObject):
             return
         if self._save_timer.isActive():
             self._save_timer.stop()
-            save_config(self.config)
+        if self._config_dirty:
+            try:
+                save_config(self.config)
+            except (OSError, TypeError, ValueError) as exc:
+                self.detailChanged.emit(f"Settings not saved: {exc}")
+                print(f"[GUI] Settings save failed during shutdown: {exc}")
+            else:
+                self._config_dirty = False
         self._closed = True
         self.dispatcher.close()
         for callback in reversed(self._shutdown_callbacks):

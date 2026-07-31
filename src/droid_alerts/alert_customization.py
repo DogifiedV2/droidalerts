@@ -161,6 +161,7 @@ PROFILE_FIELDS = (
     "timer_reminder_rules",
     "timer_offset_seconds",
 )
+MAX_NOTIFICATION_PROFILES = 20
 
 
 def normalize_notification_profiles(raw: object) -> dict[str, dict[str, Any]]:
@@ -177,7 +178,7 @@ def normalize_notification_profiles(raw: object) -> dict[str, dict[str, Any]]:
             if field in raw_values
         }
         profiles[name] = values
-        if len(profiles) >= 20:
+        if len(profiles) >= MAX_NOTIFICATION_PROFILES:
             break
     return profiles
 
