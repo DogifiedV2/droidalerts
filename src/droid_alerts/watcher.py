@@ -330,6 +330,16 @@ def run_watch(
                     parent=popup_parent,
                     monitor=getattr(capture, "monitor", None),
                     position=config.popup_position,
+                    center_x_ratio=(
+                        config.popup_center_x
+                        if config.popup_custom_position
+                        else None
+                    ),
+                    top_y_ratio=(
+                        config.popup_top_y
+                        if config.popup_custom_position
+                        else None
+                    ),
                     scale=config.popup_scale,
                     opacity=config.popup_opacity,
                 )

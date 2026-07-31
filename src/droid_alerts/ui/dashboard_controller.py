@@ -38,7 +38,12 @@ from ..notifications import (
     valid_ntfy_server_url,
     valid_ntfy_topic,
 )
-from ..popup import popup_icon_path, show_popup
+from ..popup import (
+    adjust_priority_popup,
+    hide_popup_editor,
+    popup_icon_path,
+    show_popup,
+)
 from ..timers import (
     DISPLAY_TIMER_ORDER,
     TIMER_COLORS,
@@ -158,7 +163,7 @@ class DashboardController(StateObject):
                 "label": "Popup",
                 "enabled": config.popup_enabled,
                 "configured": True,
-                "detail": self._channel_status["Popup"] or "On-screen card on this device",
+                "detail": self._channel_status["Popup"],
             },
             {
                 "id": "sound",
@@ -309,6 +314,12 @@ class DashboardController(StateObject):
             icon_path=popup_icon_path(config, detection),
             monitor=self.capture.current_monitor(),
             position=config.popup_position,
+            center_x_ratio=(
+                config.popup_center_x if config.popup_custom_position else None
+            ),
+            top_y_ratio=(
+                config.popup_top_y if config.popup_custom_position else None
+            ),
             scale=config.popup_scale,
             opacity=config.popup_opacity,
         )
@@ -1212,6 +1223,32 @@ class DashboardController(StateObject):
             on_reminder=self.handleTimerReminder,
         )
 
+    @Slot()
+    def adjustPopup(self) -> None:
+        adjust_priority_popup(
+            self.runtime.config,
+            monitor=self.capture.current_monitor(),
+            on_layout_change=self._save_popup_layout,
+        )
+
+    def _save_popup_layout(
+        self,
+        position: str,
+        center_x: float,
+        top_y: float,
+        scale: float,
+        custom_position: bool,
+    ) -> None:
+        self.runtime.update_config(
+            popup_position=position,
+            popup_custom_position=custom_position,
+            popup_center_x=min(1.0, max(0.0, float(center_x))),
+            popup_top_y=min(1.0, max(0.0, float(top_y))),
+            popup_scale=min(1.5, max(0.7, float(scale))),
+        )
+        self.runtime.detailChanged.emit("Priority popup layout updated")
+        self.refresh()
+
     def _maybe_start_wake_alarm(self, droid: object, rarity: object) -> None:
         config = self.runtime.config
         if not config.wake_alarm_matches(str(droid or ""), str(rarity or "")):
@@ -1256,4 +1293,5 @@ class DashboardController(StateObject):
         if self.stop_event is not None:
             self.stop_event.set()
         self.wake_alarm.stop()
+        hide_popup_editor()
         self._timer.stop()

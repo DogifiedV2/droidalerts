@@ -47,9 +47,12 @@ from droid_alerts.notifications import (
     save_ntfy_token,
 )
 from droid_alerts.popup import (
+    _PopupWidget,
     _caption_text,
     _centered_text_bounds,
     _title_segments,
+    adjust_priority_popup,
+    hide_popup_editor,
     popup_icon_path,
 )
 from droid_alerts.classifier import Detection
@@ -479,6 +482,92 @@ class QtUiControllerTests(unittest.TestCase):
         )
         self.assertEqual(280, (left + right) // 2)
         self.assertEqual(280 - left, right - 280)
+
+    def test_priority_popup_editor_saves_dragged_position_and_scale(self):
+        saved = Mock()
+        editor = _PopupWidget(
+            DashboardController.test_detection(),
+            8.0,
+            icon_path=None,
+            monitor=MonitorInfo(100, 50, 1000, 700),
+            position="top_center",
+            center_x_ratio=0.6,
+            top_y_ratio=0.2,
+            scale=1.0,
+            opacity=1.0,
+            edit_mode=True,
+            on_layout_change=saved,
+        )
+        try:
+            self.assertEqual(QRect(420, 190, 560, 250), editor.geometry())
+            editor._resize_step(0.1)
+            editor._finish_editing(True)
+            position, center_x, top_y, scale, custom = saved.call_args.args
+            self.assertEqual("top_center", position)
+            self.assertAlmostEqual(0.6, center_x)
+            self.assertAlmostEqual(0.2, top_y)
+            self.assertEqual(1.1, scale)
+            self.assertTrue(custom)
+        finally:
+            editor.close()
+
+    def test_priority_popup_editor_reset_restores_legacy_default(self):
+        saved = Mock()
+        editor = _PopupWidget(
+            DashboardController.test_detection(),
+            8.0,
+            icon_path=None,
+            monitor=MonitorInfo(0, 0, 1920, 1080),
+            position="bottom_right",
+            center_x_ratio=0.8,
+            top_y_ratio=0.7,
+            scale=1.4,
+            opacity=1.0,
+            edit_mode=True,
+            on_layout_change=saved,
+        )
+        try:
+            editor._reset_layout()
+            editor._finish_editing(True)
+            position, _center_x, _top_y, scale, custom = saved.call_args.args
+            self.assertEqual("top_center", position)
+            self.assertEqual(1.0, scale)
+            self.assertFalse(custom)
+        finally:
+            editor.close()
+
+    def test_priority_popup_editor_factory_shows_one_live_preview(self):
+        saved = Mock()
+        editor = adjust_priority_popup(
+            AppConfig(),
+            monitor=MonitorInfo(0, 0, 1920, 1080),
+            on_layout_change=saved,
+        )
+        try:
+            self.assertIsNotNone(editor)
+            self.app.processEvents()
+            self.assertTrue(editor.isVisible())
+            self.assertTrue(editor.edit_mode)
+            self.assertIs(editor, adjust_priority_popup(AppConfig()))
+        finally:
+            hide_popup_editor()
+            self.app.processEvents()
+
+    def test_popup_custom_position_round_trips_and_is_clamped(self):
+        config = AppConfig.from_dict(
+            {
+                "popup_custom_position": True,
+                "popup_center_x": 2.0,
+                "popup_top_y": -1.0,
+            }
+        )
+        self.assertTrue(config.popup_custom_position)
+        self.assertEqual(1.0, config.popup_center_x)
+        self.assertEqual(0.0, config.popup_top_y)
+        restored = AppConfig.from_dict(config.to_dict())
+        self.assertTrue(restored.popup_custom_position)
+        self.assertEqual(1.0, restored.popup_center_x)
+        self.assertEqual(0.0, restored.popup_top_y)
 
     def test_main_window_geometry_fits_and_centers_on_smaller_displays(self):
         self.assertEqual(
@@ -1031,6 +1120,79 @@ class QtUiControllerTests(unittest.TestCase):
         popup_config = show_popup.call_args.args[1]
         self.assertEqual(20.0, popup_config.popup_seconds)
         self.assertEqual("bottom-left", popup_config.popup_position)
+        controller.shutdown()
+
+    def test_dashboard_popup_editor_updates_live_layout_settings(self):
+        runtime = RuntimeStub(AppConfig())
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        controller = DashboardController(runtime, capture)
+
+        with patch(
+            "droid_alerts.ui.dashboard_controller.adjust_priority_popup"
+        ) as adjust:
+            controller.adjustPopup()
+
+        self.assertIs(runtime.config, adjust.call_args.args[0])
+        self.assertEqual(capture.current_monitor(), adjust.call_args.kwargs["monitor"])
+        adjust.call_args.kwargs["on_layout_change"](
+            "top_center",
+            0.3,
+            0.4,
+            1.3,
+            True,
+        )
+        self.assertTrue(runtime.config.popup_custom_position)
+        self.assertEqual(0.3, runtime.config.popup_center_x)
+        self.assertEqual(0.4, runtime.config.popup_top_y)
+        self.assertEqual(1.3, runtime.config.popup_scale)
+        controller.shutdown()
+
+    def test_popup_channel_has_no_default_green_status_text(self):
+        runtime = RuntimeStub(AppConfig())
+        controller = DashboardController(
+            runtime,
+            CaptureStub(MonitorInfo(0, 0, 1920, 1080)),
+        )
+
+        popup = next(row for row in controller._channels() if row["id"] == "popup")
+
+        self.assertEqual("", popup["detail"])
+        controller.shutdown()
+
+    def test_dashboard_popups_use_saved_free_form_position(self):
+        config = AppConfig(
+            popup_custom_position=True,
+            popup_center_x=0.3,
+            popup_top_y=0.4,
+        )
+        runtime = RuntimeStub(config)
+        controller = DashboardController(
+            runtime,
+            CaptureStub(MonitorInfo(0, 0, 1920, 1080)),
+        )
+
+        with patch("droid_alerts.ui.dashboard_controller.show_popup") as show:
+            controller._show_popup(controller.test_detection(), config)
+
+        self.assertEqual(0.3, show.call_args.kwargs["center_x_ratio"])
+        self.assertEqual(0.4, show.call_args.kwargs["top_y_ratio"])
+        controller.shutdown()
+
+    def test_popup_preset_disables_a_previous_custom_position(self):
+        runtime = RuntimeStub(
+            AppConfig(
+                popup_position="top_center",
+                popup_custom_position=True,
+                popup_center_x=0.2,
+                popup_top_y=0.4,
+            )
+        )
+        controller = SettingsController(runtime, DashboardStub())
+
+        controller.setValue("popup_position", "bottom_right")
+
+        self.assertEqual("bottom_right", runtime.config.popup_position)
+        self.assertFalse(runtime.config.popup_custom_position)
         controller.shutdown()
 
     def test_dashboard_remote_delivery_retries_a_transient_failure(self):
@@ -2096,6 +2258,8 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertNotIn('title: "Interface"', settings)
         self.assertIn('valueRoleName: "key"', dashboard)
         self.assertIn('text: "Configure"', dashboard)
+        self.assertIn('text: "Position & Size"', dashboard)
+        self.assertIn("dashboardController.adjustPopup()", dashboard)
         self.assertIn('text: "Discord Webhooks"', dashboard)
         self.assertNotIn("Discord Webhooks & Routing", dashboard)
         self.assertNotIn('text: "Configure…"', dashboard)

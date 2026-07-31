@@ -267,6 +267,14 @@ ScrollView {
                                 }
 
                                 SignalButton {
+                                    visible: modelData.id === "popup"
+                                    text: "Position & Size"
+                                    tone: "ghost"
+                                    compact: true
+                                    onClicked: dashboardController.adjustPopup()
+                                }
+
+                                SignalButton {
                                     text: "Test"
                                     compact: true
                                     onClicked: dashboardController.testChannel(modelData.id)

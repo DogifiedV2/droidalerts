@@ -3,18 +3,29 @@ from __future__ import annotations
 import multiprocessing
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import (
     QEasingCurve,
     QPropertyAnimation,
+    QPoint,
     QRect,
     Qt,
     QThread,
     QTimer,
 )
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QIcon,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import QApplication, QWidget
 
 from .classifier import Detection
@@ -64,6 +75,11 @@ PRIORITY_GONK_ICONS = {
     "Beskar": "priority_gonk_beskar.png",
     "Galactic": "priority_gonk_galactic.png",
 }
+POPUP_BASE_WIDTH = 560
+POPUP_BASE_HEIGHT = 154
+POPUP_EDIT_BAR_HEIGHT = 96
+POPUP_MIN_SCALE = 0.7
+POPUP_MAX_SCALE = 1.5
 
 
 @dataclass(frozen=True)
@@ -327,29 +343,46 @@ class _PopupWidget(QWidget):
         icon_path: Path | None,
         monitor: MonitorInfo | None,
         position: str,
+        center_x_ratio: float | None = None,
+        top_y_ratio: float | None = None,
         scale: float,
         opacity: float,
         standalone: bool = False,
+        edit_mode: bool = False,
+        on_layout_change: (
+            Callable[[str, float, float, float, bool], None] | None
+        ) = None,
     ) -> None:
         super().__init__(None)
         self.detection = detection
         self.popup_seconds = max(0.5, float(popup_seconds))
         self._started = time.monotonic()
         self._standalone = standalone
+        self.edit_mode = bool(edit_mode)
+        self._on_layout_change = on_layout_change
+        self._legacy_position = str(position or "top_center")
+        self._custom_position = (
+            center_x_ratio is not None and top_y_ratio is not None
+        )
+        self.center_x_ratio = (
+            min(1.0, max(0.0, float(center_x_ratio)))
+            if center_x_ratio is not None
+            else None
+        )
+        self.top_y_ratio = (
+            min(1.0, max(0.0, float(top_y_ratio)))
+            if top_y_ratio is not None
+            else None
+        )
+        self._drag_offset: QPoint | None = None
         self._accent, self._accent_dim = _accent(detection)
         self._icon = (
             QPixmap(str(icon_path))
             if icon_path is not None and icon_path.is_file()
             else QPixmap()
         )
-        self._scale = min(1.5, max(0.7, float(scale)))
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowTransparentForInput
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
+        self._scale = min(POPUP_MAX_SCALE, max(POPUP_MIN_SCALE, float(scale)))
+        self._apply_window_mode()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setWindowOpacity(min(1.0, max(0.55, float(opacity))))
@@ -358,46 +391,27 @@ class _PopupWidget(QWidget):
 
         screen = QApplication.primaryScreen()
         if monitor is not None:
-            left, top, screen_width, screen_height = (
+            self._screen = QRect(
                 monitor.left,
                 monitor.top,
                 monitor.width,
                 monitor.height,
             )
         elif screen is not None:
-            geometry = screen.geometry()
-            left, top, screen_width, screen_height = (
-                geometry.left(),
-                geometry.top(),
-                geometry.width(),
-                geometry.height(),
-            )
+            self._screen = screen.geometry()
         else:
-            left, top, screen_width, screen_height = 0, 0, 1920, 1080
+            self._screen = QRect(0, 0, 1920, 1080)
 
-        width = min(screen_width - 32, max(360, round(560 * self._scale)))
-        height = min(screen_height - 32, max(118, round(154 * self._scale)))
-        margin = max(16, round(24 * self._scale))
-        if position.endswith("left"):
-            x = left + margin
-        elif position.endswith("right"):
-            x = left + screen_width - width - margin
-        else:
-            x = left + (screen_width - width) // 2
-        if position.startswith("bottom"):
-            y = top + screen_height - height - margin
-            start_y = y + 14
-        else:
-            y = top + min(max(92, margin), max(margin, screen_height - height - margin))
-            start_y = y - 14
-        self._final_geometry = QRect(x, y, width, height)
-        self.setGeometry(x, start_y, width, height)
+        self._apply_geometry(animate=not self.edit_mode)
+        if self.edit_mode:
+            self._store_position()
 
         self._tick = QTimer(self)
         self._tick.setInterval(30)
         self._tick.timeout.connect(self._advance)
         self._tick.start()
-        QTimer.singleShot(round(self.popup_seconds * 1000), self.close)
+        if not self.edit_mode:
+            QTimer.singleShot(round(self.popup_seconds * 1000), self.close)
 
         self._entry = QPropertyAnimation(self, b"geometry", self)
         self._entry.setDuration(300)
@@ -405,16 +419,153 @@ class _PopupWidget(QWidget):
         self._entry.setEndValue(self._final_geometry)
         self._entry.setEasingCurve(QEasingCurve.Type.OutBack)
 
+    def _apply_window_mode(self) -> None:
+        flags = (
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        if not self.edit_mode:
+            flags |= (
+                Qt.WindowType.WindowTransparentForInput
+                | Qt.WindowType.WindowDoesNotAcceptFocus
+            )
+        self.setWindowFlags(flags)
+
+    def _card_size(self) -> tuple[int, int]:
+        width = min(
+            max(1, self._screen.width() - 32),
+            max(360, round(POPUP_BASE_WIDTH * self._scale)),
+        )
+        height = min(
+            max(1, self._screen.height() - 32),
+            max(118, round(POPUP_BASE_HEIGHT * self._scale)),
+        )
+        return width, height
+
+    def _window_size(self) -> tuple[int, int]:
+        width, height = self._card_size()
+        if self.edit_mode:
+            height += round(POPUP_EDIT_BAR_HEIGHT * self._scale)
+        return width, min(max(1, self._screen.height() - 2), height)
+
+    def _legacy_origin(self, width: int, card_height: int) -> tuple[int, int]:
+        left, top = self._screen.left(), self._screen.top()
+        screen_width, screen_height = self._screen.width(), self._screen.height()
+        margin = max(16, round(24 * self._scale))
+        if self._legacy_position.endswith("left"):
+            x = left + margin
+        elif self._legacy_position.endswith("right"):
+            x = left + screen_width - width - margin
+        else:
+            x = left + (screen_width - width) // 2
+        if self._legacy_position.startswith("bottom"):
+            y = top + screen_height - card_height - margin
+        else:
+            y = top + min(
+                max(92, margin),
+                max(margin, screen_height - card_height - margin),
+            )
+        return x, y
+
+    def _apply_geometry(self, *, animate: bool = False) -> None:
+        width, card_height = self._card_size()
+        _window_width, window_height = self._window_size()
+        if self.center_x_ratio is not None and self.top_y_ratio is not None:
+            x = round(
+                self._screen.left()
+                + self.center_x_ratio * self._screen.width()
+                - width / 2
+            )
+            y = round(
+                self._screen.top() + self.top_y_ratio * self._screen.height()
+            )
+        else:
+            x, y = self._legacy_origin(width, card_height)
+        x = max(
+            self._screen.left(),
+            min(self._screen.right() - width + 1, x),
+        )
+        y = max(
+            self._screen.top(),
+            min(self._screen.bottom() - window_height + 1, y),
+        )
+        self._card_width = width
+        self._card_height = card_height
+        self._final_geometry = QRect(x, y, width, window_height)
+        start_y = y
+        if animate:
+            start_y += 14 if self._legacy_position.startswith("bottom") else -14
+        self.setGeometry(x, start_y, width, window_height)
+
+    def _store_position(self) -> None:
+        self.center_x_ratio = min(
+            1.0,
+            max(
+                0.0,
+                (self.x() - self._screen.left() + self._card_width / 2)
+                / max(1, self._screen.width()),
+            ),
+        )
+        self.top_y_ratio = min(
+            1.0,
+            max(
+                0.0,
+                (self.y() - self._screen.top()) / max(1, self._screen.height()),
+            ),
+        )
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self.raise_()
-        self._entry.start()
+        if not self.edit_mode:
+            self._entry.start()
+        else:
+            self.activateWindow()
 
     def _advance(self) -> None:
-        if time.monotonic() - self._started >= self.popup_seconds:
+        if not self.edit_mode and time.monotonic() - self._started >= self.popup_seconds:
             self.close()
             return
         self.update()
+
+    def _button_rects(self) -> dict[str, QRect]:
+        scale = self._scale
+        first_top = self._card_height + round(24 * scale)
+        first_height = max(24, round(30 * scale))
+        center = self._card_width // 2
+        return {
+            "smaller": QRect(
+                center - round(168 * scale),
+                first_top,
+                round(48 * scale),
+                first_height,
+            ),
+            "larger": QRect(
+                center - round(112 * scale),
+                first_top,
+                round(48 * scale),
+                first_height,
+            ),
+            "done": QRect(
+                center - round(54 * scale),
+                first_top,
+                round(102 * scale),
+                first_height,
+            ),
+            "cancel": QRect(
+                center + round(58 * scale),
+                first_top,
+                round(102 * scale),
+                first_height,
+            ),
+            "reset": QRect(
+                center - round(86 * scale),
+                first_top + first_height + round(7 * scale),
+                round(172 * scale),
+                max(22, round(27 * scale)),
+            ),
+        }
 
     def _font(self, pixel_size: int, *, bold: bool = False) -> QFont:
         family = "Segoe UI" if sys.platform == "win32" else "Avenir Next"
@@ -467,7 +618,9 @@ class _PopupWidget(QWidget):
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        body = self.rect().adjusted(4, 4, -4, -4)
+        body = QRect(0, 0, self._card_width, self._card_height).adjusted(
+            4, 4, -4, -4
+        )
         painter.setPen(QPen(QColor(self._accent_dim), 6))
         painter.setBrush(QColor(CARD_BG))
         painter.drawRoundedRect(body, 16, 16)
@@ -575,7 +728,11 @@ class _PopupWidget(QWidget):
             )
 
         elapsed = time.monotonic() - self._started
-        remaining = max(0.0, 1.0 - elapsed / self.popup_seconds)
+        remaining = (
+            1.0
+            if self.edit_mode
+            else max(0.0, 1.0 - elapsed / self.popup_seconds)
+        )
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(self._accent))
         painter.drawRoundedRect(
@@ -587,12 +744,122 @@ class _PopupWidget(QWidget):
             2,
         )
 
+        if self.edit_mode:
+            painter.setFont(self._font(10, bold=True))
+            painter.setPen(QColor("#8ba0ae"))
+            painter.drawText(
+                QRect(
+                    0,
+                    self._card_height + round(2 * self._scale),
+                    self._card_width,
+                    round(20 * self._scale),
+                ),
+                Qt.AlignmentFlag.AlignCenter,
+                "DRAG THE POPUP TO MOVE IT",
+            )
+            for key, rect in self._button_rects().items():
+                painter.setBrush(QColor("#17323a" if key == "done" else "#182330"))
+                painter.setPen(QPen(QColor("#39c6d8"), 1))
+                painter.drawRoundedRect(rect, rect.height() // 2, rect.height() // 2)
+                painter.setPen(QColor("#e9f1f7"))
+                painter.drawText(
+                    rect,
+                    Qt.AlignmentFlag.AlignCenter,
+                    {
+                        "smaller": "−",
+                        "larger": "+",
+                        "done": "Done",
+                        "cancel": "Cancel",
+                        "reset": "Reset to default",
+                    }[key],
+                )
+
+    def _resize_step(self, delta: float) -> None:
+        self._store_position()
+        self._custom_position = True
+        self._scale = min(
+            POPUP_MAX_SCALE,
+            max(POPUP_MIN_SCALE, round(self._scale + delta, 2)),
+        )
+        self._apply_geometry()
+        self.update()
+
+    def _reset_layout(self) -> None:
+        self._legacy_position = "top_center"
+        self._custom_position = False
+        self.center_x_ratio = None
+        self.top_y_ratio = None
+        self._scale = 1.0
+        self._apply_geometry()
+        self._store_position()
+        self.update()
+
+    def _finish_editing(self, save: bool) -> None:
+        if save:
+            self._store_position()
+            if self._on_layout_change is not None:
+                self._on_layout_change(
+                    self._legacy_position,
+                    float(self.center_x_ratio or 0.5),
+                    float(self.top_y_ratio or 0.0),
+                    self._scale,
+                    self._custom_position,
+                )
+        self.close()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if not self.edit_mode or event.button() != Qt.MouseButton.LeftButton:
+            return
+        point = event.position().toPoint()
+        for key, rect in self._button_rects().items():
+            if not rect.contains(point):
+                continue
+            if key == "smaller":
+                self._resize_step(-0.1)
+            elif key == "larger":
+                self._resize_step(0.1)
+            elif key == "reset":
+                self._reset_layout()
+            else:
+                self._finish_editing(key == "done")
+            return
+        self._drag_offset = event.globalPosition().toPoint() - self.pos()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if not self.edit_mode or self._drag_offset is None:
+            return
+        candidate = event.globalPosition().toPoint() - self._drag_offset
+        x = max(
+            self._screen.left(),
+            min(self._screen.right() - self.width() + 1, candidate.x()),
+        )
+        y = max(
+            self._screen.top(),
+            min(self._screen.bottom() - self.height() + 1, candidate.y()),
+        )
+        self._custom_position = True
+        self.move(x, y)
+
+    def mouseReleaseEvent(self, _event: QMouseEvent) -> None:
+        if self._drag_offset is not None:
+            self._store_position()
+        self._drag_offset = None
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if self.edit_mode and event.key() == Qt.Key.Key_Escape:
+            self._finish_editing(False)
+            return
+        super().keyPressEvent(event)
+
     def closeEvent(self, event) -> None:
+        global _ACTIVE_POPUP_EDITOR
         self._tick.stop()
         try:
             _ACTIVE_POPUPS.remove(self)
         except ValueError:
             pass
+        if _ACTIVE_POPUP_EDITOR is self:
+            _ACTIVE_POPUP_EDITOR = None
         super().closeEvent(event)
         if self._standalone:
             app = QApplication.instance()
@@ -601,6 +868,7 @@ class _PopupWidget(QWidget):
 
 
 _ACTIVE_POPUPS: list[_PopupWidget] = []
+_ACTIVE_POPUP_EDITOR: _PopupWidget | None = None
 
 
 def bring_popup_to_front(
@@ -621,6 +889,8 @@ def _run_popup_process(
     icon_path: Path | None,
     monitor: MonitorInfo | None,
     position: str,
+    center_x_ratio: float | None,
+    top_y_ratio: float | None,
     scale: float,
     opacity: float,
 ) -> None:
@@ -631,6 +901,8 @@ def _run_popup_process(
         icon_path=icon_path,
         monitor=monitor,
         position=position,
+        center_x_ratio=center_x_ratio,
+        top_y_ratio=top_y_ratio,
         scale=scale,
         opacity=opacity,
         standalone=True,
@@ -647,6 +919,8 @@ def show_popup(
     parent=None,
     monitor: MonitorInfo | None = None,
     position: str = "top_center",
+    center_x_ratio: float | None = None,
+    top_y_ratio: float | None = None,
     scale: float = 1.0,
     opacity: float = 1.0,
 ) -> None:
@@ -658,6 +932,8 @@ def show_popup(
             icon_path=icon_path,
             monitor=monitor,
             position=position,
+            center_x_ratio=center_x_ratio,
+            top_y_ratio=top_y_ratio,
             scale=scale,
             opacity=opacity,
         )
@@ -673,6 +949,8 @@ def show_popup(
                 icon_path,
                 monitor,
                 position,
+                center_x_ratio,
+                top_y_ratio,
                 scale,
                 opacity,
             ),
@@ -682,3 +960,60 @@ def show_popup(
         process.start()
     except Exception as exc:
         print(f"[POPUP] Failed to show alert: {exc}")
+
+
+def adjust_priority_popup(
+    config: AppConfig,
+    *,
+    monitor: MonitorInfo | None = None,
+    on_layout_change: (
+        Callable[[str, float, float, float, bool], None] | None
+    ) = None,
+) -> _PopupWidget | None:
+    """Show a draggable priority-alert preview with resize controls."""
+
+    global _ACTIVE_POPUP_EDITOR
+    app = QApplication.instance()
+    if app is None or QThread.currentThread() is not app.thread():
+        return None
+    if _ACTIVE_POPUP_EDITOR is not None and _ACTIVE_POPUP_EDITOR.isVisible():
+        _ACTIVE_POPUP_EDITOR.raise_()
+        _ACTIVE_POPUP_EDITOR.activateWindow()
+        return _ACTIVE_POPUP_EDITOR
+    detection = Detection(
+        droid="Rebirth",
+        rarity="Ready",
+        row_box=(0, 0, 0, 0),
+        droid_score=1.0,
+        rarity_score=1.0,
+        rarity_margin=1.0,
+        score=1.0,
+        source="rebirth-ready",
+    )
+    editor = _PopupWidget(
+        detection,
+        config.popup_seconds,
+        icon_path=popup_icon_path(config, detection),
+        monitor=monitor,
+        position=config.popup_position,
+        center_x_ratio=(
+            config.popup_center_x if config.popup_custom_position else None
+        ),
+        top_y_ratio=config.popup_top_y if config.popup_custom_position else None,
+        scale=config.popup_scale,
+        opacity=config.popup_opacity,
+        edit_mode=True,
+        on_layout_change=on_layout_change,
+    )
+    _ACTIVE_POPUP_EDITOR = editor
+    editor.show()
+    return editor
+
+
+def hide_popup_editor() -> None:
+    global _ACTIVE_POPUP_EDITOR
+    editor = _ACTIVE_POPUP_EDITOR
+    if editor is not None:
+        _ACTIVE_POPUP_EDITOR = None
+        editor.close()
+        editor.deleteLater()

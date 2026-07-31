@@ -203,6 +203,11 @@ class AppConfig:
     popup_seconds: float = 8.0
     popup_icon_file: str = "signals_icon.png"
     popup_position: str = "top_center"
+    # Free-form popup placement is opt-in so existing position presets keep
+    # their exact behavior until the interactive editor is used.
+    popup_custom_position: bool = False
+    popup_center_x: float = 0.5
+    popup_top_y: float = 0.085
     popup_scale: float = 1.0
     popup_opacity: float = 1.0
     sound_file: str = ""
@@ -407,6 +412,13 @@ class AppConfig:
             ),
             popup_icon_file=str(data.get("popup_icon_file", "signals_icon.png")),
             popup_position=str(data.get("popup_position", "top_center")),
+            popup_custom_position=bool(data.get("popup_custom_position", False)),
+            popup_center_x=normalize_finite_float(
+                data.get("popup_center_x", 0.5), minimum=0.0, maximum=1.0
+            ),
+            popup_top_y=normalize_finite_float(
+                data.get("popup_top_y", 0.085), minimum=0.0, maximum=1.0
+            ),
             popup_scale=normalize_finite_float(
                 data.get("popup_scale", 1.0), minimum=0.7, maximum=1.5
             ),
@@ -635,6 +647,9 @@ class AppConfig:
             "popup_seconds": self.popup_seconds,
             "popup_icon_file": self.popup_icon_file,
             "popup_position": self.popup_position,
+            "popup_custom_position": self.popup_custom_position,
+            "popup_center_x": self.popup_center_x,
+            "popup_top_y": self.popup_top_y,
             "popup_scale": self.popup_scale,
             "popup_opacity": self.popup_opacity,
             "sound_file": self.sound_file,

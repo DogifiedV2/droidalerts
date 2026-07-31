@@ -265,6 +265,8 @@ class SettingsController(StateObject):
             self.refresh()
             return
         changes = {key: normalized}
+        if key == "popup_position":
+            changes["popup_custom_position"] = False
         if key == "save_debug_screenshots" and not normalized:
             changes["share_debug_detections"] = False
         if key in {"belt_idle_scan_fps", "belt_active_scan_fps"}:
