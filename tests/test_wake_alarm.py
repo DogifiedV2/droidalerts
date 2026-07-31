@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from droid_alerts.alerts import WAKE_ALARM_FILE, WakeAlarm
+from droid_alerts.alerts import WAKE_ALARM_FILE, WakeAlarm, _alert_wav
 from droid_alerts.config import AppConfig
 
 
@@ -77,6 +77,29 @@ class WakeAlarmPlaybackTests(unittest.TestCase):
 
             play_sound.assert_any_call(str(wav_path), 1 | 2 | 4)
             play_sound.assert_any_call(None, 0)
+
+
+class AlertSoundSelectionTests(unittest.TestCase):
+    def test_system_beeps_do_not_fall_back_to_an_added_wav(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            sounds = Path(folder)
+            sounds.joinpath("custom.wav").write_bytes(b"RIFF-test")
+            with (
+                patch("droid_alerts.alerts.user_sounds_dir", return_value=sounds),
+                patch("droid_alerts.alerts.sounds_dir", return_value=sounds),
+            ):
+                self.assertIsNone(_alert_wav(""))
+                self.assertIsNone(_alert_wav("System beeps"))
+
+    def test_missing_selected_sound_does_not_play_a_different_wav(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            sounds = Path(folder)
+            sounds.joinpath("other.wav").write_bytes(b"RIFF-test")
+            with (
+                patch("droid_alerts.alerts.user_sounds_dir", return_value=sounds),
+                patch("droid_alerts.alerts.sounds_dir", return_value=sounds),
+            ):
+                self.assertIsNone(_alert_wav("missing.wav"))
 
 
 

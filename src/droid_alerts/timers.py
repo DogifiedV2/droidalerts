@@ -5,7 +5,7 @@ import multiprocessing
 import queue
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 from PySide6.QtCore import QPoint, QRect, Qt, QThread, QTimer
 from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen
@@ -121,6 +121,7 @@ class DroidTimersOverlay(QWidget):
         monitor: MonitorInfo | None = None,
         reminders_enabled: bool = False,
         reminder_seconds: int = 60,
+        reminder_rules: Mapping[str, Sequence[int]] | None = None,
         offset_seconds: int = 0,
         on_reminder: Callable[[str, int], None] | None = None,
     ) -> None:
@@ -131,9 +132,22 @@ class DroidTimersOverlay(QWidget):
         self._monitor = monitor
         self._reminders_enabled = bool(reminders_enabled)
         self._reminder_seconds = max(1, int(reminder_seconds))
+        self._reminder_rules = {
+            kind: sorted(
+                {
+                    max(1, int(value))
+                    for value in (
+                        reminder_rules.get(kind, [])
+                        if reminder_rules is not None
+                        else (self._reminder_seconds,)
+                    )
+                }
+            )
+            for kind in DISPLAY_TIMER_ORDER
+        }
         self._offset_seconds = int(offset_seconds)
         self._on_reminder = on_reminder
-        self._reminded_targets: dict[str, int] = {}
+        self._reminded_targets: dict[tuple[str, int], int] = {}
         self._remaining: dict[str, int] = {}
         self._drag_offset: QPoint | None = None
         self.edit_mode = False
@@ -342,7 +356,7 @@ class DroidTimersOverlay(QWidget):
             )
 
     def _maybe_remind(self, kind: str, remaining: int) -> None:
-        if not self._reminders_enabled or remaining > self._reminder_seconds:
+        if not self._reminders_enabled:
             return
         target = int(
             (
@@ -352,9 +366,18 @@ class DroidTimersOverlay(QWidget):
             )
             // 60
         )
-        if self._reminded_targets.get(kind) == target:
+        eligible = [
+            lead
+            for lead in self._reminder_rules.get(kind, ())
+            if remaining <= lead
+            and self._reminded_targets.get((kind, lead)) != target
+        ]
+        if not eligible:
             return
-        self._reminded_targets[kind] = target
+        # If the overlay starts late, consume every already-passed threshold
+        # but emit only the closest useful reminder instead of a stale burst.
+        for lead in eligible:
+            self._reminded_targets[(kind, lead)] = target
         if self._on_reminder is not None:
             try:
                 self._on_reminder(kind, remaining)
@@ -491,6 +514,7 @@ def show_droid_timers(
         monitor=monitor,
         reminders_enabled=config.timer_reminders_enabled,
         reminder_seconds=config.timer_reminder_seconds,
+        reminder_rules=config.timer_reminder_rules,
         offset_seconds=config.timer_offset_seconds,
         on_reminder=on_reminder,
     )
@@ -528,6 +552,7 @@ def _run_standalone_timer_overlay(
     monitor: MonitorInfo | None,
     reminders_enabled: bool,
     reminder_seconds: int,
+    reminder_rules: Mapping[str, Sequence[int]] | None,
     offset_seconds: int,
     reminder_queue,
 ) -> None:
@@ -540,6 +565,7 @@ def _run_standalone_timer_overlay(
         monitor=monitor,
         reminders_enabled=reminders_enabled,
         reminder_seconds=reminder_seconds,
+        reminder_rules=reminder_rules,
         offset_seconds=offset_seconds,
         on_reminder=(
             (lambda kind, remaining: reminder_queue.put((kind, remaining)))
@@ -572,6 +598,7 @@ def start_droid_timers_thread(
     monitor: MonitorInfo | None = None,
     reminders_enabled: bool = False,
     reminder_seconds: int = 60,
+    reminder_rules: Mapping[str, Sequence[int]] | None = None,
     offset_seconds: int = 0,
     on_reminder: Callable[[str, int], None] | None = None,
 ) -> _StandaloneTimerHandle:
@@ -589,6 +616,7 @@ def start_droid_timers_thread(
             monitor,
             reminders_enabled,
             reminder_seconds,
+            reminder_rules,
             offset_seconds,
             reminder_queue,
         ),

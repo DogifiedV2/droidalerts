@@ -67,6 +67,135 @@ ScrollView {
             }
 
             SignalCard {
+                title: "Notification Profiles"
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignTop
+
+                Text {
+                    text: "Active · " + settingsController.state.activeProfile
+                    color: Theme.muted
+                    font.family: Theme.bodyFont
+                    font.pixelSize: 12
+                }
+                SignalCombo {
+                    model: settingsController.state.profileChoices
+                    enabled: count > 0
+                    Layout.fillWidth: true
+                    onActivated: {
+                        if (currentValue)
+                            settingsController.activateNotificationProfile(currentValue)
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    SignalButton {
+                        text: "Save current"
+                        compact: true
+                        Layout.fillWidth: true
+                        onClicked: settingsController.saveNotificationProfile()
+                    }
+                    SignalButton {
+                        text: "Delete active"
+                        tone: "ghost"
+                        compact: true
+                        enabled: settingsController.state.activeProfile !== "No active profile"
+                        onClicked: settingsController.deleteNotificationProfile()
+                    }
+                }
+            }
+
+            SignalCard {
+                title: "Quiet Hours & Snooze"
+                Layout.fillWidth: true
+                Layout.columnSpan: parent.columns
+
+                Text {
+                    text: "Snooze temporarily mutes the checked channels, even outside scheduled quiet hours. Bypassed alerts still notify."
+                    color: Theme.muted
+                    font.family: Theme.bodyFont
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+
+                SignalCheck {
+                    text: "Enable quiet hours"
+                    checked: settingsController.state.values.quiet_hours_enabled
+                    onToggled: settingsController.setValue("quiet_hours_enabled", checked)
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    SettingField {
+                        label: "Start (24-hour)"
+                        value: settingsController.state.values.quiet_hours_start
+                        Layout.fillWidth: true
+                        onSubmitted: function(value) {
+                            settingsController.setValue("quiet_hours_start", value)
+                        }
+                    }
+                    SettingField {
+                        label: "End (24-hour)"
+                        value: settingsController.state.values.quiet_hours_end
+                        Layout.fillWidth: true
+                        onSubmitted: function(value) {
+                            settingsController.setValue("quiet_hours_end", value)
+                        }
+                    }
+                }
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: 5
+                    Repeater {
+                        model: [
+                            { id: "popup", label: "Popup" },
+                            { id: "sound", label: "Sound" },
+                            { id: "discord", label: "Discord" },
+                            { id: "ntfy", label: "ntfy" },
+                            { id: "pushover", label: "Pushover" }
+                        ]
+                        SignalCheck {
+                            required property var modelData
+                            text: modelData.label
+                            checked: Boolean(settingsController.state.quietChannels[modelData.id])
+                            onToggled: settingsController.setQuietChannel(modelData.id, checked)
+                        }
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: settingsController.state.snoozeStatus
+                        color: Theme.muted
+                        font.family: Theme.bodyFont
+                        font.pixelSize: 12
+                        Layout.fillWidth: true
+                    }
+                    SignalButton {
+                        text: "Pause 30 min"
+                        compact: true
+                        onClicked: settingsController.snoozeNotifications(30)
+                    }
+                    SignalButton {
+                        text: "Pause 1 hour"
+                        compact: true
+                        onClicked: settingsController.snoozeNotifications(60)
+                    }
+                    SignalButton {
+                        text: "Resume"
+                        tone: "ghost"
+                        compact: true
+                        onClicked: settingsController.snoozeNotifications(0)
+                    }
+                    SignalButton {
+                        text: "Bypasses"
+                        tone: "ghost"
+                        compact: true
+                        onClicked: settingsController.configureQuietBypass()
+                    }
+                }
+            }
+
+            SignalCard {
                 title: "Help & Privacy"
                 Layout.fillWidth: true
                 Layout.columnSpan: parent.columns
@@ -267,7 +396,6 @@ ScrollView {
                             { label: "Duplicate window", key: "dedupe_seconds", suffix: "sec" },
                             { label: "Alert cooldown", key: "alert_cooldown_seconds", suffix: "sec" },
                             { label: "Calibration warning frames", key: "validation_failures_before_calibration_prompt", suffix: "" },
-                            { label: "Timer reminder lead time", key: "timer_reminder_seconds", suffix: "sec" },
                             { label: "Timer schedule offset", key: "timer_offset_seconds", suffix: "sec" },
                             { label: "Belt idle scan rate", key: "belt_idle_scan_fps", suffix: "FPS" },
                             { label: "Belt active scan rate", key: "belt_active_scan_fps", suffix: "FPS" }

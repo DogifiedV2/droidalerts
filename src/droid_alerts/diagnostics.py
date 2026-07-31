@@ -36,6 +36,10 @@ def create_support_bundle(config: AppConfig) -> Path:
         "capture_window_class",
         "capture_device_name",
         "capture_device_path",
+        "discord_alert_destinations",
+        "discord_message_prefixes",
+        "discord_mentions",
+        "notification_profiles",
     ):
         if config_data.get(key):
             config_data[key] = "<redacted>"

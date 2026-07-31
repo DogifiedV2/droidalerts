@@ -15,7 +15,7 @@ Item {
     // Repeater.itemAt() is statically typed as Item. Each delegate below
     // declares the properties read here, but qmllint cannot infer that type.
     // qmllint disable missing-property
-    function acceptDialog() {
+    function dialogPayload() {
         var kind = dialogController.state.kind
         var payload = {}
         if (kind === "form" || kind === "channel") {
@@ -46,7 +46,11 @@ Item {
                     payload.values[rule["optionId"]] = rule["currentValue"]
             }
         }
-        dialogController.accept(payload)
+        return payload
+    }
+
+    function acceptDialog() {
+        dialogController.accept(dialogPayload())
     }
     // qmllint enable missing-property
 
@@ -57,6 +61,7 @@ Item {
 
         MouseArea {
             anchors.fill: parent
+            onWheel: function(wheel) { wheel.accepted = true }
         }
 
         Behavior on opacity {
@@ -208,9 +213,13 @@ Item {
                                ? dialogController.state.fields : []
 
                         ColumnLayout {
+                            id: formField
                             required property var modelData
+                            property bool usesChoices: Boolean(modelData.choices)
                             property string fieldId: String(modelData.id)
-                            property string value: fieldInput.text
+                            property string value: usesChoices
+                                                   ? fieldCombo.currentValue
+                                                   : fieldInput.text
                             Layout.fillWidth: true
                             spacing: 5
 
@@ -223,9 +232,25 @@ Item {
 
                             SignalField {
                                 id: fieldInput
+                                visible: !formField.usesChoices
                                 text: modelData.value || ""
                                 echoMode: modelData.password ? TextInput.Password : TextInput.Normal
                                 Layout.fillWidth: true
+                            }
+
+                            SignalCombo {
+                                id: fieldCombo
+                                visible: formField.usesChoices
+                                model: modelData.choices || []
+                                Layout.fillWidth: true
+                                Component.onCompleted: {
+                                    for (var i = 0; i < count; ++i) {
+                                        if (valueAt(i) === modelData.value) {
+                                            currentIndex = i
+                                            break
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -372,6 +397,13 @@ Item {
                 spacing: 8
 
                 Item { Layout.fillWidth: true }
+
+                SignalButton {
+                    visible: dialogController.state.actionText.length > 0
+                    text: dialogController.state.actionText
+                    tone: "ghost"
+                    onClicked: dialogController.action(overlay.dialogPayload())
+                }
 
                 SignalButton {
                     visible: dialogController.state.cancelText.length > 0

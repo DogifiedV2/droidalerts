@@ -15,6 +15,8 @@ WINDOWS_HIDDEN_IMPORTS = (
     else []
 )
 QT_RUNTIME_EXCLUDES = (
+    "PySide6/translations/",
+    "PySide6/plugins/qmltooling/",
     "PySide6/Qt/translations/",
     "PySide6/Qt/plugins/qmltooling/",
 )

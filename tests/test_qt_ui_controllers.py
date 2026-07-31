@@ -21,6 +21,10 @@ from droid_alerts.belt.region import RelativeRegion
 from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox
 from droid_alerts.config import AppConfig
 from droid_alerts.limited_deals import LimitedDeal
+from droid_alerts.notifications import (
+    load_discord_destinations,
+    load_limited_deal_discord_webhook,
+)
 from droid_alerts.popup import (
     _caption_text,
     _centered_text_bounds,
@@ -161,6 +165,21 @@ class QtUiControllerTests(unittest.TestCase):
         dialogs.confirm("Confirm", "Continue?", callback=cancelled)
         dialogs.cancel()
         cancelled.assert_called_once_with(None)
+
+        action = Mock()
+        dialogs.rules(
+            "Rules",
+            "Edit rules",
+            [],
+            [],
+            action_text="Add item",
+            action_callback=action,
+        )
+        self.assertEqual("Add item", dialogs.state_snapshot()["actionText"])
+        dialogs.action({"values": {"alert": "sound.wav"}})
+        action.assert_called_once_with(
+            {"values": {"alert": "sound.wav"}}
+        )
 
     def test_channel_dialog_combines_connection_fields_and_alert_choices(self):
         dialogs = DialogController()
@@ -467,18 +486,82 @@ class QtUiControllerTests(unittest.TestCase):
 
         _label, discord_options = controller._channel_alert_options("discord")
         _label, ntfy_options = controller._channel_alert_options("ntfy")
-        discord_timer = next(
-            option for option in discord_options if option["id"] == "timer_reminder"
-        )
-        ntfy_timer = next(
-            option for option in ntfy_options if option["id"] == "timer_reminder"
-        )
+        discord_timers = [
+            option for option in discord_options if option["id"].startswith("timer:")
+        ]
+        ntfy_timers = [
+            option for option in ntfy_options if option["id"].startswith("timer:")
+        ]
 
-        self.assertFalse(discord_timer["selected"])
-        self.assertTrue(ntfy_timer["selected"])
+        self.assertEqual(3, len(discord_timers))
+        self.assertTrue(all(not option["selected"] for option in discord_timers))
+        self.assertEqual(3, len(ntfy_timers))
+        self.assertTrue(all(option["selected"] for option in ntfy_timers))
         controller.shutdown()
 
-    def test_discord_config_saves_optional_limited_deal_webhook(self):
+    def test_saving_timer_channel_choices_replaces_legacy_global_block(self):
+        runtime = RuntimeStub(
+            AppConfig(channel_disabled_alerts={"discord": ["timer_reminder"]})
+        )
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        controller = DashboardController(runtime, capture)
+        _label, options = controller._channel_alert_options("discord")
+        selected = [
+            option["id"]
+            for option in options
+            if option["id"] != "timer:mythic"
+        ]
+
+        controller._save_channel_alerts(
+            "discord",
+            options,
+            {"selected": selected},
+        )
+
+        disabled = runtime.config.channel_disabled_alerts["discord"]
+        self.assertNotIn("timer_reminder", disabled)
+        self.assertEqual(["timer:mythic"], disabled)
+        self.assertTrue(
+            runtime.config.channel_allows_alert("discord", "timer:beskar")
+        )
+        self.assertFalse(
+            runtime.config.channel_allows_alert("discord", "timer:mythic")
+        )
+        controller.shutdown()
+
+    def test_alert_customization_options_follow_priority_alert_order(self):
+        runtime = RuntimeStub(
+            AppConfig(
+                alert_targets=[
+                    ["Diamond", "Mythic"],
+                    ["Rainbow", "Mythic"],
+                    ["Beskar", "Epic"],
+                    ["Rainbow", "Epic"],
+                ]
+            )
+        )
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        controller = DashboardController(runtime, capture)
+
+        expected = [
+            "chat:Rainbow:Epic",
+            "chat:Rainbow:Mythic",
+            "chat:Beskar:Epic",
+            "chat:Diamond:Mythic",
+        ]
+        for channel in ("popup", "sound", "discord", "ntfy", "pushover"):
+            with self.subTest(channel=channel):
+                _label, options = controller._channel_alert_options(channel)
+                chat_ids = [
+                    option["id"]
+                    for option in options
+                    if option["id"].startswith("chat:")
+                ]
+                self.assertEqual(expected, chat_ids)
+
+        controller.shutdown()
+
+    def test_discord_channel_config_only_saves_main_webhook(self):
         runtime = RuntimeStub(AppConfig())
         capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
         controller = DashboardController(runtime, capture)
@@ -487,23 +570,39 @@ class QtUiControllerTests(unittest.TestCase):
             "limited_deal_webhook": "https://discord.com/api/webhooks/2/deals",
         }
 
-        with (
-            patch(
-                "droid_alerts.ui.dashboard_controller.save_discord_webhook"
-            ) as save_main,
-            patch(
-                "droid_alerts.ui.dashboard_controller."
-                "save_limited_deal_discord_webhook"
-            ) as save_limited_deals,
-        ):
+        with patch(
+            "droid_alerts.ui.dashboard_controller.save_discord_webhook"
+        ) as save_main:
             self.assertTrue(controller._save_discord(payload))
 
         save_main.assert_called_once_with(runtime.config, payload["webhook"])
-        save_limited_deals.assert_called_once_with(
-            runtime.config,
-            payload["limited_deal_webhook"],
-        )
         self.assertTrue(runtime.config.discord_enabled)
+        controller.shutdown()
+
+    def test_popup_and_sound_routing_applies_to_dashboard_alerts(self):
+        alert_id = "chat:Beskar:Mythic"
+        runtime = RuntimeStub(
+            AppConfig(
+                popup_enabled=True,
+                sound_enabled=True,
+                channel_disabled_alerts={
+                    "popup": [alert_id],
+                    "sound": [alert_id],
+                },
+            )
+        )
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        controller = DashboardController(runtime, capture)
+        item = controller.test_detection()
+
+        with (
+            patch.object(controller, "_show_popup") as show_popup,
+            patch("droid_alerts.ui.dashboard_controller.AlertPolicy.notify") as sound,
+        ):
+            controller.dispatch_detection(item, source="test")
+
+        show_popup.assert_not_called()
+        sound.assert_not_called()
         controller.shutdown()
 
     def test_timer_reminder_detection_uses_readable_timer_name(self):
@@ -512,6 +611,369 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual("Galactic Timer", detection.droid)
         self.assertEqual("45", detection.rarity)
         self.assertEqual("timer-reminder", detection.source)
+
+    def test_timer_overlay_supports_multiple_independent_lead_times(self):
+        reminders = []
+        overlay = DroidTimersOverlay(
+            monitor=MonitorInfo(0, 0, 1920, 1080),
+            reminders_enabled=False,
+            reminder_rules={
+                "beskar": [300, 60],
+                "mythic": [120],
+                "galactic": [],
+            },
+            on_reminder=lambda kind, remaining: reminders.append((kind, remaining)),
+        )
+        try:
+            overlay._reminders_enabled = True
+            with patch(
+                "droid_alerts.timers.TIMER_SCHEDULE_CLOCK.current_time_seconds",
+                return_value=1_000_000,
+            ):
+                overlay._maybe_remind("beskar", 250)
+                overlay._maybe_remind("beskar", 200)
+                overlay._maybe_remind("beskar", 50)
+                overlay._maybe_remind("galactic", 10)
+            self.assertEqual([("beskar", 250), ("beskar", 50)], reminders)
+        finally:
+            overlay.close()
+
+    def test_timer_overlay_does_not_burst_missed_reminders_when_started_late(self):
+        reminders = []
+        overlay = DroidTimersOverlay(
+            monitor=MonitorInfo(0, 0, 1920, 1080),
+            reminders_enabled=False,
+            reminder_rules={"beskar": [300, 60], "mythic": [], "galactic": []},
+            on_reminder=lambda kind, remaining: reminders.append((kind, remaining)),
+        )
+        try:
+            overlay._reminders_enabled = True
+            with patch(
+                "droid_alerts.timers.TIMER_SCHEDULE_CLOCK.current_time_seconds",
+                return_value=1_000_000,
+            ):
+                overlay._maybe_remind("beskar", 30)
+                overlay._maybe_remind("beskar", 29)
+            self.assertEqual([("beskar", 30)], reminders)
+        finally:
+            overlay.close()
+
+    def test_alert_customization_controllers_save_rules_and_profiles(self):
+        runtime = RuntimeStub(
+            AppConfig(
+                sound_enabled=True,
+                wake_alarm_beskar_mythic=False,
+                quiet_hours_enabled=True,
+                quiet_hours_start="21:30",
+                quiet_hours_muted_channels=["sound", "discord"],
+                discord_alert_destinations={"belt_tracker": "Belt Team"},
+            )
+        )
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        dashboard = DashboardController(runtime, capture)
+        settings = SettingsController(runtime, dashboard)
+
+        settings._save_alert_sounds(
+            {"values": {"belt_tracker": "belt.wav", "limited_deals": "__default__"}}
+        )
+        settings._save_notification_profile({"name": "AFK"})
+        runtime.update_config(
+            sound_enabled=False,
+            wake_alarm_beskar_mythic=True,
+            quiet_hours_enabled=False,
+            quiet_hours_start="23:00",
+            discord_alert_destinations={},
+        )
+        settings.activateNotificationProfile("AFK")
+
+        self.assertEqual("belt.wav", runtime.config.alert_sound_overrides["belt_tracker"])
+        self.assertTrue(runtime.config.sound_enabled)
+        self.assertFalse(runtime.config.wake_alarm_beskar_mythic)
+        self.assertTrue(runtime.config.quiet_hours_enabled)
+        self.assertEqual("21:30", runtime.config.quiet_hours_start)
+        self.assertEqual(
+            ["sound", "discord"], runtime.config.quiet_hours_muted_channels
+        )
+        self.assertEqual(
+            "Belt Team", runtime.config.discord_alert_destinations["belt_tracker"]
+        )
+        self.assertEqual("AFK", runtime.config.active_notification_profile)
+        settings.shutdown()
+        dashboard.shutdown()
+
+    def test_discord_destination_can_be_created_with_a_custom_name(self):
+        runtime = RuntimeStub(AppConfig())
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        dashboard = DashboardController(runtime, capture)
+        settings = SettingsController(runtime, dashboard)
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "droid_alerts.notifications.config_dir", return_value=Path(directory)
+        ):
+            draft_alert = "chat:Rainbow:Mythic"
+            settings._show_add_discord_destination(
+                {"values": {draft_alert: "Belt Team"}}
+            )
+            settings._save_discord_destination(
+                {
+                    "name": "Belt Team",
+                    "webhook": "https://discord.com/api/webhooks/1/belt",
+                }
+            )
+            self.assertEqual(
+                "https://discord.com/api/webhooks/1/belt",
+                load_discord_destinations(runtime.config)["Belt Team"],
+            )
+            route_options = runtime.dialogs.state_snapshot()["options"]
+            self.assertEqual(
+                "Belt Team",
+                next(
+                    option["value"]
+                    for option in route_options
+                    if option["id"] == draft_alert
+                ),
+            )
+
+        settings.shutdown()
+        dashboard.shutdown()
+
+    def test_limited_deal_webhook_is_managed_from_discord_routing(self):
+        runtime = RuntimeStub(AppConfig())
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        dashboard = DashboardController(runtime, capture)
+        settings = SettingsController(runtime, dashboard)
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "droid_alerts.notifications.config_dir", return_value=Path(directory)
+        ):
+            draft = {"values": {"limited_deals": "Main"}}
+            settings._show_manage_discord_webhooks(draft)
+            self.assertEqual(
+                ["main", "limited_deals", "add_named"],
+                [
+                    option["id"]
+                    for option in runtime.dialogs.state_snapshot()["options"]
+                ],
+            )
+
+            settings._choose_discord_webhook_action(
+                {"selected": "limited_deals"}
+            )
+            self.assertEqual(
+                "Limited Deals Webhook",
+                runtime.dialogs.state_snapshot()["title"],
+            )
+            settings._save_builtin_discord_webhook(
+                "limited_deals",
+                {"webhook": "https://discord.com/api/webhooks/2/deals"},
+            )
+
+            webhook, _source = load_limited_deal_discord_webhook(runtime.config)
+            self.assertEqual(
+                "https://discord.com/api/webhooks/2/deals",
+                webhook,
+            )
+            self.assertEqual("Limited Deals", draft["values"]["limited_deals"])
+            self.assertIn(
+                "Limited Deals",
+                [
+                    choice["id"]
+                    for choice in runtime.dialogs.state_snapshot()["choices"]
+                ],
+            )
+
+            runtime.config.discord_alert_destinations = {
+                "limited_deals": "Limited Deals",
+                "belt_tracker": "Limited Deals",
+            }
+            settings._save_builtin_discord_webhook(
+                "limited_deals",
+                {"webhook": ""},
+            )
+            webhook, _source = load_limited_deal_discord_webhook(runtime.config)
+            self.assertIsNone(webhook)
+            self.assertEqual({}, runtime.config.discord_alert_destinations)
+
+        settings.shutdown()
+        dashboard.shutdown()
+
+    def test_sound_rules_can_be_reopened_with_unsaved_draft_values(self):
+        runtime = RuntimeStub(AppConfig())
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        dashboard = DashboardController(runtime, capture)
+        settings = SettingsController(runtime, dashboard)
+        draft_alert = "chat:Rainbow:Mythic"
+
+        settings._configure_alert_sounds(
+            {"values": {draft_alert: "System beeps"}}
+        )
+
+        options = runtime.dialogs.state_snapshot()["options"]
+        self.assertEqual(
+            "System beeps",
+            next(
+                option["value"]
+                for option in options
+                if option["id"] == draft_alert
+            ),
+        )
+        settings.shutdown()
+        dashboard.shutdown()
+
+    def test_timer_reminder_rules_accept_clear_human_times(self):
+        runtime = RuntimeStub(AppConfig())
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        dashboard = DashboardController(runtime, capture)
+
+        dashboard._save_timer_reminder_rules(
+            {"beskar": "5m, 1m, 30s", "mythic": "1h", "galactic": ""}
+        )
+
+        self.assertEqual([300, 60, 30], runtime.config.timer_reminder_rules["beskar"])
+        self.assertEqual([3600], runtime.config.timer_reminder_rules["mythic"])
+        self.assertEqual([], runtime.config.timer_reminder_rules["galactic"])
+        dashboard.shutdown()
+
+    def test_quiet_hours_discord_routes_and_messages_are_editable(self):
+        runtime = RuntimeStub(AppConfig())
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        dashboard = DashboardController(runtime, capture)
+        settings = SettingsController(runtime, dashboard)
+
+        settings.setQuietChannel("sound", False)
+        settings.snoozeNotifications(30)
+        settings._save_quiet_bypass({"selected": ["timer:galactic"]})
+        settings._save_discord_routes(
+            {"values": {"belt_tracker": "Belt Room", "limited_deals": "Main"}}
+        )
+        settings._save_discord_message_rules(
+            ["belt_tracker", "limited_deals"],
+            {
+                "prefix": "Blueprint found",
+                "mention_type": "role",
+                "mention_id": "123456789012345678",
+            },
+        )
+
+        self.assertNotIn("sound", runtime.config.quiet_hours_muted_channels)
+        self.assertTrue(runtime.config.snoozed_until)
+        self.assertEqual(["timer:galactic"], runtime.config.quiet_hours_bypass_alerts)
+        self.assertEqual("Belt Room", runtime.config.discord_alert_destinations["belt_tracker"])
+        self.assertEqual(
+            "Main", runtime.config.discord_alert_destinations["limited_deals"]
+        )
+        self.assertEqual(
+            "Blueprint found",
+            runtime.config.discord_message_prefixes["belt_tracker"],
+        )
+        self.assertEqual(
+            "role",
+            runtime.config.discord_mentions["belt_tracker"]["type"],
+        )
+        self.assertEqual(
+            "Blueprint found",
+            runtime.config.discord_message_prefixes["limited_deals"],
+        )
+        settings.shutdown()
+        dashboard.shutdown()
+
+    def test_quiet_bypass_choices_replace_legacy_global_timer_alias(self):
+        hidden_id = "chat:Galactic:Rare"
+        runtime = RuntimeStub(
+            AppConfig(
+                quiet_hours_bypass_alerts=["timer_reminder", hidden_id],
+            )
+        )
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        dashboard = DashboardController(runtime, capture)
+        settings = SettingsController(runtime, dashboard)
+
+        settings.configureQuietBypass()
+        timer_options = [
+            option
+            for option in runtime.dialogs.state_snapshot()["options"]
+            if option["id"].startswith("timer:")
+        ]
+        self.assertTrue(all(option["selected"] for option in timer_options))
+
+        settings._save_quiet_bypass(
+            {"selected": ["timer:beskar", "timer:galactic"]}
+        )
+
+        self.assertEqual(
+            [hidden_id, "timer:beskar", "timer:galactic"],
+            runtime.config.quiet_hours_bypass_alerts,
+        )
+        settings.shutdown()
+        dashboard.shutdown()
+
+    def test_hidden_alert_customizations_survive_editing_visible_alerts(self):
+        hidden_id = "chat:Galactic:Mythic"
+        runtime = RuntimeStub(
+            AppConfig(
+                alert_targets=[["Rainbow", "Epic"]],
+                alert_sound_overrides={hidden_id: "hidden.wav"},
+                quiet_hours_bypass_alerts=[hidden_id],
+                discord_alert_destinations={hidden_id: "Hidden Team"},
+            )
+        )
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        dashboard = DashboardController(runtime, capture)
+        settings = SettingsController(runtime, dashboard)
+
+        settings._save_alert_sounds(
+            {"values": {"chat:Rainbow:Epic": "visible.wav"}}
+        )
+        settings._save_quiet_bypass({"selected": []})
+        settings._save_discord_routes(
+            {"values": {"chat:Rainbow:Epic": "Main"}}
+        )
+
+        self.assertEqual(
+            "hidden.wav", runtime.config.alert_sound_overrides[hidden_id]
+        )
+        self.assertIn(hidden_id, runtime.config.quiet_hours_bypass_alerts)
+        self.assertEqual(
+            "Hidden Team", runtime.config.discord_alert_destinations[hidden_id]
+        )
+        settings.shutdown()
+        dashboard.shutdown()
+
+    def test_mixed_discord_message_rules_are_kept_without_explicit_changes(self):
+        first = "chat:Rainbow:Epic"
+        second = "chat:Beskar:Mythic"
+        runtime = RuntimeStub(
+            AppConfig(
+                discord_message_prefixes={first: "First", second: "Second"},
+                discord_mentions={
+                    first: {"type": "role", "id": "123456789012345678"},
+                    second: {"type": "user", "id": "223456789012345678"},
+                },
+            )
+        )
+        capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
+        dashboard = DashboardController(runtime, capture)
+        settings = SettingsController(runtime, dashboard)
+
+        settings._save_discord_message_rules(
+            [first, second],
+            {
+                "prefix_action": "keep",
+                "prefix": "",
+                "mention_action": "keep",
+                "mention_type": "",
+                "mention_id": "",
+            },
+        )
+
+        self.assertEqual(
+            {first: "First", second: "Second"},
+            runtime.config.discord_message_prefixes,
+        )
+        self.assertEqual("role", runtime.config.discord_mentions[first]["type"])
+        self.assertEqual("user", runtime.config.discord_mentions[second]["type"])
+        settings.shutdown()
+        dashboard.shutdown()
 
     def test_timer_refresh_never_raises_or_reactivates_its_window(self):
         class TimerOverlayProbe(DroidTimersOverlay):
@@ -809,6 +1271,7 @@ class QtUiControllerTests(unittest.TestCase):
         )
         self.assertNotIn("esc ·", dialog_overlay)
         self.assertNotIn("↩", dialog_overlay)
+        self.assertIn("wheel.accepted = true", dialog_overlay)
         self.assertTrue(qml.joinpath("components", "NavIcon.qml").is_file())
         self.assertTrue(qml.joinpath("components", "LinkChip.qml").is_file())
 

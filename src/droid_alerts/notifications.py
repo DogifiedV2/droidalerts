@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
+from .alert_customization import alert_id_aliases, alert_type_id
 from .classifier import Detection
 from .config import AppConfig, config_dir
 from .network import certifi_ssl_context
@@ -73,25 +74,6 @@ def _is_timer_reminder_detection(detection: Detection) -> bool:
     return detection.source == "timer-reminder"
 
 
-def alert_type_id(detection: Detection) -> str:
-    """Stable ID used by per-channel alert filters."""
-    if detection.source == "rebirth-alert":
-        return "rebirth_available"
-    if detection.source == "rebirth-ready":
-        return "rebirth_ready"
-    if detection.source == "cb23-mission":
-        return "cb23_mission"
-    if detection.source in {"scrap-alert", "scrap-inactive"}:
-        return "scrap_alert"
-    if detection.source == "belt-tracker":
-        return "belt_tracker"
-    if detection.source == "limited-deal":
-        return "limited_deals"
-    if _is_timer_reminder_detection(detection):
-        return "timer_reminder"
-    return f"chat:{detection.droid}:{detection.rarity}"
-
-
 def _is_rebirth_detection(detection: Detection) -> bool:
     return _is_rebirth_available_detection(detection) or _is_rebirth_ready_detection(detection)
 
@@ -149,6 +131,10 @@ def limited_deal_discord_webhook_path(config: AppConfig) -> Path:
     return config_dir() / config.limited_deal_discord_webhook_file
 
 
+def discord_destinations_path(config: AppConfig) -> Path:
+    return config_dir() / config.discord_destinations_file
+
+
 def phone_credentials_path(config: AppConfig) -> Path:
     return config_dir() / config.phone_credentials_file
 
@@ -183,6 +169,56 @@ def save_limited_deal_discord_webhook(
     elif path.exists():
         path.unlink()
     return path
+
+
+def save_discord_destinations(
+    config: AppConfig,
+    destinations: dict[str, str],
+) -> Path:
+    path = discord_destinations_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cleaned = {
+        " ".join(str(name).split())[:64]: str(url).strip().lstrip("\ufeff")
+        for name, url in destinations.items()
+        if " ".join(str(name).split())
+        and valid_discord_webhook_url(str(url))
+    }
+    if cleaned:
+        path.write_text(
+            json.dumps(cleaned, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    elif path.exists():
+        path.unlink()
+    return path
+
+
+def load_discord_destinations(config: AppConfig) -> dict[str, str]:
+    path = discord_destinations_path(config)
+    if not path.exists():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(raw, dict):
+        raise ValueError("Discord destinations must contain a JSON object")
+    return {
+        " ".join(str(name).split())[:64]: str(url).strip().lstrip("\ufeff")
+        for name, url in raw.items()
+        if " ".join(str(name).split())
+        and valid_discord_webhook_url(str(url))
+    }
+
+
+def discord_destination_names(config: AppConfig) -> tuple[str, ...]:
+    names = ["Main"]
+    limited_url, _ = load_limited_deal_discord_webhook(config)
+    if limited_url:
+        names.append("Limited Deals")
+    names.extend(
+        name
+        for name in sorted(load_discord_destinations(config), key=str.casefold)
+        if name.casefold() not in {"main", "limited deals"}
+    )
+    return tuple(names)
 
 
 def load_discord_webhook(config: AppConfig) -> tuple[str | None, str | Path | None]:
@@ -224,9 +260,33 @@ def load_discord_webhook_for_detection(
     *,
     fallback_url: str | None = None,
 ) -> tuple[str | None, str | Path | None]:
-    """Use the optional Limited Deal webhook, otherwise the normal webhook."""
+    """Load the routed webhook, with current main/deal fallbacks preserved."""
 
-    if _is_limited_deal_detection(detection):
+    alert_id = alert_type_id(detection)
+    destination = config.discord_alert_destinations.get(alert_id, "")
+    if not destination:
+        destination = next(
+            (
+                config.discord_alert_destinations[alias]
+                for alias in alert_id_aliases(alert_id)
+                if alias in config.discord_alert_destinations
+            ),
+            "",
+        )
+    if destination.casefold() == "main":
+        if fallback_url:
+            return fallback_url, "default webhook"
+        return load_discord_webhook(config)
+    elif destination.casefold() == "limited deals":
+        dedicated_url, dedicated_source = load_limited_deal_discord_webhook(config)
+        if dedicated_url:
+            return dedicated_url, dedicated_source
+    elif destination:
+        custom = load_discord_destinations(config)
+        for name, url in custom.items():
+            if name.casefold() == destination.casefold():
+                return url, discord_destinations_path(config)
+    if _is_limited_deal_detection(detection) and not destination:
         dedicated_url, dedicated_source = load_limited_deal_discord_webhook(config)
         if dedicated_url:
             return dedicated_url, dedicated_source
@@ -282,13 +342,59 @@ def discord_color(detection: Detection) -> int:
     return 0x9B59B6
 
 
-def post_discord(webhook_url: str, detection: Detection) -> None:
+def discord_message_content(
+    config: AppConfig | None,
+    detection: Detection,
+) -> tuple[str, dict[str, object]]:
     label = event_text(detection)
+    if config is None:
+        return f"**{label}**", {"parse": []}
+    alert_id = alert_type_id(detection)
+    configured_ids = (alert_id, *alert_id_aliases(alert_id))
+    prefix = next(
+        (
+            config.discord_message_prefixes[value]
+            for value in configured_ids
+            if value in config.discord_message_prefixes
+        ),
+        "",
+    ).strip()
+    mention = next(
+        (
+            config.discord_mentions[value]
+            for value in configured_ids
+            if value in config.discord_mentions
+        ),
+        {},
+    )
+    mention_type = str(mention.get("type") or "")
+    snowflake = str(mention.get("id") or "")
+    allowed: dict[str, object] = {"parse": []}
+    mention_text = ""
+    valid_snowflake = snowflake.isdigit() and 15 <= len(snowflake) <= 22
+    if mention_type == "role" and valid_snowflake:
+        mention_text = f"<@&{snowflake}>"
+        allowed["roles"] = [snowflake]
+    elif mention_type == "user" and valid_snowflake:
+        mention_text = f"<@{snowflake}>"
+        allowed["users"] = [snowflake]
+    parts = [part for part in (mention_text, prefix, f"**{label}**") if part]
+    return " ".join(parts), allowed
+
+
+def post_discord(
+    webhook_url: str,
+    detection: Detection,
+    *,
+    config: AppConfig | None = None,
+) -> None:
+    label = event_text(detection)
+    content, allowed_mentions = discord_message_content(config, detection)
     payload = json.dumps(
         {
             "username": "Droid Tycoon Alerts",
-            "allowed_mentions": {"parse": []},
-            "content": f"**{label}**",
+            "allowed_mentions": allowed_mentions,
+            "content": content,
             "embeds": [
                 {
                     "title": (
@@ -340,9 +446,14 @@ def post_discord(webhook_url: str, detection: Detection) -> None:
             print("[DISCORD] Priority alert sent.")
 
 
-def send_discord_alert(webhook_url: str, detection: Detection) -> DeliveryResult:
+def send_discord_alert(
+    webhook_url: str,
+    detection: Detection,
+    *,
+    config: AppConfig | None = None,
+) -> DeliveryResult:
     try:
-        post_discord(webhook_url, detection)
+        post_discord(webhook_url, detection, config=config)
         return _delivery("Discord", True, "Delivered")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:300]
@@ -685,7 +796,12 @@ def enabled_alert_deliveries(
         and config.channel_allows_alert("discord", alert_id)
     ):
         deliveries.append(
-            AlertDelivery("Discord", discord_sender, (webhook_url, detection), {})
+            AlertDelivery(
+                "Discord",
+                discord_sender,
+                (webhook_url, detection),
+                {"config": config},
+            )
         )
     if (
         config.ntfy_enabled

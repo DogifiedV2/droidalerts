@@ -260,9 +260,6 @@ ScrollView {
                                 }
 
                                 SignalButton {
-                                    visible: modelData.id === "discord"
-                                             || modelData.id === "ntfy"
-                                             || modelData.id === "pushover"
                                     text: "Configure"
                                     tone: "ghost"
                                     compact: true
@@ -275,6 +272,42 @@ ScrollView {
                                     onClicked: dashboardController.testChannel(modelData.id)
                                 }
                             }
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 1
+                        Layout.topMargin: 4
+                        color: Theme.lineSoft
+                    }
+
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: width >= 560 ? 3 : 1
+                        columnSpacing: 7
+                        rowSpacing: 7
+
+                        SignalButton {
+                            text: "Sounds by Alert"
+                            tone: "ghost"
+                            compact: true
+                            Layout.fillWidth: true
+                            onClicked: settingsController.configureAlertSounds()
+                        }
+                        SignalButton {
+                            text: "Discord Webhooks & Routing"
+                            tone: "ghost"
+                            compact: true
+                            Layout.fillWidth: true
+                            onClicked: settingsController.configureDiscordRoutes()
+                        }
+                        SignalButton {
+                            text: "Discord Messages"
+                            tone: "ghost"
+                            compact: true
+                            Layout.fillWidth: true
+                            onClicked: settingsController.configureDiscordMessages()
                         }
                     }
                 }
@@ -359,12 +392,21 @@ ScrollView {
                         }
                     }
 
-                    SignalCheck {
+                    RowLayout {
                         Layout.fillWidth: true
                         visible: dashboardController.state.timersEnabled
-                        text: "Timer Reminder"
-                        checked: dashboardController.state.timerReminders
-                        onToggled: dashboardController.setTimerRemindersEnabled(checked)
+                        SignalCheck {
+                            text: "Timer Reminder"
+                            checked: dashboardController.state.timerReminders
+                            onToggled: dashboardController.setTimerRemindersEnabled(checked)
+                        }
+                        Item { Layout.fillWidth: true }
+                        SignalButton {
+                            text: "Configure"
+                            tone: "ghost"
+                            compact: true
+                            onClicked: dashboardController.configureTimerReminders()
+                        }
                     }
                 }
 

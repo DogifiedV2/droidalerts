@@ -71,7 +71,13 @@ def run_gui(*, startup_splash=None) -> None:
         QFont("Segoe UI" if sys.platform == "win32" else "Avenir Next", 10)
     )
 
-    icon_path = assets_dir() / "signals_icon.png"
+    brand_icon_path = assets_dir() / "signals_icon.png"
+    windows_icon_path = assets_dir() / "signals_icon.ico"
+    icon_path = (
+        windows_icon_path
+        if sys.platform == "win32" and windows_icon_path.is_file()
+        else brand_icon_path
+    )
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
 
@@ -122,7 +128,9 @@ def run_gui(*, startup_splash=None) -> None:
     context.setContextProperty("dialogController", runtime.dialogs)
     context.setContextProperty(
         "appIconUrl",
-        QUrl.fromLocalFile(str(icon_path)) if icon_path.is_file() else QUrl(),
+        QUrl.fromLocalFile(str(brand_icon_path))
+        if brand_icon_path.is_file()
+        else QUrl(),
     )
 
     engine.load(QUrl.fromLocalFile(str(qml_dir() / "Main.qml")))

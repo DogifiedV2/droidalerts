@@ -9,6 +9,7 @@ from .state import StateObject
 
 
 DialogCallback = Callable[[dict[str, Any] | None], None]
+DialogActionCallback = Callable[[dict[str, Any]], None]
 
 
 class DialogController(StateObject):
@@ -27,6 +28,7 @@ class DialogController(StateObject):
                 "note": "",
                 "acceptText": "OK",
                 "cancelText": "",
+                "actionText": "",
                 "fields": [],
                 "options": [],
                 "choices": [],
@@ -36,6 +38,7 @@ class DialogController(StateObject):
             parent=parent,
         )
         self._callback: DialogCallback | None = None
+        self._action_callback: DialogActionCallback | None = None
 
     def show_message(
         self,
@@ -141,6 +144,8 @@ class DialogController(StateObject):
         note: str = "",
         accept_text: str = "Save",
         cancel_text: str = "Cancel",
+        action_text: str = "",
+        action_callback: DialogActionCallback | None = None,
         callback: DialogCallback | None = None,
     ) -> None:
         self._open(
@@ -153,6 +158,8 @@ class DialogController(StateObject):
             cancel_text=cancel_text,
             options=options,
             choices=choices,
+            action_text=action_text,
+            action_callback=action_callback,
             callback=callback,
         )
 
@@ -223,10 +230,13 @@ class DialogController(StateObject):
         fields: Sequence[Mapping[str, Any]] = (),
         options: Sequence[Mapping[str, Any]] = (),
         choices: Sequence[Mapping[str, Any]] = (),
+        action_text: str = "",
+        action_callback: DialogActionCallback | None = None,
         link: tuple[str, str] | None = None,
         callback: DialogCallback | None = None,
     ) -> None:
         self._callback = callback
+        self._action_callback = action_callback
         eyebrow, icon = self._presentation(kind, tone, title)
         self.replace_state(
             {
@@ -240,6 +250,7 @@ class DialogController(StateObject):
                 "note": note,
                 "acceptText": accept_text,
                 "cancelText": cancel_text,
+                "actionText": action_text,
                 "fields": [dict(field) for field in fields],
                 "options": [dict(option) for option in options],
                 "choices": [dict(choice) for choice in choices],
@@ -252,6 +263,7 @@ class DialogController(StateObject):
     def accept(self, payload: Mapping[str, Any] | None = None) -> None:
         callback = self._callback
         self._callback = None
+        self._action_callback = None
         self.update_state(visible=False)
         if callback is not None:
             callback(dict(payload or {}))
@@ -260,6 +272,13 @@ class DialogController(StateObject):
     def cancel(self) -> None:
         callback = self._callback
         self._callback = None
+        self._action_callback = None
         self.update_state(visible=False)
         if callback is not None:
             callback(None)
+
+    @Slot("QVariantMap")
+    def action(self, payload: Mapping[str, Any] | None = None) -> None:
+        callback = self._action_callback
+        if callback is not None:
+            callback(dict(payload or {}))

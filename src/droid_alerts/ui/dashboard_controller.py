@@ -8,6 +8,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
+from ..alert_customization import alert_id_aliases
 from ..alerts import AlertPolicy, WakeAlarm
 from ..alert_delivery import (
     build_delivery_event,
@@ -23,12 +24,10 @@ from ..notifications import (
     event_text,
     load_discord_webhook,
     load_discord_webhook_for_detection,
-    load_limited_deal_discord_webhook,
     load_phone_alert_credentials,
     ntfy_configured,
     phone_alerts_configured,
     save_discord_webhook,
-    save_limited_deal_discord_webhook,
     save_ntfy_token,
     save_phone_credentials,
     send_discord_alert,
@@ -331,7 +330,11 @@ class DashboardController(StateObject):
                 self._last_alert = (
                     f"{label} · {self._display_timestamp(str(row.get('ts', '')))}"
                 )
-                self._maybe_start_wake_alarm(row.get("droid"), row.get("rarity"))
+                wake_alert_id = (
+                    f"chat:{row.get('droid', '')}:{row.get('rarity', '')}"
+                )
+                if self.runtime.config.channel_allows_alert("sound", wake_alert_id):
+                    self._maybe_start_wake_alarm(row.get("droid"), row.get("rarity"))
             self.historyChanged.emit()
         elif kind == "delivery":
             result = event.get("result")
@@ -493,33 +496,33 @@ class DashboardController(StateObject):
     @Slot(str)
     def configureChannel(self, channel: str) -> None:
         _label, options = self._channel_alert_options(channel)
-        if channel == "discord":
+        if channel in {"popup", "sound"}:
+            label = "Popup" if channel == "popup" else "Sound"
+            self.runtime.dialogs.channel_settings(
+                f"Configure {label} alerts",
+                f"Choose which alerts may use the {label.lower()} channel.",
+                [],
+                options,
+                accept_text="Save",
+                callback=lambda payload: self._save_local_channel_settings(
+                    channel, options, payload
+                ),
+            )
+        elif channel == "discord":
             try:
                 current, _ = load_discord_webhook(self.runtime.config)
             except Exception:
                 current = ""
-            try:
-                limited_deal_current, _ = load_limited_deal_discord_webhook(
-                    self.runtime.config
-                )
-            except Exception:
-                limited_deal_current = ""
             self.runtime.dialogs.channel_settings(
                 "Configure Discord alerts",
-                "Use the main webhook for normal alerts, with an optional separate webhook for Limited Deals.",
+                "Set the main webhook and choose which alerts may use Discord.",
                 [
                     {
                         "id": "webhook",
                         "label": "Main webhook URL",
                         "value": current or "",
                         "password": False,
-                    },
-                    {
-                        "id": "limited_deal_webhook",
-                        "label": "Limited Deal webhook URL (optional)",
-                        "value": limited_deal_current or "",
-                        "password": False,
-                    },
+                    }
                 ],
                 options,
                 accept_text="Save",
@@ -587,15 +590,21 @@ class DashboardController(StateObject):
                 ),
             )
 
+    def _save_local_channel_settings(
+        self,
+        channel: str,
+        options: list[dict[str, Any]],
+        payload: dict[str, Any] | None,
+    ) -> None:
+        if payload is None:
+            return
+        self._save_channel_alerts(channel, options, payload)
+        self.refresh()
+
     def _save_discord(self, payload: dict[str, Any] | None) -> bool:
         if not payload:
             return False
         value = str(payload.get("webhook") or "").strip().lstrip("\ufeff")
-        limited_deal_value = (
-            str(payload.get("limited_deal_webhook") or "")
-            .strip()
-            .lstrip("\ufeff")
-        )
         if not valid_discord_webhook_url(value):
             self.runtime.dialogs.show_message(
                 "Discord",
@@ -603,19 +612,7 @@ class DashboardController(StateObject):
                 tone="danger",
             )
             return False
-        if limited_deal_value and not valid_discord_webhook_url(limited_deal_value):
-            self.runtime.dialogs.show_message(
-                "Discord",
-                "The Limited Deal webhook does not look like a Discord webhook URL.",
-                tone="danger",
-            )
-            return False
         save_discord_webhook(self.runtime.config, value)
-        if "limited_deal_webhook" in payload:
-            save_limited_deal_discord_webhook(
-                self.runtime.config,
-                limited_deal_value,
-            )
         self.runtime.update_config(discord_enabled=True)
         self.refresh()
         return True
@@ -673,7 +670,8 @@ class DashboardController(StateObject):
                 "label": f"{droid} · {rarity}",
                 "selected": f"chat:{droid}:{rarity}" not in disabled,
             }
-            for droid, rarity in config.targets
+            for droid, rarity in ALERT_COMBOS
+            if (droid, rarity) in config.targets
         ]
         extras = (
             ("rebirth_ready_alert_enabled", "rebirth_ready", "Rebirth Ready"),
@@ -706,13 +704,19 @@ class DashboardController(StateObject):
                     "selected": "limited_deals" not in disabled,
                 }
             )
-        options.append(
-            {
-                "id": "timer_reminder",
-                "label": "Timer Reminder",
-                "selected": "timer_reminder" not in disabled,
-            }
-        )
+        if channel != "sound":
+            for kind in DISPLAY_TIMER_ORDER:
+                timer_id = f"timer:{kind}"
+                options.append(
+                    {
+                        "id": timer_id,
+                        "label": f"{kind.title()} Timer Reminder",
+                        "selected": (
+                            timer_id not in disabled
+                            and "timer_reminder" not in disabled
+                        ),
+                    }
+                )
         return label, options
 
     def _save_channel_settings(
@@ -744,7 +748,12 @@ class DashboardController(StateObject):
         enabled = {str(value) for value in payload.get("selected", [])}
         current_ids = {str(option["id"]) for option in options}
         previous = set(self.runtime.config.channel_disabled_alerts.get(channel, []))
-        disabled = (previous - current_ids) | (current_ids - enabled)
+        legacy_ids = {
+            alias
+            for alert_id in current_ids
+            for alias in alert_id_aliases(alert_id)
+        }
+        disabled = (previous - current_ids - legacy_ids) | (current_ids - enabled)
         mapping = dict(self.runtime.config.channel_disabled_alerts)
         if disabled:
             mapping[channel] = sorted(disabled)
@@ -801,7 +810,12 @@ class DashboardController(StateObject):
                 )
                 if not webhook:
                     raise ValueError("Set up Discord first")
-                work = partial(send_discord_alert, webhook, detection)
+                work = partial(
+                    send_discord_alert,
+                    webhook,
+                    detection,
+                    config=config,
+                )
             elif channel == "ntfy":
                 if not ntfy_configured(config):
                     raise ValueError("Set up ntfy first")
@@ -878,17 +892,23 @@ class DashboardController(StateObject):
     ) -> None:
         """Send a Belt or Limited Deal alert through the enabled channels."""
         config = AppConfig.from_dict(self.runtime.config.to_dict())
-        self._maybe_start_wake_alarm(detection.droid, detection.rarity)
-        if include_sound and config.sound_enabled and not self.wake_alarm.active:
+        alert_id = alert_type_id(detection)
+        if config.channel_allows_alert("sound", alert_id):
+            self._maybe_start_wake_alarm(detection.droid, detection.rarity)
+        if (
+            include_sound
+            and config.sound_enabled
+            and config.channel_allows_alert("sound", alert_id)
+            and not self.wake_alarm.active
+        ):
             self.runtime.run_background(
                 lambda: AlertPolicy(config).notify(detection),
                 lambda _value, error: self._dispatch_sound_done(error),
                 name=f"DroidAlerts{source.title()}Sound",
             )
-        if config.popup_enabled:
+        if config.popup_enabled and config.channel_allows_alert("popup", alert_id):
             self._show_popup(detection, config)
 
-        alert_id = alert_type_id(detection)
         webhook = None
         if config.discord_enabled and config.channel_allows_alert("discord", alert_id):
             try:
@@ -1001,6 +1021,84 @@ class DashboardController(StateObject):
                 self.runtime.config.droid_timers_enabled and enabled
             )
         )
+        if self.runtime.config.droid_timers_enabled:
+            show_droid_timers(
+                self.runtime.config,
+                monitor=self.capture.current_monitor(),
+                on_reminder=self.handleTimerReminder,
+            )
+        self.refresh()
+
+    @Slot()
+    def configureTimerReminders(self) -> None:
+        rules = self.runtime.config.timer_reminder_rules
+        self.runtime.dialogs.form(
+            "Timer Reminder Rules",
+            "Choose when to alert before each timer reaches zero. Use times such as 5m, 1m or 30s, separated by commas. Leave a timer blank to disable its reminders.",
+            [
+                {
+                    "id": kind,
+                    "label": f"{kind.title()} alerts before spawn",
+                    "value": ", ".join(
+                        self._format_reminder_offset(value)
+                        for value in rules.get(kind, [])
+                    ),
+                    "password": False,
+                }
+                for kind in DISPLAY_TIMER_ORDER
+            ],
+            callback=self._save_timer_reminder_rules,
+        )
+
+    @staticmethod
+    def _format_reminder_offset(seconds: int) -> str:
+        value = max(1, int(seconds))
+        if value % 3600 == 0:
+            return f"{value // 3600}h"
+        if value % 60 == 0:
+            return f"{value // 60}m"
+        return f"{value}s"
+
+    @staticmethod
+    def _parse_reminder_offset(value: str) -> int:
+        text = value.strip().casefold()
+        if not text:
+            raise ValueError("Empty reminder time")
+        multiplier = 1
+        if text[-1:] in {"s", "m", "h"}:
+            unit = text[-1]
+            text = text[:-1].strip()
+            multiplier = {"s": 1, "m": 60, "h": 3600}[unit]
+        seconds = int(text) * multiplier
+        if seconds <= 0:
+            raise ValueError("Reminder time must be positive")
+        return min(86_400, seconds)
+
+    def _save_timer_reminder_rules(self, payload: dict[str, Any] | None) -> None:
+        if payload is None:
+            return
+        rules: dict[str, list[int]] = {}
+        try:
+            for kind in DISPLAY_TIMER_ORDER:
+                text = str(payload.get(kind) or "").strip()
+                values = (
+                    []
+                    if not text
+                    else [
+                        self._parse_reminder_offset(part)
+                        for part in text.split(",")
+                        if part.strip()
+                    ]
+                )
+                rules[kind] = sorted(set(values), reverse=True)[:8]
+        except ValueError:
+            self.runtime.dialogs.show_message(
+                "Timer Reminder Rules",
+                "Use times like 5m, 1m or 30s, separated by commas.",
+                tone="danger",
+            )
+            return
+        self.runtime.update_config(timer_reminder_rules=rules)
         if self.runtime.config.droid_timers_enabled:
             show_droid_timers(
                 self.runtime.config,

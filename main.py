@@ -61,6 +61,9 @@ def main() -> int | None:
         try:
             if not _source_dependencies_ready():
                 raise SystemExit("Droid Alerts dependencies could not be installed.")
+            from droid_alerts.platform_ui import set_windows_app_identity
+
+            set_windows_app_identity()
             from droid_alerts.startup_splash import create_startup_splash
 
             splash = create_startup_splash()

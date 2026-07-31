@@ -8,6 +8,7 @@ from pathlib import Path
 
 import cv2
 
+from .alert_customization import alert_type_id
 from .alerts import AlertPolicy, row_hash
 from .auxiliary_alerts import AuxiliaryAlertSchedule
 from .alert_delivery import (
@@ -288,7 +289,19 @@ def run_watch(
         *,
         attachment_path: Path | None,
     ) -> None:
-        if config.popup_enabled:
+        alert_id = alert_type_id(detection)
+        if (
+            config.sound_enabled
+            and detection.source != "timer-reminder"
+            and config.channel_allows_alert("sound", alert_id)
+            and can_play_local_sound()
+        ):
+            try:
+                policy.notify(detection)
+            except Exception as exc:
+                print(f"[SOUND] Failed to play {alert_id}: {exc}")
+                emit("sound_error", message=str(exc))
+        if config.popup_enabled and config.channel_allows_alert("popup", alert_id):
             if popup_callback is not None:
                 popup_callback(detection)
             else:
@@ -370,6 +383,7 @@ def run_watch(
             monitor=getattr(capture, "monitor", None),
             reminders_enabled=config.timer_reminders_enabled,
             reminder_seconds=config.timer_reminder_seconds,
+            reminder_rules=config.timer_reminder_rules,
             offset_seconds=config.timer_offset_seconds,
             on_reminder=fire_timer_reminder,
         )
@@ -441,12 +455,6 @@ def run_watch(
         log_event(event)
         emit("alert", event=event)
         print(f"[ALERT] {event['ts']} Rebirth droid available score={match.score:.2f}")
-        if can_play_local_sound():
-            try:
-                policy.notify(detection)
-            except Exception as exc:
-                print(f"[SOUND] Failed to play Rebirth Alert: {exc}")
-                emit("sound_error", message=str(exc))
         dispatch_alert_channels(detection, event, attachment_path=sample_path)
 
     def fire_rebirth_ready_alert(level: int, ready_score: float) -> None:
@@ -479,12 +487,6 @@ def run_watch(
         log_event(event)
         emit("alert", event=event)
         print(f"[ALERT] {event['ts']} Rebirth Ready level={level} score={ready_score:.2f}")
-        if can_play_local_sound():
-            try:
-                policy.notify(detection)
-            except Exception as exc:
-                print(f"[SOUND] Failed to play Rebirth alert: {exc}")
-                emit("sound_error", message=str(exc))
         dispatch_alert_channels(detection, event, attachment_path=None)
 
     def fire_scrap_alert(icon_score: float) -> None:
@@ -516,12 +518,6 @@ def run_watch(
         log_event(event)
         emit("alert", event=event)
         print(f"[ALERT] {event['ts']} Scrap income stopped changing")
-        if can_play_local_sound():
-            try:
-                policy.notify(detection)
-            except Exception as exc:
-                print(f"[SOUND] Failed to play Scrap Alert: {exc}")
-                emit("sound_error", message=str(exc))
         dispatch_alert_channels(detection, event, attachment_path=None)
 
     def fire_scrap_inactive_alert(icon_score: float) -> None:
@@ -554,12 +550,6 @@ def run_watch(
         log_event(event)
         emit("alert", event=event)
         print(f"[ALERT] {event['ts']} {detail}")
-        if can_play_local_sound():
-            try:
-                policy.notify(detection)
-            except Exception as exc:
-                print(f"[SOUND] Failed to play Scrap inactive alert: {exc}")
-                emit("sound_error", message=str(exc))
         dispatch_alert_channels(detection, event, attachment_path=None)
 
     def fire_cb23_mission_alert(
@@ -623,12 +613,6 @@ def run_watch(
         log_event(event)
         emit("alert", event=event)
         print(f"[ALERT] {event['ts']} CB23 Mission score={match.score:.2f}")
-        if can_play_local_sound():
-            try:
-                policy.notify(detection)
-            except Exception as exc:
-                print(f"[SOUND] Failed to play CB23 Mission alert: {exc}")
-                emit("sound_error", message=str(exc))
         dispatch_alert_channels(detection, event, attachment_path=sample_path)
 
     # Live settings: the GUI autosaves config.json (and region nudges save
@@ -1107,15 +1091,6 @@ def run_watch(
                 if fire:
                     print(f"[ALERT] {event['ts']} {label} score={detection.score:.2f}")
                     logged_spawn_keys[spawn_key] = now
-                    # The persistent wake alarm is started by the GUI from the
-                    # emitted alert event. Once active, do not let a normal
-                    # async sound replace its loop in the OS audio player.
-                    if can_play_local_sound():
-                        try:
-                            policy.notify(detection)
-                        except Exception as exc:
-                            print(f"[SOUND] Failed to play alert: {exc}")
-                            emit("sound_error", message=str(exc))
                     telemetry.submit_alert_detection(detection=detection, detected_at=event["ts"])
                     if debug and config.share_debug_detections:
                         try:

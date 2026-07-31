@@ -89,19 +89,16 @@ def main() -> int:
         failures.append("enabled Rainbow Legendary target should fire")
 
     galactic_combos = {
-        ("Galactic", "Common"),
-        ("Galactic", "Rare"),
         ("Galactic", "Epic"),
         ("Galactic", "Legendary"),
         ("Galactic", "Mythic"),
     }
     if not galactic_combos.issubset(set(ALERT_COMBOS)):
-        failures.append("all Galactic priority toggles should be available")
-    default_galactic = {
-        ("Galactic", "Epic"),
-        ("Galactic", "Legendary"),
-        ("Galactic", "Mythic"),
-    }
+        failures.append("supported Galactic priority toggles should be available")
+    removed_galactic = {("Galactic", "Common"), ("Galactic", "Rare")}
+    if removed_galactic & set(ALERT_COMBOS):
+        failures.append("retired Galactic Common/Rare toggles should not be available")
+    default_galactic = set(galactic_combos)
     if (galactic_combos & default_config.targets) != default_galactic:
         failures.append("only Galactic Epic, Legendary, and Mythic should be on by default")
     migrated_defaults = AppConfig.from_dict(
@@ -117,6 +114,25 @@ def main() -> int:
     )
     if not default_galactic.issubset(migrated_defaults.targets):
         failures.append("legacy default selections should enable the new Galactic defaults")
+    retired_targets = AppConfig.from_dict(
+        {
+            "alert_targets": [
+                ["Galactic", "Common"],
+                ["Galactic", "Rare"],
+                ["Galactic", "Epic"],
+            ]
+        }
+    )
+    if retired_targets.targets != {("Galactic", "Epic")}:
+        failures.append("saved Galactic Common/Rare targets should be removed on load")
+    retired_only = AppConfig.from_dict(
+        {"alert_targets": [["Galactic", "Common"], ["Galactic", "Rare"]]}
+    )
+    if retired_only.targets:
+        failures.append("a retired-only selection should migrate to no targets")
+    for droid, rarity in removed_galactic:
+        if _detection(droid, rarity).should_alert:
+            failures.append(f"retired {droid} {rarity} should not be alertable")
     for droid, rarity in galactic_combos:
         detection = _detection(droid, rarity)
         if not detection.should_alert:
@@ -167,7 +183,7 @@ class ChannelAlertConfigTests(unittest.TestCase):
         self.assertEqual("belt_tracker", alert_type_id(_source_detection(source="belt-tracker")))
         self.assertEqual("limited_deals", alert_type_id(_source_detection(source="limited-deal")))
         self.assertEqual(
-            "timer_reminder",
+            "timer:mythic",
             alert_type_id(
                 _source_detection(
                     source="timer-reminder",

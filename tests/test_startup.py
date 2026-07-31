@@ -17,6 +17,7 @@ sys.path.insert(0, str(BASE_DIR / "tests"))
 
 import main as app_main
 import run_eval
+from droid_alerts import platform_ui
 from droid_alerts.startup_splash import StartupSplash
 
 
@@ -36,6 +37,17 @@ class StartupSplashTests(unittest.TestCase):
         from droid_alerts.ui import run_gui
 
         self.assertIs(run_gui, app_main._load_gui())
+
+    def test_windows_source_launch_sets_droid_alerts_taskbar_identity(self) -> None:
+        with (
+            patch.object(platform_ui.sys, "platform", "win32"),
+            patch.object(platform_ui.ctypes, "windll", create=True) as windll,
+        ):
+            platform_ui.set_windows_app_identity()
+
+        windll.shell32.SetCurrentProcessExplicitAppUserModelID.assert_called_once_with(
+            platform_ui.WINDOWS_APP_USER_MODEL_ID
+        )
 
 
 class CommandExitStatusTests(unittest.TestCase):

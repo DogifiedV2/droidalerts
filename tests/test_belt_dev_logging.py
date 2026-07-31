@@ -262,6 +262,51 @@ class BeltDevLoggerTests(unittest.TestCase):
 
 
 class BeltDevSupportBundleTests(unittest.TestCase):
+    def test_support_bundle_redacts_notification_profiles(self):
+        config = AppConfig(
+            notification_profiles={
+                "Private": {
+                    "discord_alert_destinations": {
+                        "belt_tracker": "Family server"
+                    },
+                    "discord_message_prefixes": {
+                        "belt_tracker": "Alice found this"
+                    },
+                    "discord_mentions": {
+                        "belt_tracker": {
+                            "type": "user",
+                            "id": "123456789012345678",
+                        }
+                    },
+                }
+            }
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            empty = root / "empty"
+            empty.mkdir()
+            with (
+                patch("droid_alerts.diagnostics.data_dir", return_value=root),
+                patch("droid_alerts.diagnostics.belt_dev_dir", return_value=empty),
+                patch("droid_alerts.diagnostics.logs_dir", return_value=empty),
+                patch("droid_alerts.diagnostics.debug_dir", return_value=empty),
+                patch(
+                    "droid_alerts.diagnostics.calibration_path",
+                    return_value=empty / "calibration.json",
+                ),
+                patch(
+                    "droid_alerts.diagnostics.belt_regions_path",
+                    return_value=empty / "belt_regions.json",
+                ),
+                patch("droid_alerts.diagnostics._safe_monitors", return_value=[]),
+            ):
+                bundle_path = create_support_bundle(config)
+
+            with zipfile.ZipFile(bundle_path) as bundle:
+                redacted = json.loads(bundle.read("config_redacted.json"))
+
+        self.assertEqual("<redacted>", redacted["notification_profiles"])
+
     def test_support_bundle_includes_latest_belt_session_only(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

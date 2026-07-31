@@ -13,23 +13,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .chat_alerts import PRIORITY_ALERTS, REMOVED_CHAT_DETECTIONS
+
 
 DROID_TYPES = ("Diamond", "Rainbow", "Beskar", "Galactic")
 RARITIES = ("Common", "Rare", "Epic", "Legendary", "Mythic")
-PRIORITY_ALERTS = {
-    ("Rainbow", "Epic"),
-    ("Rainbow", "Legendary"),
-    ("Beskar", "Epic"),
-    ("Beskar", "Legendary"),
-    ("Beskar", "Mythic"),
-    ("Diamond", "Mythic"),
-    ("Rainbow", "Mythic"),
-    ("Galactic", "Common"),
-    ("Galactic", "Rare"),
-    ("Galactic", "Epic"),
-    ("Galactic", "Legendary"),
-    ("Galactic", "Mythic"),
-}
 
 RARITY_COLOR_THRESHOLDS = {
     "Common": 700,
@@ -2179,6 +2167,10 @@ class DroidVisualDetector:
                 rarity, rarity_score, rarity_margin, template_name = compact_rescue
             if rarity == "Unknown":
                 reject(y, "unknown-rarity", droid, template_name)
+                continue
+
+            if (droid, rarity) in REMOVED_CHAT_DETECTIONS:
+                reject(y, "removed-detection", droid, rarity)
                 continue
 
             if (droid, rarity) in PRIORITY_ALERTS:

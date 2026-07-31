@@ -20,6 +20,7 @@ from droid_alerts.classifier import (  # noqa: E402
     load_droid_word_templates,
     rarity_text_color_counts,
 )
+from droid_alerts.chat_alerts import REMOVED_CHAT_DETECTIONS  # noqa: E402
 from droid_alerts.pipeline import Pipeline  # noqa: E402
 
 
@@ -183,6 +184,12 @@ REVIEWED_RECALL_CASES = (
 )
 
 
+def _without_removed_detections(
+    pairs: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    return [pair for pair in pairs if pair not in REMOVED_CHAT_DETECTIONS]
+
+
 class GalacticChatRecognitionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -207,7 +214,7 @@ class GalacticChatRecognitionTests(unittest.TestCase):
         self.assertIsNotNone(verdict)
         self.assertEqual("Galactic", verdict[0])
 
-    def test_held_out_common_capture_detects_at_live_scale(self):
+    def test_held_out_common_capture_is_not_surfaced(self):
         fixture = (
             BASE_DIR
             / "tests"
@@ -219,9 +226,9 @@ class GalacticChatRecognitionTests(unittest.TestCase):
 
         result = self.pipeline.detect(image, known_scale=0.75)
 
-        self.assertEqual(
-            [("Galactic", "Common")],
-            [(detection.droid, detection.rarity) for detection in result.detections],
+        self.assertEqual([], result.detections)
+        self.assertTrue(
+            any(rejection["reason"] == "removed-detection" for rejection in result.rejections)
         )
 
     def test_supplied_missed_alert_captures_detect_every_expected_row(self):
@@ -234,9 +241,14 @@ class GalacticChatRecognitionTests(unittest.TestCase):
                 result = self.pipeline.detect(image, known_scale=scale)
                 detected = [(item.droid, item.rarity) for item in result.detections]
 
-                self.assertEqual(expected, detected)
+                supported_expected = _without_removed_detections(expected)
+                self.assertEqual(supported_expected, detected)
                 self.assertEqual(
-                    [pair for pair in expected if pair[0] == "Galactic" or pair == ("Beskar", "Epic")],
+                    [
+                        pair
+                        for pair in supported_expected
+                        if pair[0] == "Galactic" or pair == ("Beskar", "Epic")
+                    ],
                     [(item.droid, item.rarity) for item in result.detections if item.should_alert],
                 )
 
@@ -250,7 +262,7 @@ class GalacticChatRecognitionTests(unittest.TestCase):
             with self.subTest(filename=filename, resolution_scale=1.25):
                 result = self.pipeline.detect(enlarged, known_scale=scale * 1.25)
                 self.assertEqual(
-                    expected,
+                    _without_removed_detections(expected),
                     [(item.droid, item.rarity) for item in result.detections],
                 )
 
@@ -268,8 +280,12 @@ class GalacticChatRecognitionTests(unittest.TestCase):
                 )
                 detected = [(item.droid, item.rarity) for item in result.detections]
 
-                self.assertIn(expected, detected)
+                if expected in REMOVED_CHAT_DETECTIONS:
+                    self.assertNotIn(expected, detected)
+                else:
+                    self.assertIn(expected, detected)
                 self.assertNotIn(rejected, detected)
+                self.assertTrue(REMOVED_CHAT_DETECTIONS.isdisjoint(detected))
 
     def test_reviewed_false_targets_stay_rejected(self):
         fixture_dir = BASE_DIR / "tests" / "galactic_fixtures"
@@ -307,7 +323,7 @@ class GalacticChatRecognitionTests(unittest.TestCase):
                     [(item.droid, item.rarity) for item in result.detections],
                 )
 
-    def test_reviewed_compact_galactic_rare_row_is_not_missed(self):
+    def test_reviewed_compact_galactic_common_and_rare_rows_are_not_surfaced(self):
         fixture = (
             BASE_DIR
             / "tests"
@@ -319,9 +335,13 @@ class GalacticChatRecognitionTests(unittest.TestCase):
 
         result = self.pipeline.detect(image, screen_width=2560, screen_height=1080)
 
-        self.assertEqual(
-            [("Galactic", "Common"), ("Galactic", "Rare"), ("Galactic", "Common")],
-            [(item.droid, item.rarity) for item in result.detections],
+        self.assertEqual([], result.detections)
+        self.assertGreaterEqual(
+            sum(
+                rejection["reason"] == "removed-detection"
+                for rejection in result.rejections
+            ),
+            1,
         )
 
     def test_supplied_beskar_epic_training_template_is_bundled(self):

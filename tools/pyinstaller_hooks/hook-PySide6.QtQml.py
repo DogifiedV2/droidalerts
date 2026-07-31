@@ -6,17 +6,19 @@ from PyInstaller.utils.hooks.qt import add_qt6_dependencies, pyside6_library_inf
 
 
 def _used_qml_destination(destination: str) -> bool:
-    marker = ("PySide6", "Qt", "qml")
     parts = PurePosixPath(destination.replace("\\", "/")).parts
-    try:
-        start = next(
-            index
-            for index in range(len(parts) - len(marker) + 1)
-            if parts[index : index + len(marker)] == marker
-        )
-    except StopIteration:
-        return False
-    relative = parts[start + len(marker) :]
+    markers = (
+        ("PySide6", "qml"),
+        ("PySide6", "Qt", "qml"),
+    )
+    relative = None
+    for marker in markers:
+        for index in range(len(parts) - len(marker) + 1):
+            if parts[index : index + len(marker)] == marker:
+                relative = parts[index + len(marker) :]
+                break
+        if relative is not None:
+            break
     if not relative:
         return False
     if relative[0] in {"QtCore", "QtNetwork"}:

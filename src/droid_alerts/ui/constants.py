@@ -1,19 +1,9 @@
 from __future__ import annotations
 
-ALERT_COMBOS: tuple[tuple[str, str], ...] = (
-    ("Rainbow", "Epic"),
-    ("Rainbow", "Legendary"),
-    ("Rainbow", "Mythic"),
-    ("Beskar", "Epic"),
-    ("Beskar", "Legendary"),
-    ("Beskar", "Mythic"),
-    ("Galactic", "Common"),
-    ("Galactic", "Rare"),
-    ("Galactic", "Epic"),
-    ("Galactic", "Legendary"),
-    ("Galactic", "Mythic"),
-    ("Diamond", "Mythic"),
-)
+from ..chat_alerts import CHAT_ALERT_COMBOS
+
+
+ALERT_COMBOS = CHAT_ALERT_COMBOS
 
 DISCORD_COMMUNITY_URL = "https://discord.gg/ZmFPjS4784"
 TRACKER_URL = "https://gonk.tools/tracker"
