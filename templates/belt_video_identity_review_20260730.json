@@ -1,0 +1,989 @@
+{
+  "version": 1,
+  "reviewed_at": "2026-07-30",
+  "review_status": "All listed crops were visually checked against the source videos before inclusion.",
+  "training_scope": "Identity descriptors only. Family descriptors were deliberately excluded because the available family examples were not diverse enough.",
+  "evaluation_scope": "The two source videos are training replays, not an independent validation split.",
+  "ground_truth": "tests/belt_video_ground_truth.json",
+  "base_index_sha256": "dc419a7746077a8aa063c4b8ba9e3df29453b17a400ae3a026a9312ae3172075",
+  "result_index_sha256": "954a4761f1a8215d1e3ceb03478436e2e8149ba5622f085d5e59a035b5a4daf3",
+  "sample_count": 37,
+  "identity_counts": {
+    "B2 HEAVY": 1,
+    "ID10": 6,
+    "IG": 1,
+    "IMPERIAL PROBE": 2,
+    "MOUSE": 1,
+    "PIT": 9,
+    "R3": 8,
+    "R8": 6,
+    "SEN-TRI": 1,
+    "UTIL-TEC": 1,
+    "VECT-ARM": 1
+  },
+  "samples": [
+    {
+      "sample_id": "v1_0054.0_b2_heavy",
+      "name": "B2 HEAVY",
+      "reviewed_family": "Default",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 54.0,
+      "source_frame_number": null,
+      "card_box": [
+        371,
+        96,
+        195,
+        208
+      ],
+      "art_box_in_crop": [
+        35,
+        17,
+        125,
+        114
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "757db47cf1ab7347696721a197c26b98140b33c3c5298a166cfc102e15f65126",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "20260730_011722_572250_t00018_f002790",
+      "name": "ID10",
+      "reviewed_family": "Default",
+      "label_source": "manual_review_of_detector_crop",
+      "source_video": "2026-07-29 13-05-06.mkv",
+      "source_time_seconds": 46.5,
+      "source_frame_number": 2790,
+      "card_box": [
+        569,
+        121,
+        239,
+        208
+      ],
+      "art_box_in_crop": [
+        43,
+        17,
+        153,
+        114
+      ],
+      "quality_score": 0.9630006809909485,
+      "image_sha256": "42f8e2cfce48109563130be439ef54acf64f7739c588265917512ec9f5a76c7f",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "20260730_011728_401093_t00023_f004020",
+      "name": "ID10",
+      "reviewed_family": "Default",
+      "label_source": "manual_review_of_detector_crop",
+      "source_video": "2026-07-29 13-05-06.mkv",
+      "source_time_seconds": 67.0,
+      "source_frame_number": 4020,
+      "card_box": [
+        549,
+        106,
+        239,
+        208
+      ],
+      "art_box_in_crop": [
+        43,
+        17,
+        153,
+        114
+      ],
+      "quality_score": 0.9675698374547224,
+      "image_sha256": "fa37f523834f6f82ef49a685a882e5a9515284d6f381b08900477e066408cbd6",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "20260730_011739_332996_t00043_f006510",
+      "name": "ID10",
+      "reviewed_family": "Gold",
+      "label_source": "manual_review_of_detector_crop",
+      "source_video": "2026-07-29 13-05-06.mkv",
+      "source_time_seconds": 108.5,
+      "source_frame_number": 6510,
+      "card_box": [
+        393,
+        29,
+        305,
+        266
+      ],
+      "art_box_in_crop": [
+        55,
+        21,
+        195,
+        146
+      ],
+      "quality_score": 0.8929074498349454,
+      "image_sha256": "613fb61c27dc937fd9a29d14e741f6d527e35c885a900d845fc185b8e3b0f1c5",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0012.0_id10",
+      "name": "ID10",
+      "reviewed_family": "Gold",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 12.0,
+      "source_frame_number": null,
+      "card_box": [
+        336,
+        126,
+        172,
+        184
+      ],
+      "art_box_in_crop": [
+        31,
+        15,
+        111,
+        101
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "2fa3e5f3e965b8872126663b7196d26173bf69462e3849611b7340add80940ef",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0060.0_id10",
+      "name": "ID10",
+      "reviewed_family": "Rainbow",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 60.0,
+      "source_frame_number": null,
+      "card_box": [
+        558,
+        156,
+        195,
+        208
+      ],
+      "art_box_in_crop": [
+        35,
+        17,
+        125,
+        114
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "3c1aca6928e16a8f31721626bb02ca8c4c204148ba6d2fd8628cb44adb1a950e",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0132.0_id10",
+      "name": "ID10",
+      "reviewed_family": "Diamond",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 132.0,
+      "source_frame_number": null,
+      "card_box": [
+        620,
+        127,
+        220,
+        235
+      ],
+      "art_box_in_crop": [
+        39,
+        19,
+        141,
+        129
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "a4d488feea8655ec92c946bae0eb0fc1fbdf572b8df87de65dd3080c335b43c6",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0000.0_ig",
+      "name": "IG",
+      "reviewed_family": "Default",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 0.0,
+      "source_frame_number": null,
+      "card_box": [
+        77,
+        133,
+        152,
+        163
+      ],
+      "art_box_in_crop": [
+        27,
+        13,
+        98,
+        89
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "97f3f85083ae768da8e3da0c4982789f592a5901665515044e184d0a11c06845",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0204.0_imperial_probe",
+      "name": "IMPERIAL PROBE",
+      "reviewed_family": "Default",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 204.0,
+      "source_frame_number": null,
+      "card_box": [
+        596,
+        127,
+        220,
+        235
+      ],
+      "art_box_in_crop": [
+        39,
+        19,
+        141,
+        129
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "b724d47664fd8c163e8509d8d01c94b58543a3b9c09895976793010b2388c07c",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0222.0_imperial_probe",
+      "name": "IMPERIAL PROBE",
+      "reviewed_family": "Default",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 222.0,
+      "source_frame_number": null,
+      "card_box": [
+        631,
+        146,
+        195,
+        208
+      ],
+      "art_box_in_crop": [
+        35,
+        17,
+        125,
+        114
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "da079b84f7b596c1bd2cab63df8e34467ea65a79532ca229755f0f640aa8ac7b",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v2_0051.0_mouse",
+      "name": "MOUSE",
+      "reviewed_family": "Diamond",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "2026-07-29 13-05-06.mkv",
+      "source_time_seconds": 51.0,
+      "source_frame_number": null,
+      "card_box": [
+        426,
+        116,
+        195,
+        208
+      ],
+      "art_box_in_crop": [
+        35,
+        17,
+        125,
+        114
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "92ebd0b8a9e0f57a1b8379a33d20bd91f6e161d231912d46eef14fb6259b3566",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "20260730_011632_310290_t00025_f002265",
+      "name": "PIT",
+      "reviewed_family": "Default",
+      "label_source": "manual_review_of_detector_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 75.4938,
+      "source_frame_number": 2265,
+      "card_box": [
+        424,
+        106,
+        239,
+        208
+      ],
+      "art_box_in_crop": [
+        43,
+        17,
+        153,
+        114
+      ],
+      "quality_score": 0.8864578550603233,
+      "image_sha256": "109561563a9f847dcb28081bb64c6ea149f07dc5db754e73f3ab3d550d9e8dec",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "20260730_011634_600869_t00028_f002520",
+      "name": "PIT",
+      "reviewed_family": "Default",
+      "label_source": "manual_review_of_detector_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 83.9931,
+      "source_frame_number": 2520,
+      "card_box": [
+        359,
+        106,
+        239,
+        208
+      ],
+      "art_box_in_crop": [
+        43,
+        17,
+        153,
+        114
+      ],
+      "quality_score": 0.871872878212933,
+      "image_sha256": "a007eb3fba97d5df42b4e2f7e4b0db34f2e32c1353abfcb346e266bfd0f5bf39",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "20260730_011640_597724_t00034_f003120",
+      "name": "PIT",
+      "reviewed_family": "Default",
+      "label_source": "manual_review_of_detector_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 103.9914,
+      "source_frame_number": 3120,
+      "card_box": [
+        584,
+        106,
+        239,
+        208
+      ],
+      "art_box_in_crop": [
+        43,
+        17,
+        153,
+        114
+      ],
+      "quality_score": 0.9317091338795893,
+      "image_sha256": "0c5208729e345471b4a02e672c18bc81727ecc4473f1a4bf924d491c778dc7b2",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0144.0_pit",
+      "name": "PIT",
+      "reviewed_family": "Default",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 144.0,
+      "source_frame_number": null,
+      "card_box": [
+        356,
+        156,
+        172,
+        184
+      ],
+      "art_box_in_crop": [
+        31,
+        15,
+        111,
+        101
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "9b05b49fd36ee1df1fbb493fdd76bb96560476d77cf64d66d00007e94debfea1",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0150.0_pit",
+      "name": "PIT",
+      "reviewed_family": "Default",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 150.0,
+      "source_frame_number": null,
+      "card_box": [
+        987,
+        156,
+        172,
+        184
+      ],
+      "art_box_in_crop": [
+        31,
+        15,
+        111,
+        101
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "9f8cfad7899f2a602f317d9a73683f0df58f3e71cba713a5b93f7d26746bfde5",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0156.0_pit",
+      "name": "PIT",
+      "reviewed_family": "Rainbow",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 156.0,
+      "source_frame_number": null,
+      "card_box": [
+        646,
+        146,
+        195,
+        208
+      ],
+      "art_box_in_crop": [
+        35,
+        17,
+        125,
+        114
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "dc8cbbbef6c9b817434615b5ef0c976cf1b5fa4e94c2f4431873e4a362735f6d",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0210.0_pit",
+      "name": "PIT",
+      "reviewed_family": "Default",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 210.0,
+      "source_frame_number": null,
+      "card_box": [
+        621,
+        146,
+        195,
+        208
+      ],
+      "art_box_in_crop": [
+        35,
+        17,
+        125,
+        114
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "e9d1a3841b2fe3ca48c632237461dc834b8d66f77f6a76c87f093c9e25fcae23",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v2_0006.0_pit",
+      "name": "PIT",
+      "reviewed_family": "Gold",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "2026-07-29 13-05-06.mkv",
+      "source_time_seconds": 6.0,
+      "source_frame_number": null,
+      "card_box": [
+        57,
+        9,
+        317,
+        339
+      ],
+      "art_box_in_crop": [
+        57,
+        27,
+        204,
+        186
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "705937dc4e073e6689cdf7ef57a98ff8f1940c2cbfefb4b8efc2e6a91f31ce1b",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v2_0069.0_pit",
+      "name": "PIT",
+      "reviewed_family": "Diamond",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "2026-07-29 13-05-06.mkv",
+      "source_time_seconds": 69.0,
+      "source_frame_number": null,
+      "card_box": [
+        326,
+        46,
+        195,
+        208
+      ],
+      "art_box_in_crop": [
+        35,
+        17,
+        125,
+        114
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "0ce3eeb6c2a25f7e6e1c23bd12da5c242c55961f4c4f5604dd3e06492298b75c",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "20260730_011632_193479_t00024_f002205",
+      "name": "R3",
+      "reviewed_family": "Default",
+      "label_source": "manual_review_of_detector_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 73.4939,
+      "source_frame_number": 2205,
+      "card_box": [
+        539,
+        106,
+        239,
+        208
+      ],
+      "art_box_in_crop": [
+        43,
+        17,
+        153,
+        114
+      ],
+      "quality_score": 0.9459827976361947,
+      "image_sha256": "043c668cb81aef7341aad64f4438502379d95b7f6905c67437aa8a442b291b16",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "20260730_011639_450143_t00033_f003000",
+      "name": "R3",
+      "reviewed_family": "Default",
+      "label_source": "manual_review_of_detector_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 99.9917,
+      "source_frame_number": 3000,
+      "card_box": [
+        469,
+        106,
+        239,
+        208
+      ],
+      "art_box_in_crop": [
+        43,
+        17,
+        153,
+        114
+      ],
+      "quality_score": 0.9331198806816003,
+      "image_sha256": "15de514e6a4b347484999e942785ccb0e6fb7b9c18427edc1fe43cdfaa215a26",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "20260730_011650_505719_t00046_f004305",
+      "name": "R3",
+      "reviewed_family": "Default",
+      "label_source": "manual_review_of_detector_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 143.4881,
+      "source_frame_number": 4305,
+      "card_box": [
+        552,
+        146,
+        239,
+        208
+      ],
+      "art_box_in_crop": [
+        43,
+        17,
+        153,
+        114
+      ],
+      "quality_score": 0.9304873769238637,
+      "image_sha256": "890d17e815fff2b69ce603d785e4613c6bed847b510a557c8473959bbb22ba3c",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "20260730_011654_722334_t00052_f004890",
+      "name": "R3",
+      "reviewed_family": "Default",
+      "label_source": "manual_review_of_detector_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 162.9865,
+      "source_frame_number": 4890,
+      "card_box": [
+        714,
+        146,
+        239,
+        208
+      ],
+      "art_box_in_crop": [
+        43,
+        17,
+        153,
+        114
+      ],
+      "quality_score": 0.9023283073588381,
+      "image_sha256": "8a74db6ab53031f32520240303065046683e13e073904727905dc76285ac12b9",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "20260730_011701_626696_t00060_f005670",
+      "name": "R3",
+      "reviewed_family": "Default",
+      "label_source": "manual_review_of_detector_crop",
+      "source_video": "2026-07-29 13-05-06.mkv",
+      "source_time_seconds": 94.5,
+      "source_frame_number": 5670,
+      "card_box": [
+        594,
+        146,
+        239,
+        208
+      ],
+      "art_box_in_crop": [
+        43,
+        17,
+        153,
+        114
+      ],
+      "quality_score": 0.9186040517260038,
+      "image_sha256": "6d8dd3d74f4c375fb4437ebedebc327e6676646caae6d7ff94d2efde65f60ea1",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0015.0_r3",
+      "name": "R3",
+      "reviewed_family": "Diamond",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 15.0,
+      "source_frame_number": null,
+      "card_box": [
+        332,
+        97,
+        220,
+        235
+      ],
+      "art_box_in_crop": [
+        39,
+        19,
+        141,
+        129
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "922b33c6ddb6c5a7bc65a8a91b3c6e575a8f06c1574a1344ede2e19ac304181e",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v2_0051.0_r3",
+      "name": "R3",
+      "reviewed_family": "Gold",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "2026-07-29 13-05-06.mkv",
+      "source_time_seconds": 51.0,
+      "source_frame_number": null,
+      "card_box": [
+        766,
+        131,
+        172,
+        184
+      ],
+      "art_box_in_crop": [
+        31,
+        15,
+        111,
+        101
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "1ef318ff25518819f46984241b4a85b91ee854c0f7bd7dd28d256b216199ed1c",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v2_0060.0_r3",
+      "name": "R3",
+      "reviewed_family": "Diamond",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "2026-07-29 13-05-06.mkv",
+      "source_time_seconds": 60.0,
+      "source_frame_number": null,
+      "card_box": [
+        337,
+        133,
+        152,
+        163
+      ],
+      "art_box_in_crop": [
+        27,
+        13,
+        98,
+        89
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "fd0a300b5740ae6a047c7131077acf066ac05b1775cacad93f4ceb8d025b1aac",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "20260730_011710_615773_t00001_f000270",
+      "name": "R8",
+      "reviewed_family": "Default",
+      "label_source": "manual_review_of_detector_crop",
+      "source_video": "2026-07-29 13-05-06.mkv",
+      "source_time_seconds": 4.5,
+      "source_frame_number": 270,
+      "card_box": [
+        309,
+        9,
+        389,
+        339
+      ],
+      "art_box_in_crop": [
+        70,
+        27,
+        249,
+        186
+      ],
+      "quality_score": 0.9180686655012812,
+      "image_sha256": "c9ae193f7e965e914487501a909439d18db43ab89afd3632965db95de0da6288",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "20260730_011731_443721_t00026_f004590",
+      "name": "R8",
+      "reviewed_family": "Default",
+      "label_source": "manual_review_of_detector_crop",
+      "source_video": "2026-07-29 13-05-06.mkv",
+      "source_time_seconds": 76.5,
+      "source_frame_number": 4590,
+      "card_box": [
+        487,
+        51,
+        210,
+        184
+      ],
+      "art_box_in_crop": [
+        38,
+        15,
+        134,
+        101
+      ],
+      "quality_score": 0.9514187242303518,
+      "image_sha256": "e08c1917b26a1ff7bb9a513aeed2948eb639162d4945dbb36a0448ca73c9bebc",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0006.0_r8",
+      "name": "R8",
+      "reviewed_family": "Rainbow",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 6.0,
+      "source_frame_number": null,
+      "card_box": [
+        355,
+        111,
+        195,
+        208
+      ],
+      "art_box_in_crop": [
+        35,
+        17,
+        125,
+        114
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "30ed2962d646edd284b8107defa9c0b0a4a30e59300b14b2d43d348bfeae748c",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0048.0_r8",
+      "name": "R8",
+      "reviewed_family": "Gold",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 48.0,
+      "source_frame_number": null,
+      "card_box": [
+        1009,
+        49,
+        220,
+        235
+      ],
+      "art_box_in_crop": [
+        39,
+        19,
+        141,
+        129
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "d6547f4dd4355abb13c36ad6671d4ca1add3c5e9db057fbdfd372a99f157c555",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0132.0_r8",
+      "name": "R8",
+      "reviewed_family": "Gold",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 132.0,
+      "source_frame_number": null,
+      "card_box": [
+        314,
+        127,
+        220,
+        235
+      ],
+      "art_box_in_crop": [
+        39,
+        19,
+        141,
+        129
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "d8feb87c6c28fce62cc324c5fd40ed49860d0725489cacffd0afcb315d1ba246",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0222.0_r8",
+      "name": "R8",
+      "reviewed_family": "Gold",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 222.0,
+      "source_frame_number": null,
+      "card_box": [
+        303,
+        146,
+        195,
+        208
+      ],
+      "art_box_in_crop": [
+        35,
+        17,
+        125,
+        114
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "acc4c141835d04abcc89953ee57dd278845da4419dc2e33df824d7f376404a22",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0048.0_sen_tri",
+      "name": "SEN-TRI",
+      "reviewed_family": "Rainbow",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 48.0,
+      "source_frame_number": null,
+      "card_box": [
+        646,
+        66,
+        195,
+        208
+      ],
+      "art_box_in_crop": [
+        35,
+        17,
+        125,
+        114
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "f3a24798502cca1ce7e15930118f90aeec61b680dfbeb04fc816a9d87ef65f6b",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v1_0204.0_util_tec",
+      "name": "UTIL-TEC",
+      "reviewed_family": "Default",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "screen-droid-tycoon.mp4",
+      "source_time_seconds": 204.0,
+      "source_frame_number": null,
+      "card_box": [
+        318,
+        146,
+        172,
+        184
+      ],
+      "art_box_in_crop": [
+        31,
+        15,
+        111,
+        101
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "b1672d34838336ca5c8e2e850d035346c7da61e5f13244f7cce3bdd304348c04",
+      "use_for_identity": true,
+      "use_for_family": false
+    },
+    {
+      "sample_id": "v2_0009.0_vect_arm",
+      "name": "VECT-ARM",
+      "reviewed_family": "Default",
+      "label_source": "direct_manual_video_crop",
+      "source_video": "2026-07-29 13-05-06.mkv",
+      "source_time_seconds": 9.0,
+      "source_frame_number": null,
+      "card_box": [
+        109,
+        1,
+        220,
+        235
+      ],
+      "art_box_in_crop": [
+        39,
+        19,
+        141,
+        129
+      ],
+      "quality_score": 1.0,
+      "image_sha256": "5ecb12733157f7771776de8e850580e5b82959a49cd47c102bc185dc3b8d3021",
+      "use_for_identity": true,
+      "use_for_family": false
+    }
+  ],
+  "training_replay_metrics": {
+    "sample_fps": 2.0,
+    "baseline": {
+      "screen-droid-tycoon.mp4": {
+        "manual": 78,
+        "matched": 59,
+        "missed": 19,
+        "unexpected_entries": 0,
+        "identity_recall": 0.7564102564102564
+      },
+      "2026-07-29 13-05-06.mkv": {
+        "manual": 38,
+        "matched": 31,
+        "missed": 7,
+        "unexpected_entries": 4,
+        "identity_recall": 0.8157894736842105
+      }
+    },
+    "reviewed_index": {
+      "screen-droid-tycoon.mp4": {
+        "manual": 78,
+        "matched": 71,
+        "missed": 7,
+        "unexpected_entries": 0,
+        "identity_recall": 0.9102564102564102
+      },
+      "2026-07-29 13-05-06.mkv": {
+        "manual": 38,
+        "matched": 34,
+        "missed": 4,
+        "unexpected_entries": 0,
+        "camera_jump_reacquisitions_suppressed": 7,
+        "identity_recall": 0.8947368421052632,
+        "family_coverage": 0.7058823529411765,
+        "family_accuracy_when_classified": 1.0
+      }
+    }
+  }
+}

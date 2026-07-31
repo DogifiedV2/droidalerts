@@ -9,6 +9,14 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.timer_sync import DEFAULT_TIMER_SCHEDULES, SyncedTimerSchedule
+from droid_alerts.timers import (
+    BASE_HEIGHT,
+    EDIT_BAR_HEIGHT,
+    MAX_SCALE,
+    MIN_SCALE,
+    _edit_bar_row_bounds,
+    next_timer_refresh_delay_ms,
+)
 
 
 def payload(server_time_ms: int) -> dict[str, object]:
@@ -25,6 +33,33 @@ def payload(server_time_ms: int) -> dict[str, object]:
 
 
 class SyncedTimerScheduleTests(unittest.TestCase):
+    def test_timer_controls_fit_and_refresh_just_after_each_second(self):
+        for scale in (MIN_SCALE, 1.0, MAX_SCALE):
+            card_top = int(BASE_HEIGHT * scale)
+            first_y1, first_y2, reset_y1, reset_y2 = _edit_bar_row_bounds(
+                card_top,
+                scale,
+            )
+            window_bottom = card_top + int(EDIT_BAR_HEIGHT * scale)
+            self.assertTrue(
+                card_top
+                <= first_y1
+                < first_y2
+                < reset_y1
+                < reset_y2
+                < window_bottom
+            )
+
+        self.assertEqual(758, next_timer_refresh_delay_ms(now_seconds=100.25))
+        self.assertLessEqual(
+            8,
+            next_timer_refresh_delay_ms(now_seconds=100.999),
+        )
+        self.assertLessEqual(
+            next_timer_refresh_delay_ms(now_seconds=100.999),
+            10,
+        )
+
     def test_server_time_corrects_a_bad_local_clock_and_uses_monotonic_elapsed_time(self):
         monotonic = [50.0]
         schedule = SyncedTimerSchedule(

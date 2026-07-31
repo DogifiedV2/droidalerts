@@ -47,7 +47,7 @@ class ChatTelemetryTests(unittest.TestCase):
             alert_targets=[
                 ["Rainbow", "Mythic"],
                 ["Diamond", "Mythic"],
-                ["Galactic", "Common"],
+                ["Galactic", "Rare"],
                 ["Galactic", "Epic"],
             ],
         )
@@ -73,7 +73,7 @@ class ChatTelemetryTests(unittest.TestCase):
 
         payloads = [call.args[1] for call in client._post_json.call_args_list]
         self.assertEqual(
-            ["diamondmythic", "galacticcommon", "galacticepic", "rainbowmythic"],
+            ["diamondmythic", "galacticepic", "rainbowmythic"],
             payloads[0]["priorityAlerts"],
         )
         self.assertNotIn("priorityAlerts", payloads[1])

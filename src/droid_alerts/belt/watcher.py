@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import threading
 import time
+import sys
 from collections import Counter
 from collections.abc import Callable, Mapping
 
 from ..capture import PixelBox, create_capture
+from .dev_capture import BeltDevCaptureRecorder, candidate_diagnostics
 from .dev_logging import BeltDevLogger, runtime_snapshot
 from .events import log_track_event
 from .runtime import (
@@ -15,22 +17,23 @@ from .runtime import (
     MAXIMUM_SCAN_FPS,
     MINIMUM_SCAN_FPS,
     TEMPLATE_IDLE_BACKOFF_START,
+    adaptive_track_timeout,
     adaptive_template_interval,
     build_tracks_payload,
     normalize_scan_fps,
 )
 from .sample_collection import BeltTemplateSampleCollector
+from .scale_recognition import HybridCardRecognizer
 from .targets import is_belt_alert_target, normalize_belt_target_tiers
-from .template_recognition import TemplateCardRecognizer
 from .tracking import BeltTracker
 
 
 OVERLAY_FPS = 12.0
 TRACK_TIMEOUT_SECONDS = 3.5
 CONFIRMATION_HITS = 4
-SLOW_CONFIRMATION_HITS = 3
-SLOW_CADENCE_SECONDS = 4.0 / 3.0
-SLOW_MINIMUM_IDENTITY_CONFIDENCE = 0.78
+SLOW_CONFIRMATION_HITS = 2
+SLOW_CADENCE_SECONDS = 0.70
+SLOW_MINIMUM_IDENTITY_CONFIDENCE = 0.90
 TEMPLATE_MINIMUM_DISPLACEMENT_RATIO = 0.10
 
 StatusCallback = Callable[[dict[str, object]], None]
@@ -69,6 +72,9 @@ def run_belt_watcher(
             status_callback({"type": kind, **values})
 
     dev_logger = BeltDevLogger(dev_mode)
+    dev_capture_recorder: BeltDevCaptureRecorder | None = None
+    manual_capture_hotkey = _belt_capture_hotkey() if dev_logger.enabled else None
+    manual_capture_pending = False
     idle_scan_fps, active_scan_fps = normalize_scan_fps(
         idle_scan_fps,
         active_scan_fps,
@@ -140,6 +146,11 @@ def run_belt_watcher(
         emit("stopped")
         return
     capture_init_seconds = time.perf_counter() - capture_started
+    try:
+        source_width, source_height = capture.screen_size()
+        source_resolution = [int(source_width), int(source_height)]
+    except Exception:
+        source_resolution = []
 
     tracker = BeltTracker(
         confirmation_hits=CONFIRMATION_HITS,
@@ -151,9 +162,9 @@ def run_belt_watcher(
     )
     alert_targets = normalize_belt_target_tiers(target_tiers)
     recognizer_init_started = time.perf_counter()
-    detector_mode = "templates"
+    detector_mode = "hybrid-v2"
     try:
-        recognizer = TemplateCardRecognizer()
+        recognizer = HybridCardRecognizer()
     except Exception as exc:
         dev_logger.log(
             "recognizer_start_failed",
@@ -179,6 +190,27 @@ def run_belt_watcher(
             )
 
     if dev_logger.enabled:
+        dev_capture_recorder = BeltDevCaptureRecorder(
+            dev_logger.session_dir,
+            enabled=True,
+        )
+        dev_capture_recorder.set_session_metadata(
+            runtime=runtime_snapshot(),
+            monitor_index=monitor_index,
+            region={
+                "left": region.left,
+                "top": region.top,
+                "width": region.width,
+                "height": region.height,
+            },
+            capture_source=capture_source,
+            source_resolution=source_resolution,
+            detector=detector_mode,
+            confirmation_hits=CONFIRMATION_HITS,
+            slow_confirmation_hits=SLOW_CONFIRMATION_HITS,
+            idle_scan_fps=idle_scan_fps,
+            active_scan_fps=active_scan_fps,
+        )
         dev_logger.log(
             "session_start",
             runtime=runtime_snapshot(),
@@ -190,6 +222,7 @@ def run_belt_watcher(
                 "height": region.height,
             },
             capture_init_seconds=capture_init_seconds,
+            source_resolution=source_resolution,
             detector=detector_mode,
             recognizer_init_seconds=recognizer_init_seconds,
             recognizer=type(recognizer).__name__,
@@ -212,6 +245,7 @@ def run_belt_watcher(
     next_scan = 0.0
     last_scan_status = 0.0
     frame_number = 0
+    last_capture_at: float | None = None
     alerted_track_ids: set[int] = set()
     last_published_tracks: list[dict[str, object]] | None = None
     emit(
@@ -225,7 +259,10 @@ def run_belt_watcher(
     try:
         while not stop_event.is_set():
             loop_started = time.monotonic()
+            if manual_capture_hotkey is not None and manual_capture_hotkey():
+                manual_capture_pending = True
             frame_number += 1
+            dev_scan_capture = None
             if loop_started >= next_scan:
                 capture_frame_started = time.perf_counter()
                 try:
@@ -264,11 +301,86 @@ def run_belt_watcher(
                     # detections must be tracked at capture time, not at the
                     # later instant when inference finishes.
                     now = time.monotonic()
+                    observed_capture_interval = (
+                        now - last_capture_at if last_capture_at is not None else None
+                    )
+                    tracker.timeout_seconds = adaptive_track_timeout(
+                        TRACK_TIMEOUT_SECONDS,
+                        observed_capture_interval,
+                    )
+                    last_capture_at = now
                     base_interval = 1.0 / active_scan_fps
                     try:
-                        result = recognizer.analyze(frame)
+                        result = recognizer.analyze(frame, now=now)
                         observations = result.observations
                         update = tracker.update(observations, now, region.width)
+                        if manual_capture_pending:
+                            accepted_detections = [
+                                candidate_diagnostics(candidate)
+                                for candidate in result.candidates
+                                if candidate.accepted
+                            ]
+                            rejected_candidates = [
+                                candidate_diagnostics(candidate)
+                                for candidate in result.candidates
+                                if not candidate.accepted
+                            ]
+                            manual_path = dev_logger.save_manual_capture(
+                                frame,
+                                frame_number=frame_number,
+                                now=now,
+                                detector_snapshot={
+                                    "detector": detector_mode,
+                                    "accepted_detection_count": len(
+                                        accepted_detections
+                                    ),
+                                    "rejected_candidate_count": len(
+                                        rejected_candidates
+                                    ),
+                                    "detected_names": [
+                                        item["detected_name"]
+                                        for item in accepted_detections
+                                    ],
+                                    "accepted_detections": accepted_detections,
+                                    "rejected_candidates": rejected_candidates,
+                                    "recognizer_diagnostics": result.diagnostics,
+                                    "tracker": tracker.diagnostic_state(),
+                                },
+                            )
+                            manual_capture_pending = False
+                            if manual_path:
+                                dev_logger.log(
+                                    "manual_capture",
+                                    frame=frame_number,
+                                    path=manual_path,
+                                    accepted_detection_count=len(
+                                        accepted_detections
+                                    ),
+                                    rejected_candidate_count=len(
+                                        rejected_candidates
+                                    ),
+                                )
+                                emit("manual_capture", path=manual_path)
+                        if dev_capture_recorder is not None:
+                            accepted_dev_candidates = tuple(
+                                candidate
+                                for candidate in result.candidates
+                                if candidate.accepted
+                            )
+                            # Production exit/update decisions are attached
+                            # below before this scan is allowed to expire a
+                            # diagnostic track.
+                            dev_scan_capture = (
+                                frame,
+                                accepted_dev_candidates,
+                                getattr(
+                                    update,
+                                    "observation_track_ids",
+                                    {},
+                                ),
+                                now,
+                                tracker.timeout_seconds,
+                            )
                         if sample_collector is not None:
                             accepted_candidates = tuple(
                                 candidate for candidate in result.candidates if candidate.accepted
@@ -281,7 +393,6 @@ def run_belt_watcher(
                                 frame_number=frame_number,
                             )
                         completed_at = time.monotonic()
-                        tracker.timeout_seconds = TRACK_TIMEOUT_SECONDS
                         card_window_count = int(
                             result.diagnostics.get(
                                 "card_window_count",
@@ -308,6 +419,27 @@ def run_belt_watcher(
                         update.tracks = display_update.tracks
                         update.events.extend(display_update.events)
                         if dev_logger.enabled:
+                            dev_logger.remember_frame(
+                                frame,
+                                frame_number=frame_number,
+                                now=completed_at,
+                                metadata={
+                                    "source_frame_shape": list(frame.shape),
+                                    "accepted_count": len(observations),
+                                    "candidates": [
+                                        candidate_diagnostics(item)
+                                        for item in result.candidates
+                                    ],
+                                },
+                            )
+                            issue_report = dev_logger.consume_issue_request()
+                            if issue_report:
+                                dev_logger.log(
+                                    "issue_report",
+                                    frame=frame_number,
+                                    path=issue_report,
+                                )
+                                emit("belt_issue_report", path=issue_report)
                             evidence_event = next(
                                 (
                                     event.kind
@@ -348,7 +480,8 @@ def run_belt_watcher(
                                 adaptive_track_timeout_seconds=tracker.timeout_seconds,
                                 raw_observations=[],
                                 candidates=[
-                                    _candidate_diagnostics(item) for item in result.candidates
+                                    candidate_diagnostics(item)
+                                    for item in result.candidates
                                 ],
                                 rejection_counts=dict(
                                     Counter(
@@ -391,6 +524,30 @@ def run_belt_watcher(
                         emit("error", message=f"Belt {detector_mode} scan failed: {exc}")
                         update = tracker.predict(time.monotonic(), region.width)
                         next_scan = now + base_interval
+                        if manual_capture_pending:
+                            manual_path = dev_logger.save_manual_capture(
+                                frame,
+                                frame_number=frame_number,
+                                now=now,
+                                detector_snapshot={
+                                    "detector": detector_mode,
+                                    "accepted_detection_count": 0,
+                                    "rejected_candidate_count": 0,
+                                    "detected_names": [],
+                                    "accepted_detections": [],
+                                    "rejected_candidates": [],
+                                    "analysis_error": str(exc),
+                                },
+                            )
+                            manual_capture_pending = False
+                            if manual_path:
+                                dev_logger.log(
+                                    "manual_capture",
+                                    frame=frame_number,
+                                    path=manual_path,
+                                    analysis_error=str(exc),
+                                )
+                                emit("manual_capture", path=manual_path)
             else:
                 # Overlay prediction remains smooth at 12 Hz, but no screen
                 # capture is performed until the recognizer can consume it.
@@ -409,6 +566,11 @@ def run_belt_watcher(
                 track_id = int(event.track.id)
                 if event.kind == "exited":
                     alerted_track_ids.discard(track_id)
+                elif event.kind == "reacquired":
+                    # The tracker proved this is the same physical card after
+                    # a camera jump. Preserve its already-alerted state so a
+                    # later family update cannot send a duplicate alert.
+                    alerted_track_ids.add(track_id)
                 alerted = (
                     event.kind in {"entered", "updated"}
                     and track_id not in alerted_track_ids
@@ -420,6 +582,18 @@ def run_belt_watcher(
                 )
                 if alerted:
                     alerted_track_ids.add(track_id)
+                if dev_capture_recorder is not None:
+                    try:
+                        dev_capture_recorder.record_tracker_event(
+                            event,
+                            alerted=alerted,
+                        )
+                    except Exception as exc:
+                        dev_logger.log(
+                            "dev_capture_event_error",
+                            frame=frame_number,
+                            error=str(exc),
+                        )
                 record = log_track_event(event, alerted=alerted)
                 attributes = " ".join(
                     value
@@ -437,6 +611,29 @@ def run_belt_watcher(
                     flush=True,
                 )
                 emit("track_event", record=record)
+            if dev_capture_recorder is not None and dev_scan_capture is not None:
+                (
+                    dev_frame,
+                    dev_candidates,
+                    dev_track_ids,
+                    dev_captured_at,
+                    dev_track_timeout,
+                ) = dev_scan_capture
+                try:
+                    dev_capture_recorder.observe(
+                        dev_frame,
+                        dev_candidates,
+                        dev_track_ids,
+                        now=dev_captured_at,
+                        frame_number=frame_number,
+                        track_timeout_seconds=dev_track_timeout,
+                    )
+                except Exception as exc:
+                    dev_logger.log(
+                        "dev_capture_error",
+                        frame=frame_number,
+                        error=str(exc),
+                    )
             tracks_payload = build_tracks_payload(update.tracks)
             if last_published_tracks is None or tracks_payload != last_published_tracks:
                 emit("tracks", tracks=tracks_payload)
@@ -459,36 +656,40 @@ def run_belt_watcher(
         if capture is not None:
             capture.close()
         dev_logger.log("session_stop", frame=frame_number)
+        if dev_capture_recorder is not None:
+            capture_status = dev_capture_recorder.close()
+            dev_logger.log(
+                "dev_capture_stop",
+                frame=frame_number,
+                status=capture_status,
+            )
+            emit(
+                "dev_capture",
+                path=dev_logger.relative_path(),
+                **capture_status,
+            )
         emit("stopped")
 
 
-def _candidate_diagnostics(candidate) -> dict[str, object]:
-    context = candidate.context
-    return {
-        "name": candidate.canonical_name,
-        "raw_text": candidate.raw_text,
-        "identity_confidence": candidate.identity_confidence,
-        "raw_best_similarity": candidate.raw_best_similarity,
-        "runner_up_identity": candidate.runner_up_identity,
-        "identity_margin": candidate.identity_margin,
-        "name_box": list(candidate.name_box),
-        "accepted": candidate.accepted,
-        "reason": candidate.reason,
-        "family": candidate.family,
-        "family_confidence": candidate.family_confidence,
-        "family_best_similarity": candidate.family_best_similarity,
-        "runner_up_family": candidate.runner_up_family,
-        "family_margin": candidate.family_margin,
-        "rarity": candidate.rarity,
-        "rarity_confidence": candidate.rarity_confidence,
-        "context": {
-            "art_box": list(context.art_box),
-            "card_box": list(context.card_box),
-            "nameplate_dark_fraction": context.nameplate_dark_fraction,
-            "art_standard_deviation": context.art_standard_deviation,
-            "art_edge_density": context.art_edge_density,
-            "frame_line_ratio": context.frame_line_ratio,
-            "accepted": context.accepted,
-            "reason": context.reason,
-        },
-    }
+def _belt_capture_hotkey() -> Callable[[], bool] | None:
+    """Return a Windows-global edge-triggered P-key reader."""
+
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+    except Exception:
+        return None
+
+    vk_p = 0x50
+
+    def pressed() -> bool:
+        try:
+            return bool(user32.GetAsyncKeyState(vk_p) & 0x0001)
+        except Exception:
+            return False
+
+    pressed()
+    return pressed

@@ -13,6 +13,7 @@ from typing import Any
 from . import __version__
 from .belt.names import DROID_NAMES as BELT_DROID_NAMES
 from .belt.targets import belt_target_names
+from .chat_alerts import CHAT_ALERT_COMBOS
 from .config import AppConfig, config_dir
 from .network import certifi_ssl_context
 
@@ -27,20 +28,7 @@ MAX_BELT_BUCKETS_PER_UPLOAD = 24
 USER_AGENT = f"DroidAlerts/{__version__}"
 VALID_BELT_DROID_NAMES = frozenset(BELT_DROID_NAMES)
 VALID_PRIORITY_ALERT_KEYS = frozenset(
-    {
-        "rainbowepic",
-        "rainbowlegendary",
-        "beskarepic",
-        "beskarlegendary",
-        "diamondmythic",
-        "rainbowmythic",
-        "beskarmythic",
-        "galacticcommon",
-        "galacticrare",
-        "galacticepic",
-        "galacticlegendary",
-        "galacticmythic",
-    }
+    f"{droid}{rarity}".lower() for droid, rarity in CHAT_ALERT_COMBOS
 )
 _INSTALL_ID_LOCK = threading.Lock()
 _EPHEMERAL_INSTALL_ID: str | None = None

@@ -13,23 +13,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .chat_alerts import PRIORITY_ALERTS, REMOVED_CHAT_DETECTIONS
+
 
 DROID_TYPES = ("Diamond", "Rainbow", "Beskar", "Galactic")
 RARITIES = ("Common", "Rare", "Epic", "Legendary", "Mythic")
-PRIORITY_ALERTS = {
-    ("Rainbow", "Epic"),
-    ("Rainbow", "Legendary"),
-    ("Beskar", "Epic"),
-    ("Beskar", "Legendary"),
-    ("Beskar", "Mythic"),
-    ("Diamond", "Mythic"),
-    ("Rainbow", "Mythic"),
-    ("Galactic", "Common"),
-    ("Galactic", "Rare"),
-    ("Galactic", "Epic"),
-    ("Galactic", "Legendary"),
-    ("Galactic", "Mythic"),
-}
 
 RARITY_COLOR_THRESHOLDS = {
     "Common": 700,
@@ -1299,74 +1287,6 @@ def classify_rarity_word_shape(
     return best.rarity, float(best.score), float(margin), f"shape:{best.template_name}"
 
 
-def rescue_weak_color_rarity(
-    image: np.ndarray,
-    y: int,
-    droid: str,
-    shape_templates: list[Template],
-    *,
-    row_height: int,
-    word_matches: list["RarityCandidate"] | None = None,
-    evidence: _RarityEvidence | None = None,
-) -> tuple[str, float, float, str] | None:
-    """Optional "Extra checks" fallback for washed-out colors (Windows HDR,
-    night-light, driver vibrance filters): tone mapping clips bright rarity
-    text toward white, so the strict color masks count too few pixels and the
-    row gets dropped even though the glyphs are intact. Rescue the row only
-    when two independent weak signals agree on the same rarity:
-      - the text-shaped color count still picks it, just under its floor
-        (>=300 px; the HDR ultrawide Diamond Rare capture measures 501 vs
-        2500+ on SDR machines);
-      - the rarity word-shape template (grayscale edges, immune to color
-        shift) matches the same rarity at >=0.50 (real words measure
-        0.49-0.63; measured background fakes stay <=0.29).
-    Runs only after normal color counting returned Unknown, so verdicts on
-    healthy captures are untouched."""
-    best_rarity: str | None = None
-    best_count = 0
-    best_second = 0
-    for dy in (-4, -2, 0, 2, 4):
-        counts = rarity_text_color_counts(
-            image,
-            y + dy,
-            droid,
-            row_height=row_height,
-            evidence=evidence if dy == 0 else None,
-        )
-        colored = {rarity: count for rarity, count in counts.items() if rarity != "Common"}
-        rarity = max(colored, key=lambda r: colored[r])
-        if colored[rarity] > best_count:
-            best_rarity = rarity
-            best_count = colored[rarity]
-            best_second = max(count for r, count in colored.items() if r != rarity)
-    if best_rarity is None or best_count < 300 or best_second > best_count * 0.25:
-        return None
-    shape_rarity, shape_score, _margin, shape_source = classify_rarity_word_shape(
-        image, y, shape_templates, row_height=row_height, word_matches=word_matches
-    )
-    if shape_rarity != best_rarity:
-        # Additive compact templates can make a broad Common edge match rank
-        # first even when the compact Galactic Rare word itself is stronger
-        # than the proven rescue floor. Keep the rescue tied to its own word
-        # rather than requiring it to win against unrelated rarity shapes.
-        if droid != "Galactic" or best_rarity != "Rare":
-            return None
-        shape_score = rarity_word_shape_score_from_matches(
-            word_matches or [],
-            y,
-            best_rarity,
-            row_height=row_height,
-        )
-        shape_source = f"shape:{best_rarity}"
-    if shape_score < 0.50:
-        return None
-    score = min(0.99, 0.60 + shape_score * 0.5)
-    margin = min(0.99, 1.0 - best_second / best_count)
-    return best_rarity, float(score), float(margin), (
-        f"extra:color:{best_rarity}:{best_count}+{shape_source}:{shape_score:.2f}"
-    )
-
-
 def galactic_rarity_roi_fallback(
     image: np.ndarray,
     y: int,
@@ -1754,11 +1674,11 @@ def classify_rarity_roi(
         # Shape matching alone is not enough to confirm a priority rarity:
         # large coloured panels and adjacent rows can match a word template.
         # Epic retains a deliberately low half-floor for text support so
-        # resampling/HDR has headroom without accepting the reviewed scenery
+        # resampling has headroom without accepting the reviewed scenery
         # failures.
         if (
             color_rarity == "Epic"
-            # A half-floor leaves a wide safety margin for resampling/HDR,
+            # A half-floor leaves a wide safety margin for resampling,
             # while rejecting reviewed rows where purple scenery or an
             # adjacent Epic alert supplied the raw colour and shape match.
             # Genuine Beskar/Rainbow Epic rows in the corpus start at 629
@@ -2072,7 +1992,6 @@ class DroidVisualDetector:
         rarity_threshold: float = 0.35,
         droid_threshold: float = 0.15,
         row_height: int = 44,
-        extra_checks: bool = False,
     ) -> None:
         self.templates = load_templates(template_dir)
         self.scale_aware_rarity_templates = build_scale_aware_rarity_templates(
@@ -2091,7 +2010,6 @@ class DroidVisualDetector:
         self.rarity_threshold = rarity_threshold
         self.droid_threshold = droid_threshold
         self.row_height = row_height
-        self.extra_checks = extra_checks
         # Rows that looked like real alerts but were dropped, refreshed each
         # detect() call; the watcher surfaces these in debug mode.
         self.last_rejections: list[dict] = []
@@ -2235,23 +2153,6 @@ class DroidVisualDetector:
                 evidence=rarity_evidence,
                 correlation_bank=self.rarity_correlation_bank,
             )
-            # Galactic Rare regularly lands just under the global cyan floor
-            # after 0.75x normalization. Its rescue already requires both a
-            # dominant text-shaped color and the literal rarity-word shape,
-            # so keep that high-confidence recall path active even when the
-            # broader HDR/washed-out option is disabled.
-            if rarity == "Unknown" and (self.extra_checks or droid == "Galactic"):
-                rescued = rescue_weak_color_rarity(
-                    image,
-                    y,
-                    droid,
-                    active_templates,
-                    row_height=self.row_height,
-                    word_matches=word_matches,
-                    evidence=rarity_evidence,
-                )
-                if rescued is not None:
-                    rarity, rarity_score, rarity_margin, template_name = rescued
             compact_rescue = rescue_compact_priority_rarity(
                 image,
                 y,
@@ -2266,6 +2167,10 @@ class DroidVisualDetector:
                 rarity, rarity_score, rarity_margin, template_name = compact_rescue
             if rarity == "Unknown":
                 reject(y, "unknown-rarity", droid, template_name)
+                continue
+
+            if (droid, rarity) in REMOVED_CHAT_DETECTIONS:
+                reject(y, "removed-detection", droid, rarity)
                 continue
 
             if (droid, rarity) in PRIORITY_ALERTS:

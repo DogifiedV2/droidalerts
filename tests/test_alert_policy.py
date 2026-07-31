@@ -11,7 +11,7 @@ from droid_alerts.alerts import AlertPolicy
 from droid_alerts.classifier import Detection
 from droid_alerts.config import AppConfig
 from droid_alerts.gui import ALERT_COMBOS
-from droid_alerts.notifications import alert_type_id, discord_color
+from droid_alerts.notifications import alert_title, alert_type_id, discord_color, event_text
 
 
 def _detection(droid: str = "Diamond", rarity: str = "Mythic") -> Detection:
@@ -74,9 +74,13 @@ def main() -> int:
         failures.append("Rainbow Epic should be disabled by default")
     if ("Rainbow", "Legendary") in default_config.targets:
         failures.append("Rainbow Legendary should be disabled by default")
-    expected_first_slots = (("Rainbow", "Epic"), ("Rainbow", "Legendary"), ("Beskar", "Epic"))
+    expected_first_slots = (
+        ("Rainbow", "Epic"),
+        ("Rainbow", "Legendary"),
+        ("Rainbow", "Mythic"),
+    )
     if ALERT_COMBOS[:3] != expected_first_slots:
-        failures.append("Rainbow Epic and Legendary should occupy the first two toggle slots")
+        failures.append("Rainbow priorities should occupy the first toggle group")
     enabled_epic_config = AppConfig(alert_targets=[["Rainbow", "Epic"]])
     if not AlertPolicy(enabled_epic_config).should_alert(rainbow_epic, "rainbow-epic-row"):
         failures.append("enabled Rainbow Epic target should fire")
@@ -85,19 +89,16 @@ def main() -> int:
         failures.append("enabled Rainbow Legendary target should fire")
 
     galactic_combos = {
-        ("Galactic", "Common"),
-        ("Galactic", "Rare"),
         ("Galactic", "Epic"),
         ("Galactic", "Legendary"),
         ("Galactic", "Mythic"),
     }
     if not galactic_combos.issubset(set(ALERT_COMBOS)):
-        failures.append("all Galactic priority toggles should be available")
-    default_galactic = {
-        ("Galactic", "Epic"),
-        ("Galactic", "Legendary"),
-        ("Galactic", "Mythic"),
-    }
+        failures.append("supported Galactic priority toggles should be available")
+    removed_galactic = {("Galactic", "Common"), ("Galactic", "Rare")}
+    if removed_galactic & set(ALERT_COMBOS):
+        failures.append("retired Galactic Common/Rare toggles should not be available")
+    default_galactic = set(galactic_combos)
     if (galactic_combos & default_config.targets) != default_galactic:
         failures.append("only Galactic Epic, Legendary, and Mythic should be on by default")
     migrated_defaults = AppConfig.from_dict(
@@ -113,6 +114,25 @@ def main() -> int:
     )
     if not default_galactic.issubset(migrated_defaults.targets):
         failures.append("legacy default selections should enable the new Galactic defaults")
+    retired_targets = AppConfig.from_dict(
+        {
+            "alert_targets": [
+                ["Galactic", "Common"],
+                ["Galactic", "Rare"],
+                ["Galactic", "Epic"],
+            ]
+        }
+    )
+    if retired_targets.targets != {("Galactic", "Epic")}:
+        failures.append("saved Galactic Common/Rare targets should be removed on load")
+    retired_only = AppConfig.from_dict(
+        {"alert_targets": [["Galactic", "Common"], ["Galactic", "Rare"]]}
+    )
+    if retired_only.targets:
+        failures.append("a retired-only selection should migrate to no targets")
+    for droid, rarity in removed_galactic:
+        if _detection(droid, rarity).should_alert:
+            failures.append(f"retired {droid} {rarity} should not be alertable")
     for droid, rarity in galactic_combos:
         detection = _detection(droid, rarity)
         if not detection.should_alert:
@@ -162,7 +182,28 @@ class ChannelAlertConfigTests(unittest.TestCase):
         self.assertEqual("rebirth_available", alert_type_id(_source_detection(source="rebirth-alert")))
         self.assertEqual("belt_tracker", alert_type_id(_source_detection(source="belt-tracker")))
         self.assertEqual("limited_deals", alert_type_id(_source_detection(source="limited-deal")))
+        self.assertEqual(
+            "timer:mythic",
+            alert_type_id(
+                _source_detection(
+                    source="timer-reminder",
+                    droid="Mythic Timer",
+                    rarity="60",
+                )
+            ),
+        )
         self.assertEqual("chat:Beskar:Mythic", alert_type_id(_source_detection(source="watcher")))
+
+    def test_timer_reminder_has_channel_friendly_text(self):
+        detection = _source_detection(
+            source="timer-reminder",
+            droid="Mythic Timer",
+            rarity="60",
+        )
+
+        self.assertEqual("Mythic Timer in 60 seconds", event_text(detection))
+        self.assertEqual("Droid Alerts Timer Reminder", alert_title(detection))
+        self.assertEqual(0xFF3FA8, discord_color(detection))
 
 
 if __name__ == "__main__":

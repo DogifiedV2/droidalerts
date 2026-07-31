@@ -19,6 +19,8 @@ assets/sounds/*
 config/calibration.json
 config/belt_regions.json
 config/discord_webhook.txt
+config/discord_destinations.json
+config/limited_deal_discord_webhook.txt
 config/ntfy_token.txt
 config/phone_alerts.json
 config/anonymous_install_id.txt

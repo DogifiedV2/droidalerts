@@ -27,7 +27,7 @@ from droid_alerts.belt.template_recognition import (  # noqa: E402
 )
 
 
-FAMILY_ORDER = ("Default", "Gold", "Diamond", "Rainbow", "Beskar")
+FAMILY_ORDER = ("Default", "Gold", "Diamond", "Rainbow", "Beskar", "Galactic")
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,8 @@ class SourceSample:
     family: str
     image_file: Path
     quality: float
+    use_for_identity: bool
+    use_for_family: bool
     card_width_ratio: float
     art_left_ratio: float
     art_top_ratio: float
@@ -70,9 +72,15 @@ def _load_samples(
             art_x, art_y, art_width, art_height = (
                 int(value) for value in metadata["art_box_in_crop"]
             )
+            use_for_identity = bool(metadata.get("use_for_identity", True))
+            use_for_family = bool(metadata.get("use_for_family", True))
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError(f"Invalid confirmed sample metadata: {metadata_path}") from exc
 
+        if not use_for_identity and not use_for_family:
+            raise ValueError(
+                f"Sample is disabled for both identity and family: {metadata_path}"
+            )
         if name not in DROID_NAMES:
             raise ValueError(f"Unknown droid name {name!r}: {metadata_path}")
         if family not in FAMILY_ORDER:
@@ -90,6 +98,8 @@ def _load_samples(
                 family=family,
                 image_file=image_path,
                 quality=float(metadata.get("quality_score", 0.0)),
+                use_for_identity=use_for_identity,
+                use_for_family=use_for_family,
                 card_width_ratio=image_width / image_height,
                 art_left_ratio=art_x / image_height,
                 art_top_ratio=art_y / image_height,
@@ -103,7 +113,11 @@ def _load_samples(
 
     if not samples:
         raise ValueError(f"No confirmed template metadata found under {confirmed_dir}")
-    missing = [name for name in DROID_NAMES if not any(item.name == name for item in samples)]
+    missing = [
+        name
+        for name in DROID_NAMES
+        if not any(item.name == name and item.use_for_identity for item in samples)
+    ]
     if require_every_droid and missing:
         raise ValueError(f"Template library is missing {len(missing)} droids: {', '.join(missing)}")
     return samples
@@ -143,7 +157,11 @@ def build_index(
     identity_offsets = [0]
     selected_counts: dict[str, int] = {}
     for name in DROID_NAMES:
-        named = [item for item in samples if item.name == name]
+        named = [
+            item
+            for item in samples
+            if item.name == name and item.use_for_identity
+        ]
         selected = _diverse_sample_indices(named, templates_per_droid)
         for index in selected:
             identity_hog.append(named[index].identity_hog)
@@ -155,7 +173,13 @@ def build_index(
     family_offsets = [0]
     family_counts: dict[str, int] = {}
     for family in FAMILY_ORDER:
-        matching = [item for item in samples if item.family == family]
+        matching = [
+            item
+            for item in samples
+            if item.family == family and item.use_for_family
+        ]
+        if not matching:
+            raise ValueError(f"Template library has no family samples for {family}")
         family_histograms.extend(item.family_histogram for item in matching)
         family_words.extend(item.family_word for item in matching)
         family_counts[family] = len(matching)
@@ -176,6 +200,8 @@ def build_index(
         "templates_per_droid": templates_per_droid,
         "selected_counts": selected_counts,
         "family_counts": family_counts,
+        "identity_source_samples": sum(item.use_for_identity for item in samples),
+        "family_source_samples": sum(item.use_for_family for item in samples),
         "identity_descriptor": "48x48-hog",
         "family_weights": [FAMILY_HISTOGRAM_WEIGHT, FAMILY_WORD_WEIGHT],
         "geometry": ratios,
@@ -282,7 +308,11 @@ def augment_index(
         start = int(base.identity_name_offsets[name_index])
         end = int(base.identity_name_offsets[name_index + 1])
         existing = base.identity_hog[start:end]
-        named = [item for item in samples if item.name == name]
+        named = [
+            item
+            for item in samples
+            if item.name == name and item.use_for_identity
+        ]
         selected = _diverse_sample_indices(named, templates_per_droid)
         combined, added = _append_unique_vectors(
             existing,
@@ -296,13 +326,35 @@ def augment_index(
     family_words: list[np.ndarray] = []
     family_offsets = [0]
     added_family_counts: dict[str, int] = {}
-    for family_index, family in enumerate(base.family_labels):
-        start = int(base.family_offsets[family_index])
-        end = int(base.family_offsets[family_index + 1])
+    for family in FAMILY_ORDER:
+        if family in base.family_labels:
+            family_index = base.family_labels.index(family)
+            start = int(base.family_offsets[family_index])
+            end = int(base.family_offsets[family_index + 1])
+            existing_histograms = base.family_histograms[start:end]
+            existing_words = base.family_words[start:end]
+        else:
+            existing_histograms = np.empty(
+                (0, base.family_histograms.shape[1]),
+                dtype=np.float32,
+            )
+            existing_words = np.empty(
+                (0, base.family_words.shape[1]),
+                dtype=np.float32,
+            )
+        additions = [
+            item
+            for item in samples
+            if item.family == family and item.use_for_family
+        ]
+        if not len(existing_histograms) and not additions:
+            raise ValueError(
+                f"Augmentation must provide a sample for new family {family}"
+            )
         histograms, words, added = _append_unique_family_vectors(
-            base.family_histograms[start:end],
-            base.family_words[start:end],
-            [item for item in samples if item.family == family],
+            existing_histograms,
+            existing_words,
+            additions,
         )
         family_histograms.extend(histograms)
         family_words.extend(words)
@@ -323,7 +375,7 @@ def augment_index(
     }
     family_counts = {
         family: int(previous_family.get(family, 0) or 0) + added_family_counts[family]
-        for family in base.family_labels
+        for family in FAMILY_ORDER
     }
     added_sample_count = max(
         sum(added_identity_counts.values()),
@@ -339,6 +391,12 @@ def augment_index(
             "selected_counts": selected_counts,
             "family_counts": family_counts,
             "augmentation_source_samples": len(samples),
+            "augmentation_identity_source_samples": sum(
+                item.use_for_identity for item in samples
+            ),
+            "augmentation_family_source_samples": sum(
+                item.use_for_family for item in samples
+            ),
             "augmentation_samples": added_sample_count,
             "added_identity_templates": sum(added_identity_counts.values()),
             "added_family_templates": sum(added_family_counts.values()),
@@ -365,7 +423,7 @@ def augment_index(
             identity_name_offsets=np.asarray(identity_offsets, dtype=np.int32),
             family_histograms=np.stack(family_histograms).astype(np.float32),
             family_words=np.stack(family_words).astype(np.float32),
-            family_labels=np.asarray(base.family_labels),
+            family_labels=np.asarray(FAMILY_ORDER),
             family_offsets=np.asarray(family_offsets, dtype=np.int32),
             manifest_json=np.asarray([json.dumps(manifest, sort_keys=True)]),
             card_width_ratio=np.asarray(base.card_width_ratio, dtype=np.float32),

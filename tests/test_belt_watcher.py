@@ -15,8 +15,12 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.belt.matching import NameMatch
-from droid_alerts.belt.models import DroidObservation
-from droid_alerts.belt.runtime import AdaptiveScanScheduler, build_tracks_payload
+from droid_alerts.belt.models import CardCandidate, CardContext, DroidObservation
+from droid_alerts.belt.runtime import (
+    AdaptiveScanScheduler,
+    adaptive_track_timeout,
+    build_tracks_payload,
+)
 from droid_alerts.belt.watcher import (
     TEMPLATE_MINIMUM_DISPLACEMENT_RATIO,
     adaptive_template_interval,
@@ -35,6 +39,9 @@ class OneFrameCapture:
     def grab(self, _box):
         self.stop_event.set()
         return self.frame.copy()
+
+    def screen_size(self):
+        return self.frame.shape[1], self.frame.shape[0]
 
     def close(self):
         self.closed = True
@@ -132,6 +139,12 @@ class BeltRuntimeTests(unittest.TestCase):
             }],
             build_tracks_payload([track]),
         )
+
+    def test_track_timeout_expands_for_old_cpu_capture_cadence(self):
+        self.assertEqual(3.5, adaptive_track_timeout(3.5, None))
+        self.assertEqual(3.5, adaptive_track_timeout(3.5, 0.5))
+        self.assertAlmostEqual(25.0 / 3.0, adaptive_track_timeout(3.5, 10.0 / 3.0))
+        self.assertEqual(20.0, adaptive_track_timeout(3.5, 30.0))
 
 
 class WorkerProcessEntryTests(unittest.TestCase):
@@ -316,7 +329,7 @@ class WatcherTests(unittest.TestCase):
             ),
             patch("droid_alerts.belt.watcher.BeltTracker", return_value=tracker),
             patch(
-                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                "droid_alerts.belt.watcher.HybridCardRecognizer",
                 return_value=recognizer,
             ),
         ):
@@ -366,7 +379,7 @@ class WatcherTests(unittest.TestCase):
             patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
             patch("droid_alerts.belt.watcher.BeltTracker", return_value=tracker),
             patch(
-                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                "droid_alerts.belt.watcher.HybridCardRecognizer",
                 return_value=recognizer,
             ),
             patch(
@@ -389,6 +402,49 @@ class WatcherTests(unittest.TestCase):
             [call.kwargs["alerted"] for call in log_event.call_args_list],
         )
 
+    def test_reacquired_track_cannot_alert_again_on_later_family_update(self):
+        frame, _ = card_frame()
+        stop_event = threading.Event()
+        capture = OneFrameCapture(frame, stop_event)
+        track = belt_track()
+        tracker = ScriptedTracker(
+            [[]],
+            events=(
+                SimpleNamespace(kind="entered", track=track),
+                SimpleNamespace(kind="exited", track=track),
+                SimpleNamespace(kind="reacquired", track=track),
+                SimpleNamespace(kind="updated", track=track),
+            ),
+        )
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = template_result()
+        with (
+            patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
+            patch("droid_alerts.belt.watcher.BeltTracker", return_value=tracker),
+            patch(
+                "droid_alerts.belt.watcher.HybridCardRecognizer",
+                return_value=recognizer,
+            ),
+            patch(
+                "droid_alerts.belt.watcher.log_track_event",
+                side_effect=lambda event, *, alerted: {
+                    "event": event.kind,
+                    "alerted": alerted,
+                },
+            ) as log_event,
+        ):
+            run_belt_watcher(
+                1,
+                PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                target_tiers={"R2": "Gold"},
+                stop_event=stop_event,
+            )
+
+        self.assertEqual(
+            [True, False, False, False],
+            [call.kwargs["alerted"] for call in log_event.call_args_list],
+        )
+
     def test_log_failure_does_not_stop_track_event_delivery(self):
         frame, _ = card_frame()
         stop_event = threading.Event()
@@ -405,7 +461,7 @@ class WatcherTests(unittest.TestCase):
             patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
             patch("droid_alerts.belt.watcher.BeltTracker", return_value=tracker),
             patch(
-                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                "droid_alerts.belt.watcher.HybridCardRecognizer",
                 return_value=recognizer,
             ),
             patch(
@@ -441,7 +497,7 @@ class WatcherTests(unittest.TestCase):
         with (
             patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
             patch(
-                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                "droid_alerts.belt.watcher.HybridCardRecognizer",
                 return_value=recognizer,
             ),
         ):
@@ -470,7 +526,7 @@ class WatcherTests(unittest.TestCase):
                 return_value=tracker,
             ) as tracker_factory,
             patch(
-                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                "droid_alerts.belt.watcher.HybridCardRecognizer",
                 return_value=recognizer,
             ),
             patch(
@@ -517,7 +573,7 @@ class WatcherTests(unittest.TestCase):
         with (
             patch("droid_alerts.belt.watcher.create_capture", return_value=capture) as factory,
             patch(
-                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                "droid_alerts.belt.watcher.HybridCardRecognizer",
                 return_value=recognizer,
             ),
         ):
@@ -552,7 +608,7 @@ class WatcherTests(unittest.TestCase):
                 side_effect=(closed_capture, replacement),
             ) as factory,
             patch(
-                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                "droid_alerts.belt.watcher.HybridCardRecognizer",
                 return_value=recognizer,
             ),
         ):
@@ -583,7 +639,7 @@ class WatcherTests(unittest.TestCase):
         self.assertIn("capture_error", [event["type"] for event in events])
         self.assertIn("capture_reconnected", [event["type"] for event in events])
 
-    def test_normal_watcher_uses_templates_without_starting_ocr(self):
+    def test_normal_watcher_uses_hybrid_templates_without_starting_ocr(self):
         frame, _ = card_frame()
         stop_event = threading.Event()
         capture = OneFrameCapture(frame, stop_event)
@@ -598,7 +654,7 @@ class WatcherTests(unittest.TestCase):
         with (
             patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
             patch(
-                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                "droid_alerts.belt.watcher.HybridCardRecognizer",
                 return_value=recognizer,
             ) as template_factory,
         ):
@@ -613,8 +669,8 @@ class WatcherTests(unittest.TestCase):
         recognizer.analyze.assert_called_once()
         ready = next(event for event in events if event["type"] == "ready")
         scan = next(event for event in events if event["type"] == "scan")
-        self.assertEqual("templates", ready["detector"])
-        self.assertEqual("templates", scan["detector"])
+        self.assertEqual("hybrid-v2", ready["detector"])
+        self.assertEqual("hybrid-v2", scan["detector"])
 
     def test_optional_template_collector_receives_tracked_accepted_candidates(self):
         frame, name_box = card_frame()
@@ -648,7 +704,7 @@ class WatcherTests(unittest.TestCase):
         with (
             patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
             patch(
-                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                "droid_alerts.belt.watcher.HybridCardRecognizer",
                 return_value=recognizer,
             ),
             patch(
@@ -668,6 +724,152 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual("R2", collector.observe.call_args.args[1][0].canonical_name)
         collector.close.assert_called_once_with()
 
+    def test_dev_mode_saves_accepted_crops_and_manual_detector_snapshot(self):
+        frame, name_box = card_frame()
+        stop_event = threading.Event()
+        capture = OneFrameCapture(frame, stop_event)
+        observation = DroidObservation(
+            NameMatch("R2", 1.0, "template:R2"),
+            0.99,
+            (80, 80, 180, 260),
+        )
+        context = CardContext(
+            art_box=(105, 100, 120, 140),
+            card_box=(80, 80, 180, 260),
+            nameplate_dark_fraction=0.85,
+            art_standard_deviation=45.0,
+            art_edge_density=0.10,
+            frame_line_ratio=0.50,
+            accepted=True,
+            reason="accepted_template",
+        )
+        candidate = CardCandidate(
+            canonical_name="R2",
+            raw_text="template:R2",
+            identity_confidence=0.98,
+            name_box=name_box,
+            context=context,
+            accepted=True,
+            reason="accepted_template",
+            family="Gold",
+            family_confidence=0.92,
+            rarity="Epic",
+            rarity_confidence=1.0,
+            raw_best_similarity=0.92,
+            runner_up_identity="R4",
+            identity_margin=0.09,
+        )
+        rejected_context = CardContext(
+            art_box=(325, 100, 120, 140),
+            card_box=(300, 80, 180, 260),
+            nameplate_dark_fraction=0.85,
+            art_standard_deviation=45.0,
+            art_edge_density=0.10,
+            frame_line_ratio=0.50,
+            accepted=True,
+            reason="accepted_template",
+        )
+        rejected_candidate = CardCandidate(
+            canonical_name="R4",
+            raw_text="template:R4",
+            identity_confidence=0.72,
+            name_box=(320, 280, 90, 25),
+            context=rejected_context,
+            accepted=False,
+            reason="ambiguous_template_identity",
+            family="Rainbow",
+            family_confidence=0.81,
+            rarity="Legendary",
+            rarity_confidence=1.0,
+            raw_best_similarity=0.78,
+            runner_up_identity="R2",
+            identity_margin=0.02,
+        )
+        recognizer = MagicMock()
+        recognizer.analyze.return_value = template_result(
+            observations=(observation,),
+            candidates=(candidate, rejected_candidate),
+            card_window_count=2,
+        )
+        dev_logger = MagicMock()
+        dev_logger.enabled = True
+        dev_logger.session_dir = Path("/tmp/belt_dev_test")
+        dev_logger.relative_path.return_value = "belt_dev/session_test"
+        dev_logger.consume_issue_request.return_value = ""
+        dev_logger.save_frame.return_value = ""
+        dev_logger.save_manual_capture.return_value = (
+            "belt_dev/session_test/manual_captures/capture.png"
+        )
+        dev_logger.last_saved_reason = ""
+        recorder = MagicMock()
+        recorder.close.return_value = {
+            "enabled": True,
+            "written_tracks": 1,
+        }
+        events = []
+
+        with (
+            patch(
+                "droid_alerts.belt.watcher.create_capture",
+                return_value=capture,
+            ),
+            patch(
+                "droid_alerts.belt.watcher.HybridCardRecognizer",
+                return_value=recognizer,
+            ) as recognizer_factory,
+            patch(
+                "droid_alerts.belt.watcher.BeltDevLogger",
+                return_value=dev_logger,
+            ),
+            patch(
+                "droid_alerts.belt.watcher.BeltDevCaptureRecorder",
+                return_value=recorder,
+            ) as recorder_factory,
+            patch(
+                "droid_alerts.belt.watcher._belt_capture_hotkey",
+                return_value=lambda: True,
+            ),
+        ):
+            run_belt_watcher(
+                1,
+                PixelBox(0, 0, frame.shape[1], frame.shape[0]),
+                stop_event=stop_event,
+                status_callback=events.append,
+                dev_mode=True,
+            )
+
+        recorder_factory.assert_called_once_with(
+            dev_logger.session_dir,
+            enabled=True,
+        )
+        recognizer_factory.assert_called_once_with()
+        recorder.set_session_metadata.assert_called_once()
+        self.assertEqual(
+            [frame.shape[1], frame.shape[0]],
+            recorder.set_session_metadata.call_args.kwargs[
+                "source_resolution"
+            ],
+        )
+        recorder.observe.assert_called_once()
+        self.assertEqual((candidate,), recorder.observe.call_args.args[1])
+        self.assertEqual({0: 1}, recorder.observe.call_args.args[2])
+        dev_logger.save_manual_capture.assert_called_once()
+        detector_snapshot = (
+            dev_logger.save_manual_capture.call_args.kwargs["detector_snapshot"]
+        )
+        self.assertEqual(["R2"], detector_snapshot["detected_names"])
+        self.assertEqual(
+            "R2",
+            detector_snapshot["accepted_detections"][0]["detected_name"],
+        )
+        self.assertEqual(
+            "R4",
+            detector_snapshot["rejected_candidates"][0]["best_guess_name"],
+        )
+        recorder.close.assert_called_once_with()
+        self.assertIn("manual_capture", [event["type"] for event in events])
+        self.assertIn("dev_capture", [event["type"] for event in events])
+
     def test_template_index_failure_is_reported(self):
         frame, _ = card_frame()
         stop_event = threading.Event()
@@ -677,7 +879,7 @@ class WatcherTests(unittest.TestCase):
         with (
             patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
             patch(
-                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                "droid_alerts.belt.watcher.HybridCardRecognizer",
                 side_effect=RuntimeError("missing index"),
             ),
         ):
@@ -732,7 +934,7 @@ class WatcherTests(unittest.TestCase):
             with (
                 patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
                 patch(
-                    "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                    "droid_alerts.belt.watcher.HybridCardRecognizer",
                     return_value=recognizer,
                 ),
                 patch(
@@ -763,7 +965,7 @@ class WatcherTests(unittest.TestCase):
         with (
             patch("droid_alerts.belt.watcher.create_capture", return_value=capture),
             patch(
-                "droid_alerts.belt.watcher.TemplateCardRecognizer",
+                "droid_alerts.belt.watcher.HybridCardRecognizer",
                 return_value=recognizer,
             ),
             patch(

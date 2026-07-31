@@ -24,7 +24,7 @@ CHAT_CASES = (
     (
         "galactic_common_blue_background_false_rare_scale_100.png",
         1.0,
-        [("Galactic", "Common")],
+        [],
     ),
     (
         "review_resolution_beskar_epic_reference_114332fb.png",

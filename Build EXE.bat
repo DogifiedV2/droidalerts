@@ -29,6 +29,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo Verifying packaged QML runtime...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$roots = @('dist\Droid Alerts\_internal\PySide6\qml', 'dist\Droid Alerts\_internal\PySide6\Qt\qml'); $root = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1; if (-not $root) { Write-Error 'Qt QML runtime folder is missing from the release.'; exit 1 }; $required = @('QtQml\qmldir', 'QtQuick\qmldir', 'QtQuick\Controls\qmldir', 'QtQuick\Layouts\qmldir', 'QtQuick\Shapes\qmldir'); foreach ($relative in $required) { if (-not (Test-Path (Join-Path $root $relative))) { Write-Error ('Required QML module is missing: ' + $relative); exit 1 } }"
+if errorlevel 1 (
+    pause
+    exit /b 1
+)
+
 echo Creating release zip...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path 'dist\DroidAlerts.zip') { Remove-Item 'dist\DroidAlerts.zip' -Force }; Compress-Archive -Path 'dist\Droid Alerts' -DestinationPath 'dist\DroidAlerts.zip' -Force"
 if errorlevel 1 (

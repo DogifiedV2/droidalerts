@@ -11,6 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .alert_customization import alert_id_aliases, alert_type_id
 from .classifier import Detection
 from .config import AppConfig, sounds_dir, user_sounds_dir
 
@@ -45,6 +46,7 @@ class AlertPolicy:
         self.dedupe_seconds = config.dedupe_seconds
         self.sound_enabled = config.sound_enabled
         self.sound_file = config.sound_file
+        self.sound_overrides = dict(config.alert_sound_overrides)
 
     def should_alert(self, detection: Detection, row_digest: str) -> bool:
         if (detection.droid, detection.rarity) not in self.targets:
@@ -74,7 +76,18 @@ class AlertPolicy:
         if not self.sound_enabled:
             return False
 
-        wav = _alert_wav(self.sound_file)
+        alert_id = alert_type_id(detection)
+        selected_sound = self.sound_overrides.get(alert_id)
+        if selected_sound is None:
+            selected_sound = next(
+                (
+                    self.sound_overrides[alias]
+                    for alias in alert_id_aliases(alert_id)
+                    if alias in self.sound_overrides
+                ),
+                self.sound_file,
+            )
+        wav = _alert_wav(selected_sound)
         if sys.platform == "win32":
             try:
                 import winsound
@@ -140,21 +153,16 @@ class AlertPolicy:
 
 def _alert_wav(preferred: str = "") -> Path | None:
     directories = (user_sounds_dir(), sounds_dir())
-    if preferred == "System beeps":
+    if not preferred or preferred == "System beeps":
         return None
-    if preferred:
-        for directory in directories:
-            selected = directory / Path(preferred).name
-            if (
-                selected.name.casefold() != WAKE_ALARM_FILE.casefold()
-                and selected.is_file()
-                and selected.suffix.lower() == ".wav"
-            ):
-                return selected
     for directory in directories:
-        for path in sorted(directory.glob("*.wav")) if directory.exists() else ():
-            if path.name.casefold() != WAKE_ALARM_FILE.casefold():
-                return path
+        selected = directory / Path(preferred).name
+        if (
+            selected.name.casefold() != WAKE_ALARM_FILE.casefold()
+            and selected.is_file()
+            and selected.suffix.lower() == ".wav"
+        ):
+            return selected
     return None
 
 

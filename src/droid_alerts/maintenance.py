@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from .config import data_dir
 from .logging_io import EVENT_LOG_LOCK, alert_samples_dir, debug_dir, logs_dir
+
+
+SHORT_LIVED_HISTORY_TYPES = frozenset(
+    {"detected", "seen", "rejected", "scrap_scan", "debug_snapshot"}
+)
+SHORT_LIVED_HISTORY_SECONDS = 24 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -127,8 +134,12 @@ def cleanup_runtime_data(retention_days: int, max_storage_mb: int) -> CleanupRes
                     freed += size
                 except OSError:
                     continue
-        with EVENT_LOG_LOCK:
-            _trim_history_by_age(protected_log, cutoff)
+    with EVENT_LOG_LOCK:
+        _trim_history_by_age(
+            protected_log,
+            cutoff if retention_days > 0 else 0.0,
+            short_lived_cutoff=time.time() - SHORT_LIVED_HISTORY_SECONDS,
+        )
 
     max_bytes = max(0, max_storage_mb) * 1024 * 1024
     if max_bytes > 0:
@@ -166,20 +177,92 @@ def _safe_mtime(path: Path) -> float:
         return 0.0
 
 
-def _trim_history_by_age(path: Path, cutoff: float) -> None:
+def _trim_history_by_age(
+    path: Path,
+    cutoff: float,
+    *,
+    short_lived_cutoff: float | None = None,
+) -> None:
     if not path.exists():
         return
-    kept: list[str] = []
+
+    def event_metadata(line: bytes) -> tuple[float, str, bool] | None:
+        try:
+            event = json.loads(line)
+            value = str(event.get("ts") or "")[:15]
+            timestamp = time.mktime(time.strptime(value, "%Y%m%d_%H%M%S"))
+            return (
+                timestamp,
+                str(event.get("event_type") or ""),
+                bool(event.get("alerted")),
+            )
+        except (
+            AttributeError,
+            ValueError,
+            TypeError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ):
+            return None
+
+    def should_delete(metadata: tuple[float, str, bool] | None) -> bool:
+        if metadata is None:
+            return False
+        timestamp, event_type, alerted = metadata
+        if alerted:
+            return False
+        if timestamp < cutoff:
+            return True
+        return (
+            short_lived_cutoff is not None
+            and event_type in SHORT_LIVED_HISTORY_TYPES
+            and timestamp < short_lived_cutoff
+        )
+
+    newest_cutoff = max(cutoff, short_lived_cutoff or cutoff)
+
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            try:
-                value = str(json.loads(line).get("ts") or "")[:15]
-                event_time = time.mktime(time.strptime(value, "%Y%m%d_%H%M%S"))
-            except (ValueError, TypeError, json.JSONDecodeError):
-                event_time = time.time()
-            if event_time >= cutoff:
-                kept.append(line)
-        _atomic_lines_write(path, kept)
+        # History is append-only and chronological. Scan only the portion old
+        # enough to contain removable entries, and avoid rewriting the file at
+        # all when there is nothing to remove.
+        needs_rewrite = False
+        with path.open("rb") as source:
+            for line in source:
+                metadata = event_metadata(line)
+                if metadata is None:
+                    continue
+                if should_delete(metadata):
+                    needs_rewrite = True
+                    break
+                if metadata[0] >= newest_cutoff:
+                    break
+        if not needs_rewrite:
+            return
+
+        temp = path.with_suffix(path.suffix + ".tmp")
+        processed = 0
+        with path.open("rb") as source, temp.open("wb") as target:
+            for line in source:
+                metadata = event_metadata(line)
+                if should_delete(metadata):
+                    processed += 1
+                    if processed % 512 == 0:
+                        time.sleep(0)
+                    continue
+                target.write(line)
+                if metadata is not None and metadata[0] >= newest_cutoff:
+                    # Everything after this point is newer than both retention
+                    # cutoffs, so it can be copied without further JSON work.
+                    shutil.copyfileobj(source, target, length=1024 * 1024)
+                    break
+                processed += 1
+                if processed % 512 == 0:
+                    # Explicitly yield during large startup cleanups so the Qt
+                    # event loop remains responsive.
+                    time.sleep(0)
+            else:
+                target.flush()
+        temp.replace(path)
     except OSError:
         return
 

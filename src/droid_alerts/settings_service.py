@@ -4,7 +4,12 @@ from copy import deepcopy
 from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
 
-from .config import AppConfig, normalize_belt_scan_fps
+from .config import (
+    MAX_SAFE_DELAY_SECONDS,
+    AppConfig,
+    normalize_belt_scan_fps,
+    normalize_finite_float,
+)
 from .notifications import valid_ntfy_server_url, valid_ntfy_topic
 from .ui_theme import normalize_theme_key
 
@@ -57,29 +62,65 @@ def build_settings_update(
     try:
         normalized.update(
             monitor_index=max(1, int(values["monitor_index"])),
-            capture_interval_seconds=max(0.05, float(values["capture_interval_seconds"])),
-            rebirth_scan_interval_seconds=min(
-                30.0, max(2.0, float(values["rebirth_scan_interval_seconds"]))
+            capture_interval_seconds=normalize_finite_float(
+                values["capture_interval_seconds"],
+                minimum=0.05,
+                maximum=MAX_SAFE_DELAY_SECONDS,
             ),
-            dedupe_seconds=max(0.0, float(values["dedupe_seconds"])),
-            alert_cooldown_seconds=max(0.0, float(values["alert_cooldown_seconds"])),
+            rebirth_scan_interval_seconds=normalize_finite_float(
+                values["rebirth_scan_interval_seconds"],
+                minimum=2.0,
+                maximum=30.0,
+            ),
+            dedupe_seconds=normalize_finite_float(
+                values["dedupe_seconds"], minimum=0.0
+            ),
+            alert_cooldown_seconds=normalize_finite_float(
+                values["alert_cooldown_seconds"], minimum=0.0
+            ),
             validation_failures_before_calibration_prompt=max(
-                1, int(values["validation_failures_before_calibration_prompt"])
+                1,
+                int(
+                    normalize_finite_float(
+                        values["validation_failures_before_calibration_prompt"]
+                    )
+                ),
             ),
-            popup_seconds=max(0.5, float(values["popup_seconds"])),
-            popup_scale=min(1.5, max(0.7, float(values["popup_scale"]))),
-            popup_opacity=min(1.0, max(0.55, float(values["popup_opacity"]))),
-            retention_days=max(0, int(values["retention_days"])),
-            max_storage_mb=max(0, int(values["max_storage_mb"])),
-            timer_reminder_seconds=max(1, int(values["timer_reminder_seconds"])),
-            timer_offset_seconds=max(-3600, min(3600, int(values["timer_offset_seconds"]))),
+            popup_seconds=normalize_finite_float(
+                values["popup_seconds"],
+                minimum=0.5,
+                maximum=MAX_SAFE_DELAY_SECONDS,
+            ),
+            popup_scale=normalize_finite_float(
+                values["popup_scale"], minimum=0.7, maximum=1.5
+            ),
+            popup_opacity=normalize_finite_float(
+                values["popup_opacity"], minimum=0.55, maximum=1.0
+            ),
+            retention_days=max(
+                0, int(normalize_finite_float(values["retention_days"]))
+            ),
+            max_storage_mb=max(
+                0, int(normalize_finite_float(values["max_storage_mb"]))
+            ),
+            timer_reminder_seconds=max(
+                1, int(normalize_finite_float(values["timer_reminder_seconds"]))
+            ),
+            timer_offset_seconds=max(
+                -3600,
+                min(
+                    3600,
+                    int(normalize_finite_float(values["timer_offset_seconds"])),
+                ),
+            ),
         )
         idle_fps, active_fps = normalize_belt_scan_fps(
-            values["belt_idle_scan_fps"], values["belt_active_scan_fps"]
+            int(normalize_finite_float(values["belt_idle_scan_fps"])),
+            int(normalize_finite_float(values["belt_active_scan_fps"])),
         )
         normalized["belt_idle_scan_fps"] = idle_fps
         normalized["belt_active_scan_fps"] = active_fps
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, OverflowError, TypeError, ValueError) as exc:
         raise SettingsValidationError(f"Invalid numeric setting: {exc}") from exc
 
     for field, value in normalized.items():
@@ -92,7 +133,7 @@ def build_settings_update(
         "droid_timers_enabled", "save_alert_samples", "save_debug_screenshots",
         "ntfy_enabled", "discord_enabled", "phone_alerts_enabled",
         "ntfy_include_attachment", "phone_include_attachment", "update_check_enabled",
-        "extra_checks", "start_watcher_on_launch", "rebirth_alert_enabled",
+        "start_watcher_on_launch", "rebirth_alert_enabled",
         "cb23_mission_alert_enabled", "belt_overlay_enabled", "belt_dev_mode",
         "belt_template_collection_enabled", "advanced_mode",
     )

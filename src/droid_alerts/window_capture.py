@@ -3,24 +3,26 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import ntpath
+import os
 import sys
 import threading
 import time
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
 
-from .capture import MonitorInfo, PixelBox, list_monitors
+from .capture import MonitorInfo, PixelBox, _mss_instance, list_monitors
 
 
 WINDOW_CAPTURE_EXPLANATION = (
-    "If you select the Fortnite window, the tool keeps watch at all times, "
-    "even if something is covering it."
+    "Select the Fortnite window that Droid Alerts should watch."
 )
 
 _MAX_WINDOW_TEXT = 512
 _FRAME_WAIT_SECONDS = 5.0
 _CROP_REFRESH_SECONDS = 0.05
+_PLACEMENT_REFRESH_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -82,11 +84,8 @@ def _hwnd_value(hwnd: object) -> int:
     return int(getattr(hwnd, "value", hwnd) or 0)
 
 
-def list_capture_windows() -> list[WindowDescriptor]:
+def _list_windows_win32() -> list[WindowDescriptor]:
     """Return visible top-level windows that Windows Graphics Capture can target."""
-    if sys.platform != "win32":
-        return []
-
     from ctypes import wintypes
 
     user32 = ctypes.windll.user32
@@ -243,6 +242,215 @@ def list_capture_windows() -> list[WindowDescriptor]:
     return windows
 
 
+def window_capture_available() -> bool:
+    if sys.platform in {"win32", "darwin"}:
+        return True
+    if not sys.platform.startswith("linux"):
+        return False
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").strip().casefold()
+    return session_type != "wayland" and bool(os.environ.get("DISPLAY"))
+
+
+def window_capture_unavailable_reason() -> str:
+    if sys.platform.startswith("linux"):
+        session_type = os.environ.get("XDG_SESSION_TYPE", "").strip().casefold()
+        if session_type == "wayland":
+            return (
+                "Window selection is not available on Wayland yet. "
+                "Use a monitor or capture device."
+            )
+        if not os.environ.get("DISPLAY"):
+            return "Window selection requires an X11 desktop session."
+    return "Window capture is not available on this platform."
+
+
+def _list_windows_x11() -> list[WindowDescriptor]:
+    if not window_capture_available():
+        raise RuntimeError(window_capture_unavailable_reason())
+    try:
+        from Xlib import X
+        from Xlib.display import Display
+    except Exception as exc:
+        raise RuntimeError(
+            "X11 window support is missing. Run pip install -r requirements.txt."
+        ) from exc
+
+    display = Display()
+    try:
+        root = display.screen().root
+        client_list = root.get_full_property(
+            display.intern_atom("_NET_CLIENT_LIST_STACKING"),
+            X.AnyPropertyType,
+        )
+        if client_list is not None:
+            window_ids = [int(value) for value in client_list.value]
+        else:
+            window_ids = [int(window.id) for window in root.query_tree().children]
+        utf8 = display.intern_atom("UTF8_STRING")
+        name_atom = display.intern_atom("_NET_WM_NAME")
+        pid_atom = display.intern_atom("_NET_WM_PID")
+        current_process_id = os.getpid()
+        windows: list[WindowDescriptor] = []
+        for window_id in window_ids:
+            try:
+                window = display.create_resource_object("window", window_id)
+                attributes = window.get_attributes()
+                if attributes.map_state != X.IsViewable:
+                    continue
+                title_property = window.get_full_property(name_atom, utf8)
+                if title_property is not None:
+                    title = _clean_text(
+                        bytes(title_property.value).decode("utf-8", errors="replace")
+                    )
+                else:
+                    title = _clean_text(window.get_wm_name())
+                if not title:
+                    continue
+                pid_property = window.get_full_property(
+                    pid_atom,
+                    X.AnyPropertyType,
+                )
+                process_id = (
+                    int(pid_property.value[0])
+                    if pid_property is not None and len(pid_property.value)
+                    else 0
+                )
+                if process_id == current_process_id:
+                    continue
+                wm_class = window.get_wm_class() or ()
+                class_name = _clean_text(" ".join(str(value) for value in wm_class))
+                process_name = ""
+                if process_id:
+                    try:
+                        process_path = os.path.join(
+                            "/proc",
+                            str(process_id),
+                            "comm",
+                        )
+                        with open(
+                            process_path,
+                            "r",
+                            encoding="utf-8",
+                            errors="replace",
+                        ) as handle:
+                            process_name = _clean_text(handle.read())
+                    except OSError:
+                        process_name = ""
+                if not process_name and wm_class:
+                    process_name = _clean_text(wm_class[-1])
+                geometry = window.get_geometry()
+                position = window.translate_coords(root, 0, 0)
+                width = int(geometry.width)
+                height = int(geometry.height)
+                if width < 160 or height < 120:
+                    continue
+                windows.append(
+                    WindowDescriptor(
+                        hwnd=window_id,
+                        title=title,
+                        process_name=process_name,
+                        class_name=class_name,
+                        process_id=process_id,
+                        left=int(position.x),
+                        top=int(position.y),
+                        width=width,
+                        height=height,
+                    )
+                )
+            except Exception:
+                continue
+    finally:
+        display.close()
+    windows.sort(
+        key=lambda item: (
+            not item.is_fortnite,
+            item.title.casefold(),
+            item.process_name.casefold(),
+        )
+    )
+    return windows
+
+
+def _list_windows_macos() -> list[WindowDescriptor]:
+    try:
+        import AppKit
+        import Quartz
+    except Exception as exc:
+        raise RuntimeError(
+            "macOS window support is missing. Run pip install -r requirements.txt."
+        ) from exc
+
+    options = (
+        Quartz.kCGWindowListOptionOnScreenOnly
+        | Quartz.kCGWindowListExcludeDesktopElements
+    )
+    records = Quartz.CGWindowListCopyWindowInfo(
+        options,
+        Quartz.kCGNullWindowID,
+    )
+    current_process_id = os.getpid()
+    windows: list[WindowDescriptor] = []
+    for record in records or ():
+        try:
+            process_id = int(record.get(Quartz.kCGWindowOwnerPID, 0))
+            if not process_id or process_id == current_process_id:
+                continue
+            if int(record.get(Quartz.kCGWindowLayer, 0)) != 0:
+                continue
+            title = _clean_text(record.get(Quartz.kCGWindowName))
+            owner = _clean_text(record.get(Quartz.kCGWindowOwnerName))
+            if not title:
+                title = owner
+            if not title:
+                continue
+            bounds = record.get(Quartz.kCGWindowBounds) or {}
+            width = int(round(float(bounds.get("Width", 0))))
+            height = int(round(float(bounds.get("Height", 0))))
+            if width < 160 or height < 120:
+                continue
+            application = AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(
+                process_id
+            )
+            bundle_id = (
+                _clean_text(application.bundleIdentifier())
+                if application is not None
+                else ""
+            )
+            windows.append(
+                WindowDescriptor(
+                    hwnd=int(record.get(Quartz.kCGWindowNumber, 0)),
+                    title=title,
+                    process_name=owner,
+                    class_name=bundle_id,
+                    process_id=process_id,
+                    left=int(round(float(bounds.get("X", 0)))),
+                    top=int(round(float(bounds.get("Y", 0)))),
+                    width=width,
+                    height=height,
+                )
+            )
+        except Exception:
+            continue
+    windows.sort(
+        key=lambda item: (
+            not item.is_fortnite,
+            item.title.casefold(),
+            item.process_name.casefold(),
+        )
+    )
+    return windows
+
+
+def list_capture_windows() -> list[WindowDescriptor]:
+    if sys.platform == "win32":
+        return _list_windows_win32()
+    if sys.platform == "darwin":
+        return _list_windows_macos()
+    if sys.platform.startswith("linux"):
+        return _list_windows_x11()
+    return []
+
+
 def resolve_capture_window(
     *,
     title: str,
@@ -340,6 +548,416 @@ def _physical_monitor_for_window(
     )
 
 
+def _refresh_window_capture_placement(capture, now: float | None = None) -> None:
+    """Refresh desktop placement without disturbing capture-surface dimensions."""
+
+    current = time.monotonic() if now is None else now
+    last = float(getattr(capture, "_last_placement_refresh_at", 0.0))
+    if current - last < _PLACEMENT_REFRESH_SECONDS:
+        return
+    capture._last_placement_refresh_at = current
+    try:
+        live = next(
+            window
+            for window in list_capture_windows()
+            if window.hwnd == capture.window.hwnd
+        )
+    except Exception:
+        return
+    capture.window = live
+    capture.capture_area.left = live.left
+    capture.capture_area.top = live.top
+    capture.monitor = _physical_monitor_for_window(
+        live,
+        capture.monitor.index,
+    )
+    capture.capture_area.index = capture.monitor.index
+
+
+class X11WindowCapture:
+    """Capture one X11 window, using its backing pixels when available."""
+
+    def __init__(
+        self,
+        *,
+        title: str,
+        process_name: str,
+        class_name: str,
+        monitor_index: int = 1,
+    ) -> None:
+        if not sys.platform.startswith("linux") or not window_capture_available():
+            raise RuntimeError(window_capture_unavailable_reason())
+        try:
+            from Xlib.display import Display
+        except Exception as exc:
+            raise RuntimeError(
+                "X11 window support is missing. Run pip install -r requirements.txt."
+            ) from exc
+
+        self.window = resolve_capture_window(
+            title=title,
+            process_name=process_name,
+            class_name=class_name,
+        )
+        self.monitor = _physical_monitor_for_window(self.window, monitor_index)
+        self.capture_area = MonitorInfo(
+            left=self.window.left,
+            top=self.window.top,
+            width=self.window.width,
+            height=self.window.height,
+            index=self.monitor.index,
+            key=window_capture_key(
+                title=self.window.title,
+                process_name=self.window.process_name,
+                class_name=self.window.class_name,
+            ),
+            name=self.window.title,
+        )
+        self._display = Display()
+        self._native_window = self._display.create_resource_object(
+            "window",
+            self.window.hwnd,
+        )
+        self._mss = _mss_instance()
+        self._closed = False
+        self._last_placement_refresh_at = 0.0
+        self._refresh_geometry()
+
+    def _refresh_geometry(self) -> tuple[int, int, int, int]:
+        if self._closed:
+            raise RuntimeError("The selected window was closed.")
+        try:
+            root = self._display.screen().root
+            geometry = self._native_window.get_geometry()
+            position = self._native_window.translate_coords(root, 0, 0)
+            left = int(position.x)
+            top = int(position.y)
+            width = int(geometry.width)
+            height = int(geometry.height)
+        except Exception as exc:
+            raise RuntimeError("The selected X11 window was closed.") from exc
+        if width <= 0 or height <= 0:
+            raise RuntimeError("The selected X11 window has no visible area.")
+        self.capture_area.left = left
+        self.capture_area.top = top
+        self.capture_area.width = width
+        self.capture_area.height = height
+        self.window = WindowDescriptor(
+            hwnd=self.window.hwnd,
+            title=self.window.title,
+            process_name=self.window.process_name,
+            class_name=self.window.class_name,
+            process_id=self.window.process_id,
+            left=left,
+            top=top,
+            width=width,
+            height=height,
+        )
+        now = time.monotonic()
+        if now - self._last_placement_refresh_at >= _PLACEMENT_REFRESH_SECONDS:
+            self._last_placement_refresh_at = now
+            self.monitor = _physical_monitor_for_window(
+                self.window,
+                self.monitor.index,
+            )
+            self.capture_area.index = self.monitor.index
+        return left, top, width, height
+
+    def screen_size(self) -> tuple[int, int]:
+        _left, _top, width, height = self._refresh_geometry()
+        return width, height
+
+    def _grab_window_pixels(self, box: PixelBox) -> np.ndarray | None:
+        try:
+            from Xlib import X
+
+            image = self._native_window.get_image(
+                box.left,
+                box.top,
+                box.width,
+                box.height,
+                X.ZPixmap,
+                0xFFFFFFFF,
+            )
+            if image is None or not image.data:
+                return None
+            payload = np.frombuffer(image.data, dtype=np.uint8)
+            row_bytes = payload.size // box.height
+            channels = 4 if row_bytes >= box.width * 4 else 3
+            if row_bytes < box.width * channels:
+                return None
+            rows = payload[: row_bytes * box.height].reshape(
+                box.height,
+                row_bytes,
+            )
+            pixels = rows[:, : box.width * channels].reshape(
+                box.height,
+                box.width,
+                channels,
+            )
+            return np.ascontiguousarray(pixels[:, :, :3])
+        except Exception:
+            return None
+
+    def grab(self, box: PixelBox) -> np.ndarray:
+        left, top, width, height = self._refresh_geometry()
+        crop_left = max(0, min(width, box.left))
+        crop_top = max(0, min(height, box.top))
+        crop_right = max(crop_left, min(width, box.right))
+        crop_bottom = max(crop_top, min(height, box.bottom))
+        if crop_right <= crop_left or crop_bottom <= crop_top:
+            raise RuntimeError("The selected region is outside the captured window.")
+        crop = PixelBox(
+            crop_left,
+            crop_top,
+            crop_right - crop_left,
+            crop_bottom - crop_top,
+        )
+        window_pixels = self._grab_window_pixels(crop)
+        if window_pixels is not None:
+            return window_pixels
+        shot = self._mss.grab(
+            {
+                "left": left + crop.left,
+                "top": top + crop.top,
+                "width": crop.width,
+                "height": crop.height,
+            }
+        )
+        return cv2.cvtColor(np.asarray(shot), cv2.COLOR_BGRA2BGR)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._mss.close()
+        finally:
+            self._display.close()
+
+
+def _cgimage_to_bgr(image) -> np.ndarray:
+    try:
+        import Quartz
+    except Exception as exc:
+        raise RuntimeError(
+            "macOS window support is missing. Run pip install -r requirements.txt."
+        ) from exc
+
+    width = int(Quartz.CGImageGetWidth(image))
+    height = int(Quartz.CGImageGetHeight(image))
+    row_bytes = int(Quartz.CGImageGetBytesPerRow(image))
+    provider = Quartz.CGImageGetDataProvider(image)
+    payload = bytes(Quartz.CGDataProviderCopyData(provider))
+    if width <= 0 or height <= 0 or row_bytes < width * 4:
+        raise RuntimeError("macOS returned an unsupported window image.")
+    rows = np.frombuffer(payload, dtype=np.uint8).reshape(height, row_bytes)
+    bgra = rows[:, : width * 4].reshape(height, width, 4)
+    return np.ascontiguousarray(bgra[:, :, :3])
+
+
+def _macos_screencapturekit_source(window_id: int):
+    import ScreenCaptureKit
+
+    content_result: dict[str, object] = {}
+    content_ready = threading.Event()
+
+    def content_handler(content, error) -> None:
+        content_result["content"] = content
+        content_result["error"] = error
+        content_ready.set()
+
+    ScreenCaptureKit.SCShareableContent.getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler_(
+        True,
+        True,
+        content_handler,
+    )
+    if not content_ready.wait(_FRAME_WAIT_SECONDS):
+        raise RuntimeError("macOS timed out while listing capture windows.")
+    error = content_result.get("error")
+    if error is not None:
+        raise RuntimeError(f"macOS could not list capture windows: {error}")
+    content = content_result.get("content")
+    windows = content.windows() if content is not None else ()
+    selected = next(
+        (
+            window
+            for window in windows
+            if int(window.windowID()) == int(window_id)
+        ),
+        None,
+    )
+    if selected is None:
+        raise RuntimeError("The selected macOS window was closed.")
+
+    content_filter = (
+        ScreenCaptureKit.SCContentFilter.alloc()
+        .initWithDesktopIndependentWindow_(selected)
+    )
+    configuration = ScreenCaptureKit.SCStreamConfiguration.alloc().init()
+    frame = selected.frame()
+    configuration.setWidth_(max(1, round(float(frame.size.width) * 2)))
+    configuration.setHeight_(max(1, round(float(frame.size.height) * 2)))
+    configuration.setShowsCursor_(False)
+    return ScreenCaptureKit, content_filter, configuration
+
+
+def _macos_screencapturekit_image(
+    window_id: int,
+    source=None,
+) -> np.ndarray:
+    ScreenCaptureKit, content_filter, configuration = (
+        source or _macos_screencapturekit_source(window_id)
+    )
+
+    image_result: dict[str, object] = {}
+    image_ready = threading.Event()
+
+    def image_handler(image, error) -> None:
+        image_result["image"] = image
+        image_result["error"] = error
+        image_ready.set()
+
+    ScreenCaptureKit.SCScreenshotManager.captureImageWithFilter_configuration_completionHandler_(
+        content_filter,
+        configuration,
+        image_handler,
+    )
+    if not image_ready.wait(_FRAME_WAIT_SECONDS):
+        raise RuntimeError("macOS timed out while capturing the selected window.")
+    error = image_result.get("error")
+    if error is not None:
+        raise RuntimeError(f"macOS could not capture the selected window: {error}")
+    image = image_result.get("image")
+    if image is None:
+        raise RuntimeError("macOS returned no image for the selected window.")
+    return _cgimage_to_bgr(image)
+
+
+def _macos_window_image(window_id: int) -> np.ndarray:
+    try:
+        import ScreenCaptureKit
+
+        screenshot_manager = getattr(
+            ScreenCaptureKit,
+            "SCScreenshotManager",
+            None,
+        )
+    except Exception:
+        screenshot_manager = None
+    if screenshot_manager is not None:
+        return _macos_screencapturekit_image(window_id)
+
+    try:
+        import Quartz
+    except Exception as exc:
+        raise RuntimeError(
+            "macOS window support is missing. Run pip install -r requirements.txt."
+        ) from exc
+    image = Quartz.CGWindowListCreateImage(
+        Quartz.CGRectNull,
+        Quartz.kCGWindowListOptionIncludingWindow,
+        int(window_id),
+        (
+            Quartz.kCGWindowImageBoundsIgnoreFraming
+            | Quartz.kCGWindowImageBestResolution
+        ),
+    )
+    if image is None:
+        raise RuntimeError(
+            "macOS could not capture the selected window. Allow Screen Recording "
+            "access and keep the window open."
+        )
+    return _cgimage_to_bgr(image)
+
+
+class MacOSWindowCapture:
+    """Capture one macOS window through ScreenCaptureKit."""
+
+    def __init__(
+        self,
+        *,
+        title: str,
+        process_name: str,
+        class_name: str,
+        monitor_index: int = 1,
+    ) -> None:
+        if sys.platform != "darwin":
+            raise RuntimeError("This window backend is only available on macOS.")
+        self.window = resolve_capture_window(
+            title=title,
+            process_name=process_name,
+            class_name=class_name,
+        )
+        self.monitor = _physical_monitor_for_window(self.window, monitor_index)
+        self.capture_area = MonitorInfo(
+            left=self.window.left,
+            top=self.window.top,
+            width=self.window.width,
+            height=self.window.height,
+            index=self.monitor.index,
+            key=window_capture_key(
+                title=self.window.title,
+                process_name=self.window.process_name,
+                class_name=self.window.class_name,
+            ),
+            name=self.window.title,
+        )
+        self._closed = False
+        self._last_placement_refresh_at = 0.0
+        self._screencapturekit_source = None
+        try:
+            import ScreenCaptureKit
+
+            if getattr(ScreenCaptureKit, "SCScreenshotManager", None) is not None:
+                self._screencapturekit_source = (
+                    _macos_screencapturekit_source(self.window.hwnd)
+                )
+        except Exception:
+            self._screencapturekit_source = None
+        self._latest_frame = self._capture_frame()
+        self._update_size(self._latest_frame)
+
+    def _capture_frame(self) -> np.ndarray:
+        _refresh_window_capture_placement(self)
+        if self._screencapturekit_source is not None:
+            return _macos_screencapturekit_image(
+                self.window.hwnd,
+                self._screencapturekit_source,
+            )
+        return _macos_window_image(self.window.hwnd)
+
+    def _update_size(self, frame: np.ndarray) -> None:
+        height, width = frame.shape[:2]
+        self.capture_area.width = width
+        self.capture_area.height = height
+
+    def screen_size(self) -> tuple[int, int]:
+        if self._closed:
+            raise RuntimeError("The selected window was closed.")
+        return self.capture_area.width, self.capture_area.height
+
+    def grab(self, box: PixelBox) -> np.ndarray:
+        if self._closed:
+            raise RuntimeError("The selected window was closed.")
+        frame = self._capture_frame()
+        self._latest_frame = frame
+        self._update_size(frame)
+        height, width = frame.shape[:2]
+        left = max(0, min(width, box.left))
+        top = max(0, min(height, box.top))
+        right = max(left, min(width, box.right))
+        bottom = max(top, min(height, box.bottom))
+        if right <= left or bottom <= top:
+            raise RuntimeError("The selected region is outside the captured window.")
+        return frame[top:bottom, left:right].copy()
+
+    def close(self) -> None:
+        self._closed = True
+        self._latest_frame = None
+        self._screencapturekit_source = None
+
+
 class WindowsGraphicsCapture:
     """Capture one HWND through Windows Graphics Capture.
 
@@ -395,6 +1013,7 @@ class WindowsGraphicsCapture:
         self._crop_sequence = 0
         self._returned_sequence = 0
         self._last_crop_at = 0.0
+        self._last_placement_refresh_at = 0.0
         self._closed = False
         self._error = ""
 
@@ -434,6 +1053,7 @@ class WindowsGraphicsCapture:
             if width <= 0 or height <= 0:
                 return
             now = time.monotonic()
+            _refresh_window_capture_placement(self, now)
             with self._condition:
                 size_changed = self._capture_size != (width, height)
                 self._capture_size = (width, height)
@@ -539,3 +1159,26 @@ class WindowsGraphicsCapture:
             self._capture_control.stop()
         except Exception:
             pass
+
+
+def create_window_capture(
+    *,
+    title: str,
+    process_name: str,
+    class_name: str,
+    monitor_index: int = 1,
+):
+    capture_type = {
+        "win32": WindowsGraphicsCapture,
+        "darwin": MacOSWindowCapture,
+    }.get(sys.platform)
+    if capture_type is None and sys.platform.startswith("linux"):
+        capture_type = X11WindowCapture
+    if capture_type is None:
+        raise RuntimeError(window_capture_unavailable_reason())
+    return capture_type(
+        title=title,
+        process_name=process_name,
+        class_name=class_name,
+        monitor_index=monitor_index,
+    )

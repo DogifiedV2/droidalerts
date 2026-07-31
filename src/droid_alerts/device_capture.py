@@ -56,8 +56,6 @@ def device_capture_key(*, name: str, path: str, vid: int | None, pid: int | None
 
 
 def _enumerated_devices() -> list[CaptureDeviceDescriptor]:
-    if sys.platform != "win32":
-        return []
     try:
         from cv2_enumerate_cameras import enumerate_cameras
     except Exception as exc:
@@ -66,9 +64,18 @@ def _enumerated_devices() -> list[CaptureDeviceDescriptor]:
             "pip install -r requirements.txt."
         ) from exc
 
+    if sys.platform == "win32":
+        backends = (cv2.CAP_MSMF, cv2.CAP_DSHOW)
+    elif sys.platform == "darwin":
+        backends = (cv2.CAP_AVFOUNDATION,)
+    elif sys.platform.startswith("linux"):
+        backends = (cv2.CAP_V4L2, cv2.CAP_GSTREAMER)
+    else:
+        return []
+
     devices: list[CaptureDeviceDescriptor] = []
     errors: list[str] = []
-    for backend in (cv2.CAP_MSMF, cv2.CAP_DSHOW):
+    for backend in backends:
         try:
             cameras = enumerate_cameras(backend)
         except Exception as exc:
@@ -86,7 +93,7 @@ def _enumerated_devices() -> list[CaptureDeviceDescriptor]:
                 )
             )
     if not devices and errors:
-        raise RuntimeError(f"Windows could not list video capture devices: {errors[0]}")
+        raise RuntimeError(f"Video capture devices could not be listed: {errors[0]}")
     return devices
 
 
@@ -100,7 +107,7 @@ def _identity(device: CaptureDeviceDescriptor) -> tuple[object, ...]:
 
 
 def list_capture_devices() -> list[CaptureDeviceDescriptor]:
-    """List each Windows video device once, preferring Media Foundation."""
+    """List each video device once, preferring the native platform backend."""
     result: list[CaptureDeviceDescriptor] = []
     seen: set[tuple[object, ...]] = set()
     for device in _enumerated_devices():
@@ -110,6 +117,19 @@ def list_capture_devices() -> list[CaptureDeviceDescriptor]:
         seen.add(identity)
         result.append(device)
     return sorted(result, key=lambda item: item.name.casefold())
+
+
+def _backend_priority(backend: int) -> int:
+    if sys.platform == "win32":
+        order = (cv2.CAP_MSMF, cv2.CAP_DSHOW)
+    elif sys.platform == "darwin":
+        order = (cv2.CAP_AVFOUNDATION,)
+    else:
+        order = (cv2.CAP_V4L2, cv2.CAP_GSTREAMER)
+    try:
+        return order.index(backend)
+    except ValueError:
+        return len(order)
 
 
 def resolve_capture_devices(
@@ -163,7 +183,7 @@ def resolve_capture_devices(
         matches,
         key=lambda item: (
             item.backend != preferred_backend,
-            item.backend != cv2.CAP_MSMF,
+            _backend_priority(item.backend),
             item.index,
         ),
     )

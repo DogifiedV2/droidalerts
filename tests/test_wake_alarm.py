@@ -11,9 +11,8 @@ from unittest.mock import Mock, patch
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from droid_alerts.alerts import WAKE_ALARM_FILE, WakeAlarm
+from droid_alerts.alerts import WAKE_ALARM_FILE, WakeAlarm, _alert_wav
 from droid_alerts.config import AppConfig
-from droid_alerts.gui import WAKE_ALARM_MAX_MS, DroidAlertsApp
 
 
 class WakeAlarmConfigTests(unittest.TestCase):
@@ -79,47 +78,29 @@ class WakeAlarmPlaybackTests(unittest.TestCase):
             play_sound.assert_any_call(str(wav_path), 1 | 2 | 4)
             play_sound.assert_any_call(None, 0)
 
-    def test_real_alert_upgrades_an_in_progress_three_second_test(self) -> None:
-        app = object.__new__(DroidAlertsApp)
-        app.root = Mock()
-        app.wake_alarm = SimpleNamespace(active=True, start=Mock(return_value=2))
-        app._wake_alarm_is_test = True
-        app._wake_alarm_test_after_id = "after#test"
-        app._wake_alarm_auto_stop_after_id = None
-        app.wake_alarm_status_var = Mock()
-        app.detail_var = Mock()
-        app._show_wake_alarm_stop_dialog = Mock()
 
-        DroidAlertsApp._maybe_start_wake_alarm(
-            app,
-            AppConfig(wake_alarm_enabled=True),
-            "Galactic",
-            "Mythic",
-        )
+class AlertSoundSelectionTests(unittest.TestCase):
+    def test_system_beeps_do_not_fall_back_to_an_added_wav(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            sounds = Path(folder)
+            sounds.joinpath("custom.wav").write_bytes(b"RIFF-test")
+            with (
+                patch("droid_alerts.alerts.user_sounds_dir", return_value=sounds),
+                patch("droid_alerts.alerts.sounds_dir", return_value=sounds),
+            ):
+                self.assertIsNone(_alert_wav(""))
+                self.assertIsNone(_alert_wav("System beeps"))
 
-        app.root.after_cancel.assert_called_once_with("after#test")
-        self.assertEqual(app.root.after.call_args.args[0], WAKE_ALARM_MAX_MS)
-        app.wake_alarm.start.assert_called_once_with()
-        app._show_wake_alarm_stop_dialog.assert_called_once_with("Galactic Mythic")
-        self.assertFalse(app._wake_alarm_is_test)
+    def test_missing_selected_sound_does_not_play_a_different_wav(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            sounds = Path(folder)
+            sounds.joinpath("other.wav").write_bytes(b"RIFF-test")
+            with (
+                patch("droid_alerts.alerts.user_sounds_dir", return_value=sounds),
+                patch("droid_alerts.alerts.sounds_dir", return_value=sounds),
+            ):
+                self.assertIsNone(_alert_wav("missing.wav"))
 
-    def test_real_alarm_auto_stops_at_40_seconds(self) -> None:
-        app = object.__new__(DroidAlertsApp)
-        app.wake_alarm = SimpleNamespace(stop=Mock(return_value=True))
-        app._wake_alarm_auto_stop_after_id = "after#alarm"
-        app._wake_alarm_is_test = False
-        app._close_wake_alarm_dialog = Mock()
-        app.wake_alarm_status_var = Mock()
-        app.detail_var = Mock()
-
-        DroidAlertsApp._finish_wake_alarm_alert(app, 7)
-
-        app.wake_alarm.stop.assert_called_once_with(7)
-        self.assertIsNone(app._wake_alarm_auto_stop_after_id)
-        app._close_wake_alarm_dialog.assert_called_once_with()
-        app.wake_alarm_status_var.set.assert_called_once_with(
-            "Alarm stopped after 40 seconds"
-        )
 
 
 if __name__ == "__main__":

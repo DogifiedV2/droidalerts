@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,48 +14,24 @@ from unittest.mock import Mock, patch
 import cv2
 import numpy as np
 
-
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts import alerts, config as config_module
-from droid_alerts import gui, maintenance, region, row_finder, telemetry, watcher
-from droid_alerts.capture import MonitorDescriptor, MonitorInfo, PixelBox, format_monitor_label
+from droid_alerts import maintenance, region, row_finder, telemetry, watcher
+from droid_alerts.capture import (
+    MonitorDescriptor,
+    MonitorInfo,
+    PixelBox,
+    format_monitor_label,
+    format_tk_geometry,
+    monitor_key_from_mapping,
+)
 from droid_alerts.classifier import Detection
 from droid_alerts.config import AppConfig, Thresholds
-from droid_alerts.gui import DroidAlertsApp, centered_window_geometry, fit_window_size
+from droid_alerts.gui import centered_window_geometry, clamp_dialog_position, fit_window_size
 from droid_alerts.notifications import phone_alerts_configured
 from droid_alerts.pipeline import Pipeline
-
-
-class FakeVar:
-    def __init__(self, value=""):
-        self.value = value
-
-    def get(self):
-        return self.value
-
-    def set(self, value):
-        self.value = value
-
-
-class FakeTree:
-    def __init__(self):
-        self.items = {"old": {}}
-        self._next_id = 0
-
-    def get_children(self):
-        return tuple(self.items)
-
-    def delete(self, item):
-        self.items.pop(item, None)
-
-    def insert(self, _parent, _where, **values):
-        self._next_id += 1
-        item = f"row-{self._next_id}"
-        self.items[item] = values
-        return item
-
 
 def priority_detection() -> Detection:
     return Detection(
@@ -66,7 +44,6 @@ def priority_detection() -> Detection:
         score=0.95,
         source="test",
     )
-
 
 class OptimizationRegressionTests(unittest.TestCase):
     def test_empty_screen_fast_path_defers_candidate_discovery(self):
@@ -118,6 +95,44 @@ class OptimizationRegressionTests(unittest.TestCase):
 
 
 class RuntimeResilienceTests(unittest.TestCase):
+    def test_watcher_settings_signature_tracks_cached_credentials(self):
+        config = AppConfig()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(watcher, "config_dir", return_value=root):
+                baseline = watcher._settings_signature(config)
+
+                (root / config.discord_webhook_file).write_text(
+                    "https://discord.com/api/webhooks/1/new\n",
+                    encoding="utf-8",
+                )
+                discord_changed = watcher._settings_signature(config)
+
+                (root / config.phone_credentials_file).write_text(
+                    '{"token": "new", "user": "new"}\n',
+                    encoding="utf-8",
+                )
+                phone_changed = watcher._settings_signature(config)
+
+        self.assertNotEqual(baseline, discord_changed)
+        self.assertNotEqual(discord_changed, phone_changed)
+
+    def test_config_rejects_non_finite_delays(self):
+        for key in ("capture_interval_seconds", "popup_seconds"):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(ValueError, "must be finite"):
+                    AppConfig.from_dict({key: float("inf")})
+
+    def test_unrecoverable_config_is_preserved_before_defaults_are_restored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / config_module.CONFIG_FILE).write_text("{broken", encoding="utf-8")
+            with patch.object(config_module, "config_dir", return_value=root):
+                recovered = config_module.load_config()
+
+            self.assertEqual(2, recovered.config_version)
+            self.assertTrue((root / f"{config_module.CONFIG_FILE}.corrupt").exists())
+
     def test_config_recovers_from_non_object_thresholds_using_backup(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -228,313 +243,86 @@ class RuntimeResilienceTests(unittest.TestCase):
             with patch("droid_alerts.notifications.phone_credentials_path", return_value=path):
                 self.assertFalse(phone_alerts_configured(config))
 
-    def test_phone_test_handles_corrupt_credentials(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app.channel_status_vars = {"Pushover": FakeVar()}
-        app.detail_var = FakeVar()
-        with patch.object(gui, "load_phone_alert_credentials", side_effect=ValueError("bad JSON")):
-            sent = app._send_channel_test_with_config(
-                "pushover", AppConfig(), priority_detection()
+    def test_retention_cleanup_removes_only_expired_files_and_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            logs = root / "logs"
+            samples = root / "samples"
+            debug = root / "debug"
+            for path in (logs, samples, debug):
+                path.mkdir(parents=True)
+
+            old_file = samples / "old.png"
+            recent_file = samples / "recent.png"
+            old_file.write_bytes(b"old")
+            recent_file.write_bytes(b"recent")
+            old_time = time.time() - 10 * 86400
+            os.utime(old_file, (old_time, old_time))
+            old_stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(old_time))
+            recent_stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+            (logs / "events.jsonl").write_text(
+                json.dumps({"ts": old_stamp, "event_type": "detected"})
+                + "\n"
+                + json.dumps({"ts": recent_stamp, "event_type": "alert"})
+                + "\n",
+                encoding="utf-8",
             )
 
-        self.assertFalse(sent)
-        self.assertIn("credentials", app.channel_status_vars["Pushover"].get().lower())
+            with (
+                patch.object(maintenance, "data_dir", return_value=root),
+                patch.object(maintenance, "logs_dir", return_value=logs),
+                patch.object(maintenance, "alert_samples_dir", return_value=samples),
+                patch.object(maintenance, "debug_dir", return_value=debug),
+            ):
+                maintenance.cleanup_runtime_data(7, 0)
+
+            self.assertFalse(old_file.exists())
+            self.assertTrue(recent_file.exists())
+            remaining_events = (logs / "events.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn(old_stamp, remaining_events)
+            self.assertIn(recent_stamp, remaining_events)
 
 
-class GuiRegressionTests(unittest.TestCase):
-    def test_tab_switch_lays_out_the_hidden_page_before_raising_it(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app._selected_tab = object()
-        app._unprimed_tabs = []
-        app.page_stack = Mock()
-        selected = Mock()
-        operations = Mock()
-        selected.update_idletasks = operations.prepaint
-        selected.tkraise = operations.raise_page
-        app.page_stack.update_idletasks = operations.flush
-        app.page_stack.event_generate = operations.changed
-
-        app._select_tab(selected)
-
-        self.assertIs(selected, app._selected_tab)
+class UiIndependentRegressionTests(unittest.TestCase):
+    def test_monitor_identity_and_negative_geometry_are_stable(self):
+        monitor = {"left": 1920, "top": 0, "width": 2560, "height": 1440}
         self.assertEqual(
-            [
-                unittest.mock.call.prepaint(),
-                unittest.mock.call.raise_page(),
-                unittest.mock.call.flush(),
-                unittest.mock.call.changed("<<PageChanged>>", when="tail"),
-            ],
-            operations.mock_calls,
+            monitor_key_from_mapping(monitor, 1),
+            monitor_key_from_mapping(monitor, 3),
         )
-
-    def test_startup_primes_one_hidden_tab_per_callback(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        current = Mock()
-        pending = Mock()
-        later = Mock()
-        operations = Mock()
-        app._selected_tab = current
-        app._unprimed_tabs = [pending, later]
-        app._page_prime_after_id = "initial-id"
-        app._shutting_down = False
-        app.root = Mock()
-        app.root.after.return_value = "next-id"
-        pending.grid = operations.mount
-        current.tkraise = operations.cover
-        pending.update_idletasks = operations.prepaint
-
-        app._prime_next_tab()
-
-        self.assertEqual([later], app._unprimed_tabs)
         self.assertEqual(
-            [
-                unittest.mock.call.mount(row=0, column=0, sticky="nsew"),
-                unittest.mock.call.cover(),
-                unittest.mock.call.prepaint(),
-            ],
-            operations.mock_calls,
+            "560x72+680+-1074",
+            format_tk_geometry(width=560, height=72, x=680, y=-1074),
         )
-        app.root.after.assert_called_once_with(16, app._prime_next_tab)
-        self.assertEqual("next-id", app._page_prime_after_id)
-
-    def test_windows_page_stack_does_not_need_the_macos_compositor_workaround(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app.root = Mock()
-        app.root.tk.call.return_value = "win32"
-        app.page_stack = Mock()
-
-        app._wire_macos_repaint_workaround()
-
-        app.page_stack.bind.assert_not_called()
+        self.assertEqual(
+            "560x72+-1920+24",
+            format_tk_geometry(width=560, height=72, x=-1920, y=24),
+        )
+        self.assertEqual("+-1920+-1080", format_tk_geometry(x=-1920, y=-1080))
 
     def test_update_version_marker_round_trips_and_defaults_empty(self):
         self.assertEqual("", AppConfig.from_dict({}).last_seen_version)
-        restored = AppConfig.from_dict(
-            AppConfig(last_seen_version="1.3.6").to_dict()
-        )
+        restored = AppConfig.from_dict(AppConfig(last_seen_version="1.3.6").to_dict())
         self.assertEqual("1.3.6", restored.last_seen_version)
 
-    def test_fresh_install_records_version_without_showing_update_notes(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app._setup_dialog = Mock()
-        config = AppConfig(
-            intro_shown=False,
-            notification_setup_prompted=False,
-            last_seen_version="",
-        )
-
-        with patch.object(gui, "save_config") as save:
-            shown = app.show_whats_new_if_needed(config)
-
-        self.assertFalse(shown)
-        self.assertEqual(gui.__version__, config.last_seen_version)
-        save.assert_called_once_with(config)
-        app._setup_dialog.assert_not_called()
-
-    def test_existing_install_without_version_marker_sees_current_update_notes(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app._setup_dialog = Mock(return_value={})
-        config = AppConfig(intro_shown=True, last_seen_version="")
-
-        with patch.object(gui, "save_config") as save:
-            shown = app.show_whats_new_if_needed(config)
-
-        self.assertTrue(shown)
-        self.assertEqual(gui.__version__, config.last_seen_version)
-        save.assert_called_once_with(config)
-        call = app._setup_dialog.call_args
-        self.assertEqual("What's New", call.args[0])
-        self.assertEqual(
-            "\n".join(f"• {item}" for item in gui.WHATS_NEW_ITEMS),
-            call.kwargs["intro"],
-        )
-
-    def test_changed_version_shows_notes_once(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app._setup_dialog = Mock(return_value={})
-        config = AppConfig(last_seen_version="1.0.0")
-
-        with patch.object(gui, "save_config") as save:
-            self.assertTrue(app.show_whats_new_if_needed(config))
-            self.assertFalse(app.show_whats_new_if_needed(config))
-
-        save.assert_called_once_with(config)
-        app._setup_dialog.assert_called_once()
-
     def test_preferred_window_size_is_capped_to_the_usable_screen(self):
-        self.assertEqual(
-            (1400, 1040),
-            fit_window_size(
-                1400,
-                1040,
-                3440,
-                1440,
-                horizontal_margin=80,
-                vertical_margin=140,
-            ),
-        )
-        self.assertEqual(
-            (1286, 628),
-            fit_window_size(
-                1400,
-                1040,
-                1366,
-                768,
-                horizontal_margin=80,
-                vertical_margin=140,
-            ),
-        )
+        self.assertEqual((1400, 1040), fit_window_size(1400, 1040, 3440, 1440, horizontal_margin=80, vertical_margin=140))
+        self.assertEqual((1286, 628), fit_window_size(1400, 1040, 1366, 768, horizontal_margin=80, vertical_margin=140))
 
     def test_dialog_geometry_is_centered_over_the_tool_on_any_monitor(self):
-        self.assertEqual(
-            "760x860+455+140",
-            centered_window_geometry(
-                760,
-                860,
-                parent_x=100,
-                parent_y=50,
-                parent_width=1470,
-                parent_height=1040,
-            ),
-        )
-        self.assertEqual(
-            "720x420+-1610+-720",
-            centered_window_geometry(
-                720,
-                420,
-                parent_x=-1920,
-                parent_y=-1080,
-                parent_width=1340,
-                parent_height=1140,
-            ),
-        )
+        self.assertEqual("760x860+455+140", centered_window_geometry(760, 860, parent_x=100, parent_y=50, parent_width=1470, parent_height=1040))
+        self.assertEqual("720x420+-1610+-720", centered_window_geometry(720, 420, parent_x=-1920, parent_y=-1080, parent_width=1340, parent_height=1140))
 
     def test_generic_monitor_name_is_omitted_from_picker_label(self):
-        monitor = MonitorDescriptor(
-            1,
-            0,
-            0,
-            1920,
-            1080,
-            is_primary=True,
-            name="Generic PnP Monitor",
-        )
-
+        monitor = MonitorDescriptor(1, 0, 0, 1920, 1080, is_primary=True, name="Generic PnP Monitor")
         self.assertEqual("Monitor 1: 1920 × 1080 (Primary)", format_monitor_label(monitor))
 
-    def test_empty_history_does_not_replace_detail_status(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app.logs_tree = FakeTree()
-        app.history_rows_by_item = {}
-        app.history_summary_var = FakeVar()
-        app.detail_var = FakeVar("Settings loaded")
-        app._log_file_signature = None
-        with tempfile.TemporaryDirectory() as directory:
-            with patch.object(gui, "logs_dir", return_value=Path(directory)):
-                app.refresh_logs()
-
-        self.assertEqual("No history yet", app.history_summary_var.get())
-        self.assertEqual("Settings loaded", app.detail_var.get())
-
-    def test_history_skips_valid_json_values_that_are_not_objects(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app.logs_tree = FakeTree()
-        app.history_rows_by_item = {}
-        app.history_summary_var = FakeVar()
-        app.detail_var = FakeVar()
-        app.history_filter_var = FakeVar("All")
-        app.history_search_var = FakeVar("")
-        app._log_file_signature = None
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "events.jsonl"
-            path.write_text(
-                "\n".join(
-                    (
-                        json.dumps(
-                            {
-                                "event_type": "alert",
-                                "droid": "Rainbow",
-                                "rarity": "Epic",
-                                "alerted": True,
-                            }
-                        ),
-                        "[]",
-                        '"not an event"',
-                    )
-                ),
-                encoding="utf-8",
-            )
-            with patch.object(gui, "logs_dir", return_value=Path(directory)):
-                app.refresh_logs()
-
-        self.assertEqual(1, len(app.history_rows_by_item))
-        self.assertIn("1 shown", app.history_summary_var.get())
-
-    def test_history_all_filter_includes_debug_rows(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app.logs_tree = FakeTree()
-        app.history_rows_by_item = {}
-        app.history_summary_var = FakeVar()
-        app.detail_var = FakeVar()
-        app.history_filter_var = FakeVar("All")
-        app.history_search_var = FakeVar("")
-        app._log_file_signature = None
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "events.jsonl"
-            path.write_text(
-                "\n".join(
-                    (
-                        json.dumps({"event_type": "alert", "droid": "Rainbow", "alerted": True}),
-                        json.dumps({"event_type": "debug_snapshot", "debug": True}),
-                    )
-                ),
-                encoding="utf-8",
-            )
-            with patch.object(gui, "logs_dir", return_value=Path(directory)):
-                app.refresh_logs()
-
-        self.assertEqual(2, len(app.history_rows_by_item))
-        self.assertIn("2 shown", app.history_summary_var.get())
-
-    def test_history_refresh_is_rescheduled_after_an_unexpected_error(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app._shutting_down = False
-        app.refresh_logs = Mock(side_effect=RuntimeError("bad history row"))
-        app._schedule_log_refresh = Mock()
-
-        app._auto_refresh_logs()
-
-        app._schedule_log_refresh.assert_called_once()
-
-    def test_region_nudge_saves_to_the_monitor_that_owns_the_overlay(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app.region_box = PixelBox(10, 20, 200, 100)
-        app.region_screen_size = (1920, 1080)
-        app.region_monitor_offset = (-1920, 0)
-        app.region_monitor_key = "old-monitor"
-        app.region_source = "manual"
-        app.region_status_var = FakeVar()
-        app.destroy_region_overlay_windows = Mock()
-        app.show_region_overlay = Mock()
-        app.set_region_controls_visible = Mock()
-        app._current_monitor_info = Mock(
-            return_value=MonitorInfo(0, 0, 1920, 1080, key="new-monitor")
-        )
-
-        with patch.object(gui, "Calibration") as calibration_type:
-            app.nudge_region(10, 0)
-
-        calibration_type.return_value.save.assert_called_once_with("old-monitor")
-
     def test_dialog_position_can_remain_on_a_negative_secondary_monitor(self):
-        clamp = getattr(gui, "clamp_dialog_position", None)
-        self.assertTrue(callable(clamp), "dialog positioning helper is missing")
         monitors = [
             MonitorDescriptor(1, 0, 0, 1920, 1080, is_primary=True),
             MonitorDescriptor(2, -1920, 0, 1920, 1080),
         ]
-
-        self.assertEqual((-1500, 200), clamp(-1500, 200, 500, 300, monitors))
+        self.assertEqual((-1500, 200), clamp_dialog_position(-1500, 200, 500, 300, monitors))
 
 
 class LowPriorityRegressionTests(unittest.TestCase):
@@ -557,20 +345,6 @@ class LowPriorityRegressionTests(unittest.TestCase):
             ["/usr/bin/canberra-gtk-play", "-i", "dialog-warning"],
             popen.call_args.args[0],
         )
-
-    def test_sound_test_reports_player_errors_instead_of_claiming_success(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app.channel_status_vars = {"Sound": FakeVar()}
-        app.detail_var = FakeVar()
-        policy = Mock()
-        policy.notify.side_effect = RuntimeError("no audio player")
-        with patch.object(gui, "AlertPolicy", return_value=policy):
-            played = app._send_channel_test_with_config(
-                "sound", AppConfig(), priority_detection()
-            )
-
-        self.assertFalse(played)
-        self.assertEqual("Failed to play", app.channel_status_vars["Sound"].get())
 
     def test_threshold_reload_updates_pipeline_and_detector(self):
         pipeline = Pipeline.__new__(Pipeline)

@@ -124,12 +124,6 @@ def evaluate_fixture(pipeline: Pipeline, path: Path, spec: dict) -> dict:
 def main(*, verbose: bool = False, dump_unlabeled: bool = False) -> int:
     manifest = load_manifest()
     pipeline = Pipeline(templates_dir(), Thresholds())
-    # "Extra checks" pipeline (shape-confirmed weak-color rescue for HDR /
-    # washed-out captures). Fixtures flagged "extra_checks" are scored with
-    # it; every OTHER labeled fixture is also re-run through it and must
-    # produce identical results, proving the option cannot change verdicts
-    # on healthy captures.
-    pipeline_extra = Pipeline(templates_dir(), Thresholds(), extra_checks=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     review_dir = RESULTS_DIR / "unlabeled_review"
 
@@ -144,26 +138,9 @@ def main(*, verbose: bool = False, dump_unlabeled: bool = False) -> int:
             failed += 1
             print(f"[FAIL] {rel_path}: fixture is missing")
             continue
-        active_pipeline = pipeline_extra if spec.get("extra_checks") else pipeline
-        record = evaluate_fixture(active_pipeline, path, spec)
+        record = evaluate_fixture(pipeline, path, spec)
         normalized = record.pop("_normalized_image", None)
         detections = record.pop("_detections_obj", [])
-
-        if record.get("labeled") and not spec.get("extra_checks"):
-            extra_record = evaluate_fixture(pipeline_extra, path, spec)
-            extra_record.pop("_normalized_image", None)
-            extra_record.pop("_detections_obj", None)
-            if (
-                extra_record.get("detected_combos") != record.get("detected_combos")
-                or extra_record.get("alerted_combos") != record.get("alerted_combos")
-            ):
-                record["pass"] = False
-                record["extra_checks_drift"] = {
-                    "base_detected": record.get("detected_combos"),
-                    "extra_detected": extra_record.get("detected_combos"),
-                    "base_alerted": record.get("alerted_combos"),
-                    "extra_alerted": extra_record.get("alerted_combos"),
-                }
 
         if record.get("labeled"):
             if record["pass"]:
@@ -184,8 +161,6 @@ def main(*, verbose: bool = False, dump_unlabeled: bool = False) -> int:
             print(f"[{status}] {rel_path}: detected={record['detected_combos']} expected={expected_desc}")
             for failure in record.get("alert_failures", []):
                 print(f"        ALERT-CHECK: {failure}")
-            if record.get("extra_checks_drift"):
-                print(f"        EXTRA-DRIFT: {record['extra_checks_drift']}")
             if status == "FAIL" and normalized is not None:
                 fail_dir = RESULTS_DIR / "failures"
                 fail_dir.mkdir(parents=True, exist_ok=True)

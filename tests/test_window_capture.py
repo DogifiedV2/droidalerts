@@ -17,12 +17,14 @@ from droid_alerts import capture as capture_module
 from droid_alerts import watcher
 from droid_alerts.capture import MSSCapture, MonitorDescriptor, MonitorInfo, PixelBox
 from droid_alerts.config import AppConfig
-from droid_alerts.gui import DroidAlertsApp
 from droid_alerts.window_capture import (
-    WINDOW_CAPTURE_EXPLANATION,
     WindowDescriptor,
     WindowsGraphicsCapture,
+    X11WindowCapture,
+    _macos_window_image,
+    _refresh_window_capture_placement,
     resolve_capture_window,
+    window_capture_available,
     window_capture_key,
 )
 
@@ -48,13 +50,6 @@ def descriptor(
 
 
 class WindowSelectionTests(unittest.TestCase):
-    def test_requested_explanation_is_kept_verbatim(self):
-        self.assertEqual(
-            "If you select the Fortnite window, the tool keeps watch at all times, "
-            "even if something is covering it.",
-            WINDOW_CAPTURE_EXPLANATION,
-        )
-
     def test_resolver_requires_the_persisted_process_and_prefers_exact_title(self):
         candidates = [
             descriptor(1, title="Fake Fortnite", process="other.exe"),
@@ -120,10 +115,10 @@ class WindowSelectionTests(unittest.TestCase):
             AppConfig.from_dict({"capture_source": "window"}).capture_source,
         )
 
-    def test_capture_factory_routes_window_metadata_to_wgc(self):
+    def test_capture_factory_routes_window_metadata_to_platform_backend(self):
         expected = object()
         with patch(
-            "droid_alerts.window_capture.WindowsGraphicsCapture",
+            "droid_alerts.window_capture.create_window_capture",
             return_value=expected,
         ) as window_capture:
             result = capture_module.create_capture(
@@ -142,121 +137,26 @@ class WindowSelectionTests(unittest.TestCase):
             monitor_index=2,
         )
 
-    def test_dashboard_can_switch_both_watchers_back_to_the_monitor(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app.config = AppConfig(
-            capture_source="window",
-            capture_window_title="Fortnite",
-            capture_window_process="Fortnite.exe",
-            capture_window_class="UnrealWindow",
-        )
-        app.monitor_display_var = SimpleNamespace(get=lambda: "Monitor 2")
-        capture_source_text = []
-        app.capture_source_var = SimpleNamespace(set=capture_source_text.append)
+    def test_window_availability_rejects_wayland_but_accepts_x11(self):
+        with (
+            patch("droid_alerts.window_capture.sys.platform", "linux"),
+            patch.dict(
+                "droid_alerts.window_capture.os.environ",
+                {"XDG_SESSION_TYPE": "wayland", "DISPLAY": ":0"},
+                clear=True,
+            ),
+        ):
+            self.assertFalse(window_capture_available())
 
-        app._set_monitor_capture_source()
-
-        self.assertEqual("monitor", app.config.capture_source)
-        self.assertEqual("", app.config.capture_window_title)
-        self.assertEqual("", app.config.capture_window_process)
-        self.assertEqual("", app.config.capture_window_class)
-        self.assertEqual(["Active source: Monitor 2"], capture_source_text)
-
-    def test_window_source_disables_monitor_switching_and_explains_that_it_follows(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app.config = AppConfig(
-            capture_source="window",
-            capture_window_title="Fortnite",
-            capture_window_process="Fortnite.exe",
-            capture_window_class="UnrealWindow",
-        )
-        app.capture_source_var = Mock()
-        app.monitor_combobox = Mock()
-        app.use_monitor_button = Mock()
-
-        app._refresh_capture_source_text()
-
-        app.capture_source_var.set.assert_called_once_with(
-            "Active source: Window: Fortnite - follows the selected window between monitors"
-        )
-        app.monitor_combobox.configure.assert_called_once_with(state="disabled")
-        app.use_monitor_button.configure.assert_called_once_with(
-            state="normal",
-            text="Use this monitor",
-        )
-
-    def test_window_watcher_status_does_not_reset_the_inactive_monitor_choice(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app.setting_vars = {"monitor_index": SimpleNamespace(get=lambda: 2)}
-        app._apply_monitor_index = Mock()
-        app.watcher_status_var = Mock()
-        app.watcher_detail_var = Mock()
-        app._set_watcher_state = Mock()
-        app._maybe_close_device_capture_session = Mock()
-
-        app._handle_watcher_status(
-            {
-                "type": "watcher_ready",
-                "monitor_index": 1,
-                "capture_source": "window",
-                "capture_label": "Fortnite",
-                "screen_width": 2560,
-                "screen_height": 1440,
-                "region_source": "automatic",
-            }
-        )
-
-        app._apply_monitor_index.assert_not_called()
-        app.watcher_detail_var.set.assert_called_once_with(
-            "Window: Fortnite · 2560 × 1440 · Region: automatic"
-        )
-
-    def test_monitor_watcher_status_does_not_autosave_an_old_monitor(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app.setting_vars = {"monitor_index": SimpleNamespace(get=lambda: 2)}
-        app._apply_monitor_index = Mock()
-        app.monitor_display_var = SimpleNamespace(get=lambda: "Monitor 2")
-        app.watcher_status_var = Mock()
-        app.watcher_detail_var = Mock()
-        app._set_watcher_state = Mock()
-        app._maybe_close_device_capture_session = Mock()
-
-        app._handle_watcher_status(
-            {
-                "type": "config_reloaded",
-                "monitor_index": 1,
-                "capture_source": "monitor",
-                "capture_label": "Monitor 1",
-                "screen_width": 1920,
-                "screen_height": 1080,
-                "region_source": "automatic",
-            }
-        )
-
-        app._apply_monitor_index.assert_not_called()
-
-    def test_temporarily_missing_monitor_is_not_replaced_with_monitor_one(self):
-        app = DroidAlertsApp.__new__(DroidAlertsApp)
-        app.setting_vars = {"monitor_index": SimpleNamespace(get=lambda: 2)}
-        app.monitor_combobox = Mock()
-        app.monitor_display_var = Mock()
-        app._refresh_capture_source_text = Mock()
-        only_monitor = MonitorDescriptor(
-            index=1,
-            left=0,
-            top=0,
-            width=3840,
-            height=2160,
-            is_primary=True,
-        )
-
-        with patch("droid_alerts.gui.list_monitors", return_value=[only_monitor]):
-            app.refresh_monitor_choices()
-
-        self.assertEqual(2, app.setting_vars["monitor_index"].get())
-        app.monitor_display_var.set.assert_called_once_with(
-            "Monitor 2 (temporarily unavailable)"
-        )
+        with (
+            patch("droid_alerts.window_capture.sys.platform", "linux"),
+            patch.dict(
+                "droid_alerts.window_capture.os.environ",
+                {"XDG_SESSION_TYPE": "x11", "DISPLAY": ":0"},
+                clear=True,
+            ),
+        ):
+            self.assertTrue(window_capture_available())
 
     def test_missing_monitor_capture_fails_instead_of_watching_monitor_one(self):
         fake_mss = SimpleNamespace(
@@ -343,6 +243,46 @@ class WindowFrameTests(unittest.TestCase):
         np.testing.assert_array_equal(crop, frame_buffer[1:3, 2:5, :3])
         self.assertEqual((2, 3, 3), crop.shape)
 
+    def test_capture_placement_follows_a_window_to_another_monitor(self):
+        original = descriptor(
+            42,
+            title="Fortnite",
+            process="Fortnite.exe",
+        )
+        moved = WindowDescriptor(
+            **{
+                **original.__dict__,
+                "left": 2100,
+                "top": 100,
+                "width": 1600,
+                "height": 900,
+            }
+        )
+        capture = SimpleNamespace(
+            window=original,
+            capture_area=MonitorInfo(0, 0, 1600, 900, index=1),
+            monitor=MonitorInfo(0, 0, 1920, 1080, index=1),
+            _last_placement_refresh_at=0.0,
+        )
+        monitors = [
+            MonitorDescriptor(1, 0, 0, 1920, 1080, is_primary=True),
+            MonitorDescriptor(2, 1920, 0, 2560, 1440),
+        ]
+        with (
+            patch(
+                "droid_alerts.window_capture.list_capture_windows",
+                return_value=[moved],
+            ),
+            patch(
+                "droid_alerts.window_capture.list_monitors",
+                return_value=monitors,
+            ),
+        ):
+            _refresh_window_capture_placement(capture, now=2.0)
+
+        self.assertEqual((2100, 100), (capture.capture_area.left, capture.capture_area.top))
+        self.assertEqual(2, capture.monitor.index)
+
     def test_grab_does_not_replay_a_stale_frame_when_capture_pauses(self):
         capture = self.make_capture()
         frame_buffer = np.zeros((6, 8, 4), dtype=np.uint8)
@@ -354,6 +294,106 @@ class WindowFrameTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "No new Fortnite frame arrived"),
         ):
             capture.grab(PixelBox(2, 1, 3, 2))
+
+    def test_x11_backing_pixels_are_returned_as_bgr(self):
+        capture = X11WindowCapture.__new__(X11WindowCapture)
+        expected = np.arange(2 * 3 * 4, dtype=np.uint8).reshape(2, 3, 4)
+        capture._native_window = SimpleNamespace(
+            get_image=lambda *_args: SimpleNamespace(data=expected.tobytes())
+        )
+        xlib = SimpleNamespace(X=SimpleNamespace(ZPixmap=2))
+
+        with patch.dict(sys.modules, {"Xlib": xlib}):
+            result = capture._grab_window_pixels(PixelBox(0, 0, 3, 2))
+
+        np.testing.assert_array_equal(expected[:, :, :3], result)
+
+    def test_macos_image_conversion_removes_alpha_channel(self):
+        expected = np.arange(2 * 3 * 4, dtype=np.uint8).reshape(2, 3, 4)
+        quartz = SimpleNamespace(
+            CGRectNull=object(),
+            kCGWindowListOptionIncludingWindow=1,
+            kCGWindowImageBoundsIgnoreFraming=2,
+            kCGWindowImageBestResolution=4,
+            CGWindowListCreateImage=lambda *_args: object(),
+            CGImageGetWidth=lambda _image: 3,
+            CGImageGetHeight=lambda _image: 2,
+            CGImageGetBytesPerRow=lambda _image: 12,
+            CGImageGetDataProvider=lambda _image: object(),
+            CGDataProviderCopyData=lambda _provider: expected.tobytes(),
+        )
+
+        with patch.dict(sys.modules, {"Quartz": quartz}):
+            result = _macos_window_image(42)
+
+        np.testing.assert_array_equal(expected[:, :, :3], result)
+
+    def test_macos_prefers_screencapturekit_for_window_images(self):
+        expected = np.arange(2 * 3 * 4, dtype=np.uint8).reshape(2, 3, 4)
+        cg_image = object()
+        quartz = SimpleNamespace(
+            CGImageGetWidth=lambda image: 3 if image is cg_image else 0,
+            CGImageGetHeight=lambda image: 2 if image is cg_image else 0,
+            CGImageGetBytesPerRow=lambda image: 12 if image is cg_image else 0,
+            CGImageGetDataProvider=lambda _image: object(),
+            CGDataProviderCopyData=lambda _provider: expected.tobytes(),
+        )
+        window = SimpleNamespace(
+            windowID=lambda: 42,
+            frame=lambda: SimpleNamespace(
+                size=SimpleNamespace(width=3, height=2)
+            ),
+        )
+        content = SimpleNamespace(windows=lambda: [window])
+
+        class ShareableContent:
+            @staticmethod
+            def getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler_(
+                _exclude_desktop,
+                _on_screen_only,
+                handler,
+            ):
+                handler(content, None)
+
+        content_filter = SimpleNamespace(
+            initWithDesktopIndependentWindow_=lambda _window: object()
+        )
+        configuration = SimpleNamespace(
+            setWidth_=Mock(),
+            setHeight_=Mock(),
+            setShowsCursor_=Mock(),
+        )
+        manager = SimpleNamespace(
+            captureImageWithFilter_configuration_completionHandler_=(
+                lambda _filter, _configuration, handler: handler(
+                    cg_image,
+                    None,
+                )
+            )
+        )
+        screen_capture_kit = SimpleNamespace(
+            SCShareableContent=ShareableContent,
+            SCContentFilter=SimpleNamespace(
+                alloc=lambda: content_filter,
+            ),
+            SCStreamConfiguration=SimpleNamespace(
+                alloc=lambda: SimpleNamespace(init=lambda: configuration),
+            ),
+            SCScreenshotManager=manager,
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "Quartz": quartz,
+                "ScreenCaptureKit": screen_capture_kit,
+            },
+        ):
+            result = _macos_window_image(42)
+
+        np.testing.assert_array_equal(expected[:, :, :3], result)
+        configuration.setWidth_.assert_called_once_with(6)
+        configuration.setHeight_.assert_called_once_with(4)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ DEFAULT_ACTIVE_SCAN_FPS = 8
 MINIMUM_SCAN_FPS = 1
 MAXIMUM_SCAN_FPS = 20
 TEMPLATE_IDLE_BACKOFF_START = 12
+MAXIMUM_TRACK_TIMEOUT_SECONDS = 20.0
 
 
 def normalize_scan_fps(idle_scan_fps: int, active_scan_fps: int) -> tuple[int, int]:
@@ -24,6 +25,22 @@ def adaptive_template_interval(
     if max(0, int(empty_card_scans)) >= TEMPLATE_IDLE_BACKOFF_START:
         return 1.0 / idle_scan_fps
     return 1.0 / active_scan_fps
+
+
+def adaptive_track_timeout(
+    base_timeout_seconds: float,
+    observed_capture_interval_seconds: float | None,
+) -> float:
+    """Keep a track alive through at least two slow capture intervals."""
+
+    base = max(0.2, float(base_timeout_seconds))
+    if observed_capture_interval_seconds is None:
+        return base
+    cadence = max(0.0, float(observed_capture_interval_seconds))
+    return min(
+        MAXIMUM_TRACK_TIMEOUT_SECONDS,
+        max(base, cadence * 2.5),
+    )
 
 
 @dataclass

@@ -1,18 +1,58 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .alert_customization import (
+    ALERT_CHANNELS,
+    alert_id_aliases,
+    normalize_alert_sound_overrides,
+    normalize_channel_disabled_alerts,
+    normalize_clock,
+    normalize_discord_alert_destinations,
+    normalize_discord_mentions,
+    normalize_discord_message_prefixes,
+    normalize_iso_datetime,
+    normalize_notification_profiles,
+    normalize_timer_reminder_rules,
+    quiet_period_active,
+)
 from .belt.targets import normalize_belt_target_tiers
+from .chat_alerts import REMOVED_CHAT_DETECTIONS
 from .limited_deals import (
     normalize_limited_deal_priority_alerts,
     normalize_limited_deal_target_tiers,
 )
 from .ui_theme import DEFAULT_THEME_KEY, normalize_theme_key
+
+
+# QTimer intervals are stored as signed 32-bit milliseconds. Keeping delays at
+# whole seconds below that ceiling also leaves Event.wait()/time.sleep() with a
+# platform-safe timeout.
+MAX_SAFE_DELAY_SECONDS = 2_147_483.0
+
+
+def normalize_finite_float(
+    value: object,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    """Convert and clamp a numeric setting, rejecting NaN and infinities."""
+
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("numeric setting must be finite")
+    if minimum is not None:
+        number = max(minimum, number)
+    if maximum is not None:
+        number = min(maximum, number)
+    return number
 
 
 def app_root() -> Path:
@@ -163,6 +203,11 @@ class AppConfig:
     popup_seconds: float = 8.0
     popup_icon_file: str = "signals_icon.png"
     popup_position: str = "top_center"
+    # Free-form popup placement is opt-in so existing position presets keep
+    # their exact behavior until the interactive editor is used.
+    popup_custom_position: bool = False
+    popup_center_x: float = 0.5
+    popup_top_y: float = 0.085
     popup_scale: float = 1.0
     popup_opacity: float = 1.0
     sound_file: str = ""
@@ -171,6 +216,8 @@ class AppConfig:
     discord_enabled: bool = False
     discord_webhook_file: str = "discord_webhook.txt"
     discord_env_var: str = "DROID_DISCORD_WEBHOOK_URL"
+    limited_deal_discord_webhook_file: str = "limited_deal_discord_webhook.txt"
+    limited_deal_discord_env_var: str = "DROID_LIMITED_DEAL_DISCORD_WEBHOOK_URL"
     ntfy_enabled: bool = False
     ntfy_server_url: str = "https://ntfy.sh"
     ntfy_topic: str = ""
@@ -190,9 +237,23 @@ class AppConfig:
     phone_env_user: str = "DROIDWATCHER_PHONE_ALERTS_USER"
     phone_sound: str = "siren"
     phone_include_attachment: bool = False
-    # Alert IDs excluded from each remote channel. Missing/empty means the
-    # channel receives every enabled alert, preserving existing installs.
+    # Alert IDs excluded from each channel. Missing means every alert is allowed.
     channel_disabled_alerts: dict[str, list[str]] = field(default_factory=dict)
+    alert_sound_overrides: dict[str, str] = field(default_factory=dict)
+    notification_profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
+    active_notification_profile: str = ""
+    quiet_hours_enabled: bool = False
+    quiet_hours_start: str = "23:00"
+    quiet_hours_end: str = "08:00"
+    quiet_hours_muted_channels: list[str] = field(
+        default_factory=lambda: list(ALERT_CHANNELS)
+    )
+    quiet_hours_bypass_alerts: list[str] = field(default_factory=list)
+    snoozed_until: str = ""
+    discord_destinations_file: str = "discord_destinations.json"
+    discord_alert_destinations: dict[str, str] = field(default_factory=dict)
+    discord_message_prefixes: dict[str, str] = field(default_factory=dict)
+    discord_mentions: dict[str, dict[str, str]] = field(default_factory=dict)
     update_check_enabled: bool = True
     anonymous_app_stats_url: str = "https://gonk.tools/api/droid-alerts/app-heartbeat"
     anonymous_stats_url: str = "https://gonk.tools/api/droid-alerts/heartbeat"
@@ -205,7 +266,6 @@ class AppConfig:
     debug_detection_upload_url: str = "https://gonk.tools/api/droid-alerts/debug-detections"
     update_repo: str = "DogifiedV2/droidalerts"
     advanced_mode: bool = False
-    extra_checks: bool = False
     start_watcher_on_launch: bool = False
     rebirth_alert_enabled: bool = False
     belt_overlay_enabled: bool = True
@@ -217,13 +277,16 @@ class AppConfig:
     belt_region_guide_confirmed: bool = False
     # Droid name -> minimum visual rarity tier. Empty means no Belt Tracker alerts.
     belt_target_tiers: dict[str, str] = field(default_factory=dict)
-    # Rotating droid ID -> minimum Limited Deal mutation. Priority combos are exact.
+    # Rotating droid ID -> minimum Limited Deal rarity. Priority combos are exact.
     limited_deal_target_tiers: dict[str, str] = field(default_factory=dict)
     limited_deal_priority_alerts: list[list[str]] = field(default_factory=list)
     retention_days: int = 30
     max_storage_mb: int = 500
     timer_reminders_enabled: bool = False
     timer_reminder_seconds: int = 60
+    timer_reminder_rules: dict[str, list[int]] = field(
+        default_factory=lambda: normalize_timer_reminder_rules(None)
+    )
     timer_offset_seconds: int = 0
     validation_failures_before_calibration_prompt: int = 30
     thresholds: Thresholds = field(default_factory=Thresholds)
@@ -281,6 +344,12 @@ class AppConfig:
             (capture_device_path, capture_device_name)
         ):
             capture_source = "monitor"
+        raw_quiet_channels = data.get("quiet_hours_muted_channels", ALERT_CHANNELS)
+        if not isinstance(raw_quiet_channels, (list, tuple, set)):
+            raw_quiet_channels = ALERT_CHANNELS
+        raw_quiet_bypass = data.get("quiet_hours_bypass_alerts", [])
+        if not isinstance(raw_quiet_bypass, (list, tuple, set)):
+            raw_quiet_bypass = []
         config = cls(
             config_version=max(2, int(data.get("config_version", 1))),
             ui_theme=normalize_theme_key(data.get("ui_theme", DEFAULT_THEME_KEY)),
@@ -294,7 +363,11 @@ class AppConfig:
             capture_device_vid=capture_device_vid,
             capture_device_pid=capture_device_pid,
             capture_device_backend=capture_device_backend,
-            capture_interval_seconds=float(data.get("capture_interval_seconds", 0.25)),
+            capture_interval_seconds=normalize_finite_float(
+                data.get("capture_interval_seconds", 0.25),
+                minimum=0.05,
+                maximum=MAX_SAFE_DELAY_SECONDS,
+            ),
             rebirth_ready_alert_enabled=bool(
                 data.get("rebirth_ready_alert_enabled", False)
             ),
@@ -302,12 +375,17 @@ class AppConfig:
             cb23_mission_alert_enabled=bool(
                 data.get("cb23_mission_alert_enabled", False)
             ),
-            rebirth_scan_interval_seconds=min(
-                30.0,
-                max(2.0, float(data.get("rebirth_scan_interval_seconds", 5.0))),
+            rebirth_scan_interval_seconds=normalize_finite_float(
+                data.get("rebirth_scan_interval_seconds", 5.0),
+                minimum=2.0,
+                maximum=30.0,
             ),
-            dedupe_seconds=float(data.get("dedupe_seconds", 12.0)),
-            alert_cooldown_seconds=float(data.get("alert_cooldown_seconds", 10.0)),
+            dedupe_seconds=normalize_finite_float(
+                data.get("dedupe_seconds", 12.0), minimum=0.0
+            ),
+            alert_cooldown_seconds=normalize_finite_float(
+                data.get("alert_cooldown_seconds", 10.0), minimum=0.0
+            ),
             sound_enabled=bool(data.get("sound_enabled", True)),
             wake_alarm_enabled=bool(data.get("wake_alarm_enabled", False)),
             wake_alarm_beskar_mythic=bool(
@@ -318,20 +396,53 @@ class AppConfig:
             ),
             popup_enabled=bool(data.get("popup_enabled", True)),
             droid_timers_enabled=bool(data.get("droid_timers_enabled", False)),
-            droid_timers_scale=float(data.get("droid_timers_scale", 1.0)),
-            droid_timers_center_x=float(data.get("droid_timers_center_x", 0.5)),
-            droid_timers_top_y=float(data.get("droid_timers_top_y", 0.006)),
-            popup_seconds=float(data.get("popup_seconds", 8.0)),
+            droid_timers_scale=normalize_finite_float(
+                data.get("droid_timers_scale", 1.0)
+            ),
+            droid_timers_center_x=normalize_finite_float(
+                data.get("droid_timers_center_x", 0.5)
+            ),
+            droid_timers_top_y=normalize_finite_float(
+                data.get("droid_timers_top_y", 0.006)
+            ),
+            popup_seconds=normalize_finite_float(
+                data.get("popup_seconds", 8.0),
+                minimum=0.5,
+                maximum=MAX_SAFE_DELAY_SECONDS,
+            ),
             popup_icon_file=str(data.get("popup_icon_file", "signals_icon.png")),
             popup_position=str(data.get("popup_position", "top_center")),
-            popup_scale=float(data.get("popup_scale", 1.0)),
-            popup_opacity=float(data.get("popup_opacity", 1.0)),
+            popup_custom_position=bool(data.get("popup_custom_position", False)),
+            popup_center_x=normalize_finite_float(
+                data.get("popup_center_x", 0.5), minimum=0.0, maximum=1.0
+            ),
+            popup_top_y=normalize_finite_float(
+                data.get("popup_top_y", 0.085), minimum=0.0, maximum=1.0
+            ),
+            popup_scale=normalize_finite_float(
+                data.get("popup_scale", 1.0), minimum=0.7, maximum=1.5
+            ),
+            popup_opacity=normalize_finite_float(
+                data.get("popup_opacity", 1.0), minimum=0.55, maximum=1.0
+            ),
             sound_file=str(data.get("sound_file", "")),
             save_alert_samples=bool(data.get("save_alert_samples", False)),
             save_debug_screenshots=bool(data.get("save_debug_screenshots", False)),
             discord_enabled=bool(data.get("discord_enabled", False)),
             discord_webhook_file=str(data.get("discord_webhook_file", "discord_webhook.txt")),
             discord_env_var=str(data.get("discord_env_var", "DROID_DISCORD_WEBHOOK_URL")),
+            limited_deal_discord_webhook_file=str(
+                data.get(
+                    "limited_deal_discord_webhook_file",
+                    "limited_deal_discord_webhook.txt",
+                )
+            ),
+            limited_deal_discord_env_var=str(
+                data.get(
+                    "limited_deal_discord_env_var",
+                    "DROID_LIMITED_DEAL_DISCORD_WEBHOOK_URL",
+                )
+            ),
             ntfy_enabled=bool(data.get("ntfy_enabled", False)),
             ntfy_server_url=str(data.get("ntfy_server_url", "https://ntfy.sh")),
             ntfy_topic=str(data.get("ntfy_topic", "")),
@@ -353,13 +464,50 @@ class AppConfig:
             phone_env_user=str(data.get("phone_env_user", "DROIDWATCHER_PHONE_ALERTS_USER")),
             phone_sound=str(data.get("phone_sound", "siren")),
             phone_include_attachment=bool(data.get("phone_include_attachment", False)),
-            channel_disabled_alerts={
-                str(channel): sorted({str(alert_id) for alert_id in alert_ids if str(alert_id)})
-                for channel, alert_ids in data.get("channel_disabled_alerts", {}).items()
-                if channel in {"discord", "ntfy", "pushover"} and isinstance(alert_ids, list)
-            }
-            if isinstance(data.get("channel_disabled_alerts", {}), dict)
-            else {},
+            channel_disabled_alerts=normalize_channel_disabled_alerts(
+                data.get("channel_disabled_alerts")
+            ),
+            alert_sound_overrides=normalize_alert_sound_overrides(
+                data.get("alert_sound_overrides")
+            ),
+            notification_profiles=normalize_notification_profiles(
+                data.get("notification_profiles")
+            ),
+            active_notification_profile=str(
+                data.get("active_notification_profile", "")
+            ).strip()[:40],
+            quiet_hours_enabled=bool(data.get("quiet_hours_enabled", False)),
+            quiet_hours_start=normalize_clock(
+                data.get("quiet_hours_start", "23:00"), "23:00"
+            ),
+            quiet_hours_end=normalize_clock(
+                data.get("quiet_hours_end", "08:00"), "08:00"
+            ),
+            quiet_hours_muted_channels=[
+                channel
+                for channel in ALERT_CHANNELS
+                if channel in {str(value).casefold() for value in raw_quiet_channels}
+            ],
+            quiet_hours_bypass_alerts=sorted(
+                {
+                    str(value).strip()[:128]
+                    for value in raw_quiet_bypass
+                    if str(value).strip()
+                }
+            ),
+            snoozed_until=normalize_iso_datetime(data.get("snoozed_until", "")),
+            discord_destinations_file=str(
+                data.get("discord_destinations_file", "discord_destinations.json")
+            ),
+            discord_alert_destinations=normalize_discord_alert_destinations(
+                data.get("discord_alert_destinations")
+            ),
+            discord_message_prefixes=normalize_discord_message_prefixes(
+                data.get("discord_message_prefixes")
+            ),
+            discord_mentions=normalize_discord_mentions(
+                data.get("discord_mentions")
+            ),
             update_check_enabled=bool(data.get("update_check_enabled", True)),
             anonymous_app_stats_url=str(
                 data.get(
@@ -403,7 +551,6 @@ class AppConfig:
             ),
             update_repo=str(data.get("update_repo", "DogifiedV2/droidalerts")),
             advanced_mode=bool(data.get("advanced_mode", False)),
-            extra_checks=bool(data.get("extra_checks", False)),
             start_watcher_on_launch=bool(data.get("start_watcher_on_launch", False)),
             rebirth_alert_enabled=bool(data.get("rebirth_alert_enabled", False)),
             belt_overlay_enabled=bool(data.get("belt_overlay_enabled", True)),
@@ -426,28 +573,45 @@ class AppConfig:
             max_storage_mb=int(data.get("max_storage_mb", 500)),
             timer_reminders_enabled=bool(data.get("timer_reminders_enabled", False)),
             timer_reminder_seconds=int(data.get("timer_reminder_seconds", 60)),
+            timer_reminder_rules=normalize_timer_reminder_rules(
+                data.get("timer_reminder_rules"),
+                fallback_seconds=int(data.get("timer_reminder_seconds", 60)),
+            ),
             timer_offset_seconds=int(data.get("timer_offset_seconds", 0)),
             validation_failures_before_calibration_prompt=int(
                 data.get("validation_failures_before_calibration_prompt", 30)
             ),
             thresholds=Thresholds(
-                rarity_threshold=float(thresholds.get("rarity_threshold", 0.35)),
-                droid_threshold=float(thresholds.get("droid_threshold", 0.15)),
-                scale_min=float(thresholds.get("scale_min", 0.4)),
-                scale_max=float(thresholds.get("scale_max", 2.5)),
+                rarity_threshold=normalize_finite_float(
+                    thresholds.get("rarity_threshold", 0.35)
+                ),
+                droid_threshold=normalize_finite_float(
+                    thresholds.get("droid_threshold", 0.15)
+                ),
+                scale_min=normalize_finite_float(thresholds.get("scale_min", 0.4)),
+                scale_max=normalize_finite_float(thresholds.get("scale_max", 2.5)),
             ),
         )
         if isinstance(data.get("alert_targets"), list):
             raw_targets = data["alert_targets"]
+            contained_removed_target = any(
+                isinstance(pair, (list, tuple))
+                and len(pair) == 2
+                and (str(pair[0]), str(pair[1])) in REMOVED_CHAT_DETECTIONS
+                for pair in raw_targets
+            )
             pairs = [
                 [str(pair[0]), str(pair[1])]
                 for pair in raw_targets
                 if isinstance(pair, (list, tuple)) and len(pair) == 2
+                and (str(pair[0]), str(pair[1])) not in REMOVED_CHAT_DETECTIONS
             ]
             if {tuple(pair) for pair in pairs} == set(LEGACY_DEFAULT_ALERT_TARGETS):
                 pairs.extend([list(combo) for combo in GALACTIC_DEFAULT_ALERT_TARGETS])
-            if pairs or not raw_targets:
+            if pairs or not raw_targets or contained_removed_target:
                 config.alert_targets = pairs
+        if config.active_notification_profile not in config.notification_profiles:
+            config.active_notification_profile = ""
         return config
 
     def to_dict(self) -> dict[str, Any]:
@@ -483,6 +647,9 @@ class AppConfig:
             "popup_seconds": self.popup_seconds,
             "popup_icon_file": self.popup_icon_file,
             "popup_position": self.popup_position,
+            "popup_custom_position": self.popup_custom_position,
+            "popup_center_x": self.popup_center_x,
+            "popup_top_y": self.popup_top_y,
             "popup_scale": self.popup_scale,
             "popup_opacity": self.popup_opacity,
             "sound_file": self.sound_file,
@@ -491,6 +658,8 @@ class AppConfig:
             "discord_enabled": self.discord_enabled,
             "discord_webhook_file": self.discord_webhook_file,
             "discord_env_var": self.discord_env_var,
+            "limited_deal_discord_webhook_file": self.limited_deal_discord_webhook_file,
+            "limited_deal_discord_env_var": self.limited_deal_discord_env_var,
             "ntfy_enabled": self.ntfy_enabled,
             "ntfy_server_url": self.ntfy_server_url,
             "ntfy_topic": self.ntfy_topic,
@@ -513,8 +682,33 @@ class AppConfig:
             "channel_disabled_alerts": {
                 channel: sorted(set(alert_ids))
                 for channel, alert_ids in self.channel_disabled_alerts.items()
-                if channel in {"discord", "ntfy", "pushover"} and alert_ids
+                if channel in ALERT_CHANNELS and alert_ids
             },
+            "alert_sound_overrides": normalize_alert_sound_overrides(
+                self.alert_sound_overrides
+            ),
+            "notification_profiles": normalize_notification_profiles(
+                self.notification_profiles
+            ),
+            "active_notification_profile": self.active_notification_profile.strip()[:40],
+            "quiet_hours_enabled": self.quiet_hours_enabled,
+            "quiet_hours_start": normalize_clock(self.quiet_hours_start, "23:00"),
+            "quiet_hours_end": normalize_clock(self.quiet_hours_end, "08:00"),
+            "quiet_hours_muted_channels": [
+                channel
+                for channel in ALERT_CHANNELS
+                if channel in self.quiet_hours_muted_channels
+            ],
+            "quiet_hours_bypass_alerts": sorted(set(self.quiet_hours_bypass_alerts)),
+            "snoozed_until": normalize_iso_datetime(self.snoozed_until),
+            "discord_destinations_file": self.discord_destinations_file,
+            "discord_alert_destinations": normalize_discord_alert_destinations(
+                self.discord_alert_destinations
+            ),
+            "discord_message_prefixes": normalize_discord_message_prefixes(
+                self.discord_message_prefixes
+            ),
+            "discord_mentions": normalize_discord_mentions(self.discord_mentions),
             "update_check_enabled": self.update_check_enabled,
             "anonymous_app_stats_url": self.anonymous_app_stats_url,
             "anonymous_stats_url": self.anonymous_stats_url,
@@ -527,7 +721,6 @@ class AppConfig:
             "debug_detection_upload_url": self.debug_detection_upload_url,
             "update_repo": self.update_repo,
             "advanced_mode": self.advanced_mode,
-            "extra_checks": self.extra_checks,
             "start_watcher_on_launch": self.start_watcher_on_launch,
             "rebirth_alert_enabled": self.rebirth_alert_enabled,
             "belt_overlay_enabled": self.belt_overlay_enabled,
@@ -548,6 +741,10 @@ class AppConfig:
             "max_storage_mb": self.max_storage_mb,
             "timer_reminders_enabled": self.timer_reminders_enabled,
             "timer_reminder_seconds": self.timer_reminder_seconds,
+            "timer_reminder_rules": normalize_timer_reminder_rules(
+                self.timer_reminder_rules,
+                fallback_seconds=self.timer_reminder_seconds,
+            ),
             "timer_offset_seconds": self.timer_offset_seconds,
             "validation_failures_before_calibration_prompt": self.validation_failures_before_calibration_prompt,
             "thresholds": {
@@ -556,12 +753,22 @@ class AppConfig:
                 "scale_min": self.thresholds.scale_min,
                 "scale_max": self.thresholds.scale_max,
             },
-            "alert_targets": self.alert_targets,
+            "alert_targets": [
+                [str(pair[0]), str(pair[1])]
+                for pair in self.alert_targets
+                if isinstance(pair, (list, tuple))
+                and len(pair) == 2
+                and (str(pair[0]), str(pair[1])) not in REMOVED_CHAT_DETECTIONS
+            ],
         }
 
     @property
     def targets(self) -> set[tuple[str, str]]:
-        return {(droid, rarity) for droid, rarity in self.alert_targets}
+        return {
+            (droid, rarity)
+            for droid, rarity in self.alert_targets
+            if (droid, rarity) not in REMOVED_CHAT_DETECTIONS
+        }
 
     def wake_alarm_matches(self, droid: str, rarity: str) -> bool:
         """Return whether a priority chat alert should start the wake alarm."""
@@ -574,8 +781,21 @@ class AppConfig:
         )
 
     def channel_allows_alert(self, channel: str, alert_id: str) -> bool:
-        """Return whether a remote channel should receive this alert type."""
-        return alert_id not in self.channel_disabled_alerts.get(channel.lower(), [])
+        """Return whether a channel may receive this alert right now."""
+        channel = channel.casefold()
+        blocked = set(self.channel_disabled_alerts.get(channel, []))
+        if alert_id in blocked or any(
+            alias in blocked for alias in alert_id_aliases(alert_id)
+        ):
+            return False
+        bypass = set(self.quiet_hours_bypass_alerts)
+        if alert_id in bypass or any(
+            alias in bypass for alias in alert_id_aliases(alert_id)
+        ):
+            return True
+        return not (
+            channel in self.quiet_hours_muted_channels and quiet_period_active(self)
+        )
 
 
 def load_config() -> AppConfig:
@@ -593,11 +813,11 @@ def load_config() -> AppConfig:
 
     try:
         return parse(path)
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+    except (OSError, OverflowError, json.JSONDecodeError, TypeError, ValueError):
         backup = path.with_suffix(path.suffix + ".bak")
         try:
             return parse(backup)
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        except (OSError, OverflowError, json.JSONDecodeError, TypeError, ValueError):
             # Keep the broken file for support instead of preventing the app
             # from opening. Atomic saves will rebuild a valid config below.
             corrupt = path.with_suffix(path.suffix + ".corrupt")
@@ -616,7 +836,10 @@ def save_config(config: AppConfig) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
     backup = path.with_suffix(path.suffix + ".bak")
-    temp.write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
+    temp.write_text(
+        json.dumps(config.to_dict(), indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
     if path.exists():
         try:
             json.loads(path.read_text(encoding="utf-8-sig"))

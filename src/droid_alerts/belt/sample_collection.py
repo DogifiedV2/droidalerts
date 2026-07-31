@@ -217,7 +217,7 @@ class BeltTemplateSampleCollector:
             except (AttributeError, TypeError, ValueError):
                 continue
             appearance = self._appearances.get(track_id)
-            if kind == "entered":
+            if kind in {"entered", "reacquired"}:
                 if appearance is None:
                     appearance = _Appearance(track_id, 0.0, 0.0)
                     self._appearances[track_id] = appearance
@@ -422,7 +422,7 @@ class BeltTemplateSampleCollector:
         return {
             "created_at": datetime.now(timezone.utc).isoformat(),
             "app_version": __version__,
-            "detector": "templates",
+            "detector": "hybrid-v2",
             "label_source": "template_prediction",
             "name": name,
             "confirmed_name": name,

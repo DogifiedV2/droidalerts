@@ -14,24 +14,57 @@ import sys
 BASE_DIR = Path(__file__).resolve().parents[1]
 REQUIREMENTS_PATH = BASE_DIR / "requirements.txt"
 MARKER_PATH = BASE_DIR / "config" / ".requirements-ready"
-CACHE_VERSION = "1"
+CACHE_VERSION = "2"
 
 
 def required_modules() -> tuple[str, ...]:
-    modules = ["cv2", "numpy", "mss", "ttkbootstrap", "certifi"]
+    modules = [
+        "cv2",
+        "numpy",
+        "mss",
+        "PySide6.QtQml",
+        "PySide6.QtQuick",
+        "PySide6.QtQuickControls2",
+        "PySide6.QtWidgets",
+        "certifi",
+    ]
     if sys.platform == "win32":
         modules.extend(("windows_capture", "cv2_enumerate_cameras"))
     elif sys.platform == "darwin":
-        modules.append("AppKit")
+        modules.extend(
+            (
+                "AppKit",
+                "Quartz",
+                "ScreenCaptureKit",
+                "cv2_enumerate_cameras",
+            )
+        )
+    elif sys.platform.startswith("linux"):
+        modules.extend(("Xlib", "cv2_enumerate_cameras"))
     return tuple(modules)
 
 
 def required_distributions() -> tuple[str, ...]:
-    distributions = ["opencv-python", "numpy", "mss", "ttkbootstrap", "certifi"]
+    distributions = [
+        "opencv-python",
+        "numpy",
+        "mss",
+        "PySide6-Essentials",
+        "certifi",
+    ]
     if sys.platform == "win32":
         distributions.extend(("windows-capture", "cv2-enumerate-cameras"))
     elif sys.platform == "darwin":
-        distributions.append("pyobjc-framework-Cocoa")
+        distributions.extend(
+            (
+                "pyobjc-framework-Cocoa",
+                "pyobjc-framework-Quartz",
+                "pyobjc-framework-ScreenCaptureKit",
+                "cv2-enumerate-cameras",
+            )
+        )
+    elif sys.platform.startswith("linux"):
+        distributions.extend(("python-xlib", "cv2-enumerate-cameras"))
     return tuple(distributions)
 
 

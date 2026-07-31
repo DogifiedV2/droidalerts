@@ -14,7 +14,11 @@ import numpy as np
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from droid_alerts.belt.dev_logging import BeltDevLogger
+from droid_alerts.belt.dev_logging import (
+    BeltDevLogger,
+    request_belt_issue_report,
+    request_belt_miss_report,
+)
 from droid_alerts.config import AppConfig
 from droid_alerts.diagnostics import create_support_bundle
 
@@ -94,6 +98,55 @@ class BeltDevLoggerTests(unittest.TestCase):
                 self.assertEqual("", logger.save_frame(frame, frame_number=1, now=1.0))
                 self.assertEqual([], list(logger.session_dir.glob("frame_*")))
 
+    def test_manual_capture_saves_detector_snapshot_next_to_lossless_region(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with (
+                patch(
+                    "droid_alerts.belt.dev_logging.belt_dev_dir",
+                    return_value=root / "belt_dev",
+                ),
+                patch("droid_alerts.belt.dev_logging.data_dir", return_value=root),
+            ):
+                logger = BeltDevLogger(True)
+                frame = np.zeros((40, 60, 3), dtype=np.uint8)
+                relative_image = logger.save_manual_capture(
+                    frame,
+                    frame_number=17,
+                    now=12.5,
+                    detector_snapshot={
+                        "detector": "hybrid-v2",
+                        "accepted_detection_count": 1,
+                        "rejected_candidate_count": 0,
+                        "detected_names": ["R2"],
+                        "accepted_detections": [
+                            {
+                                "detected_name": "R2",
+                                "detected_rarity": "Gold",
+                            }
+                        ],
+                        "rejected_candidates": [],
+                    },
+                )
+
+                image_path = root / relative_image
+                metadata_path = image_path.with_suffix(".json")
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+                self.assertTrue(image_path.exists())
+                self.assertEqual("manual_p_hotkey", metadata["capture_source"])
+                self.assertEqual(
+                    "selected_belt_region",
+                    metadata["capture_scope"],
+                )
+                snapshot = metadata["detector_snapshot"]
+                self.assertEqual(["R2"], snapshot["detected_names"])
+                self.assertEqual(
+                    "Gold",
+                    snapshot["accepted_detections"][0]["detected_rarity"],
+                )
+                self.assertEqual([], snapshot["rejected_candidates"])
+
     def test_disabled_logger_creates_nothing(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -106,8 +159,154 @@ class BeltDevLoggerTests(unittest.TestCase):
 
             self.assertFalse((root / "belt_dev").exists())
 
+    def test_manual_miss_report_flushes_bounded_unreviewed_ring_buffer(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with (
+                patch(
+                    "droid_alerts.belt.dev_logging.belt_dev_dir",
+                    return_value=root / "belt_dev",
+                ),
+                patch("droid_alerts.belt.dev_logging.data_dir", return_value=root),
+            ):
+                logger = BeltDevLogger(True)
+                frame = np.zeros((40, 60, 3), dtype=np.uint8)
+                logger.remember_frame(
+                    frame,
+                    frame_number=1,
+                    now=10.0,
+                    metadata={"accepted_count": 0},
+                )
+                logger.remember_frame(
+                    frame,
+                    frame_number=2,
+                    now=10.2,
+                    metadata={"accepted_count": 1},
+                )
+                logger.remember_frame(
+                    frame,
+                    frame_number=3,
+                    now=10.6,
+                    metadata={"accepted_count": 0},
+                )
+                request_belt_miss_report("R2 passed without an alert")
+
+                relative_report = logger.consume_miss_request()
+
+                self.assertTrue(relative_report.startswith("belt_dev/session_"))
+                report = root / relative_report
+                manifest = json.loads(
+                    (report / "manifest.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual("unreviewed", manifest["label_status"])
+                self.assertEqual("never_auto_promote", manifest["training_status"])
+                self.assertEqual("missed", manifest["issue_kind"])
+                self.assertEqual(
+                    "R2 passed without an alert",
+                    manifest["note"],
+                )
+                self.assertEqual([1, 3], [item["frame"] for item in manifest["frames"]])
+                self.assertEqual(2, len(list(report.glob("frame_*.jpg"))))
+                self.assertFalse(
+                    (root / "belt_dev" / "report_miss.request").exists()
+                )
+
+    def test_manual_issue_report_records_kind_and_only_previous_fifteen_seconds(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with (
+                patch(
+                    "droid_alerts.belt.dev_logging.belt_dev_dir",
+                    return_value=root / "belt_dev",
+                ),
+                patch("droid_alerts.belt.dev_logging.data_dir", return_value=root),
+            ):
+                logger = BeltDevLogger(True)
+                frame = np.zeros((40, 60, 3), dtype=np.uint8)
+                logger.remember_frame(
+                    frame,
+                    frame_number=1,
+                    now=1.0,
+                )
+                logger.remember_frame(
+                    frame,
+                    frame_number=2,
+                    now=15.5,
+                )
+                logger.remember_frame(
+                    frame,
+                    frame_number=3,
+                    now=16.5,
+                )
+                request_belt_issue_report(
+                    "wrong",
+                    "Detected R9, actually R3",
+                )
+
+                relative_report = logger.consume_issue_request()
+
+                manifest = json.loads(
+                    (root / relative_report / "manifest.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual("wrong", manifest["issue_kind"])
+                self.assertEqual(
+                    "Detected R9, actually R3",
+                    manifest["note"],
+                )
+                self.assertEqual(
+                    [2, 3],
+                    [item["frame"] for item in manifest["frames"]],
+                )
+
 
 class BeltDevSupportBundleTests(unittest.TestCase):
+    def test_support_bundle_redacts_notification_profiles(self):
+        config = AppConfig(
+            notification_profiles={
+                "Private": {
+                    "discord_alert_destinations": {
+                        "belt_tracker": "Family server"
+                    },
+                    "discord_message_prefixes": {
+                        "belt_tracker": "Alice found this"
+                    },
+                    "discord_mentions": {
+                        "belt_tracker": {
+                            "type": "user",
+                            "id": "123456789012345678",
+                        }
+                    },
+                }
+            }
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            empty = root / "empty"
+            empty.mkdir()
+            with (
+                patch("droid_alerts.diagnostics.data_dir", return_value=root),
+                patch("droid_alerts.diagnostics.belt_dev_dir", return_value=empty),
+                patch("droid_alerts.diagnostics.logs_dir", return_value=empty),
+                patch("droid_alerts.diagnostics.debug_dir", return_value=empty),
+                patch(
+                    "droid_alerts.diagnostics.calibration_path",
+                    return_value=empty / "calibration.json",
+                ),
+                patch(
+                    "droid_alerts.diagnostics.belt_regions_path",
+                    return_value=empty / "belt_regions.json",
+                ),
+                patch("droid_alerts.diagnostics._safe_monitors", return_value=[]),
+            ):
+                bundle_path = create_support_bundle(config)
+
+            with zipfile.ZipFile(bundle_path) as bundle:
+                redacted = json.loads(bundle.read("config_redacted.json"))
+
+        self.assertEqual("<redacted>", redacted["notification_profiles"])
+
     def test_support_bundle_includes_latest_belt_session_only(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

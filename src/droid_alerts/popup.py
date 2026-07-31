@@ -1,29 +1,43 @@
 from __future__ import annotations
 
-import ctypes
+import multiprocessing
 import sys
-import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from PySide6.QtCore import (
+    QEasingCurve,
+    QPropertyAnimation,
+    QPoint,
+    QRect,
+    Qt,
+    QThread,
+    QTimer,
+)
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QIcon,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QPixmap,
+)
+from PySide6.QtWidgets import QApplication, QWidget
+
 from .classifier import Detection
-from .capture import MonitorInfo, format_tk_geometry
+from .capture import MonitorInfo
 from .config import AppConfig, assets_dir
-
-try:
-    import tkinter as tk
-    from tkinter import font as tkfont
-except Exception:  # pragma: no cover - tkinter availability is platform dependent.
-    tk = None
-    tkfont = None
-
 
 # Visual theme: text colored by droid family (Rainbow gets per-letter colors),
 # rarity shown as a colored pill, card border glows in the droid accent.
 DROID_TEXT_COLORS = {
     "Diamond": "#3fd9ff",
     "Beskar": "#e8eaf0",
-    "Galactic": "#9200e0",
+    "Galactic": "#b44df0",
     "Rebirth": "#ffb11b",
 }
 RAINBOW_LETTERS = ["#ff5252", "#ff9f2e", "#ffe14d", "#5ce06b", "#42c9ff", "#b06bff", "#ff6bd6"]
@@ -33,7 +47,7 @@ DROID_ACCENTS = {
     "Diamond": ("#3fd9ff", "#155a6e"),
     "Rainbow": ("#c05cff", "#4d2470"),
     "Beskar": ("#c9cdd9", "#4d5160"),
-    "Galactic": ("#9200e0", "#3d005e"),
+    "Galactic": ("#b44df0", "#3d005e"),
     "Rebirth": ("#ffb11b", "#6b4210"),
 }
 RARITY_COLORS = {
@@ -42,7 +56,7 @@ RARITY_COLORS = {
     "Diamond": "#3fd9ff",
     "Beskar": "#e8eaf0",
     "Rainbow": "#ff65d8",
-    "Galactic": "#9200e0",
+    "Galactic": "#b44df0",
     "Belt": "#65f3ff",
     "Common": "#e8e8e8",
     "Rare": "#3fd9ff",
@@ -55,6 +69,17 @@ CARD_BG_SOFT = "#1a1d2c"
 ICON_HAND_X = 34
 ICON_HAND_Y = 50
 ICON_HAND_DROP = 10
+PRIORITY_GONK_ICONS = {
+    "Diamond": "priority_gonk_diamond.png",
+    "Rainbow": "priority_gonk_rainbow.png",
+    "Beskar": "priority_gonk_beskar.png",
+    "Galactic": "priority_gonk_galactic.png",
+}
+POPUP_BASE_WIDTH = 560
+POPUP_BASE_HEIGHT = 154
+POPUP_EDIT_BAR_HEIGHT = 96
+POPUP_MIN_SCALE = 0.7
+POPUP_MAX_SCALE = 1.5
 
 
 @dataclass(frozen=True)
@@ -135,46 +160,6 @@ def _calculate_popup_layout(
     )
 
 
-def _apply_win32_color_key(window: "tk.Misc", color_hex: str) -> bool:
-    """Force the transparency color key at the WinAPI level.
-
-    Tk's -transparentcolor can silently fail on some window paths (e.g.
-    Toplevels under themed parents), leaving an opaque gray rectangle around
-    the card and character. A layered-window color key works regardless.
-    """
-    if sys.platform != "win32":
-        return False
-    try:
-        user32 = ctypes.windll.user32
-        hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
-        gwl_exstyle = -20
-        ws_ex_layered = 0x00080000
-        ws_ex_transparent = 0x00000020
-        ws_ex_noactivate = 0x08000000
-        lwa_colorkey = 0x00000001
-        r = int(color_hex[1:3], 16)
-        g = int(color_hex[3:5], 16)
-        b = int(color_hex[5:7], 16)
-        colorref = r | (g << 8) | (b << 16)
-        style = user32.GetWindowLongW(hwnd, gwl_exstyle)
-        user32.SetWindowLongW(
-            hwnd, gwl_exstyle, style | ws_ex_layered | ws_ex_transparent | ws_ex_noactivate
-        )
-        return bool(user32.SetLayeredWindowAttributes(hwnd, colorref, 0, lwa_colorkey))
-    except Exception:
-        return False
-
-
-def _rounded_rect(canvas: "tk.Canvas", x1: int, y1: int, x2: int, y2: int, radius: int, **kwargs) -> int:
-    r = max(1, min(radius, (x2 - x1) // 2, (y2 - y1) // 2))
-    points = [
-        x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
-        x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
-        x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
-    ]
-    return canvas.create_polygon(points, smooth=True, **kwargs)
-
-
 def _is_belt_detection(detection: Detection) -> bool:
     return detection.source == "belt-tracker" or detection.rarity == "Belt"
 
@@ -199,6 +184,10 @@ def _is_scrap_alert_detection(detection: Detection) -> bool:
     return detection.source in {"scrap-alert", "scrap-inactive"}
 
 
+def _is_timer_reminder_detection(detection: Detection) -> bool:
+    return detection.source == "timer-reminder"
+
+
 def _uses_attribute_rarity(detection: Detection) -> bool:
     return _is_belt_detection(detection) or detection.source == "limited-deal"
 
@@ -208,6 +197,8 @@ def _caption_text(detection: Detection) -> str:
         return "SCRAP ALERT"
     if _is_cb23_mission_detection(detection):
         return "MISSION READY"
+    if _is_timer_reminder_detection(detection):
+        return "TIMER REMINDER"
     if _is_rebirth_detection(detection):
         return (
             "REBIRTH ALERT"
@@ -233,6 +224,13 @@ def _title_segments(detection: Detection) -> list[tuple[str, str]]:
         ]
     if _is_cb23_mission_detection(detection):
         return [("CB23 MISSION", "#f04444")]
+    if _is_timer_reminder_detection(detection):
+        color = {
+            "Beskar Timer": RARITY_COLORS["Beskar"],
+            "Mythic Timer": RARITY_COLORS["Mythic"],
+            "Galactic Timer": RARITY_COLORS["Galactic"],
+        }.get(detection.droid, "#39c6d8")
+        return [(detection.droid.upper(), color)]
     if _is_rebirth_detection(detection):
         return (
             [("REBIRTH DROID AVAILABLE", DROID_TEXT_COLORS["Rebirth"])]
@@ -275,78 +273,642 @@ def _title_lines(detection: Detection) -> list[list[tuple[str, str]]]:
     return [line for line in (attributes, name) if line]
 
 
-def _fitted_font(
-    window: "tk.Misc",
-    segments: list[tuple[str, str]],
-    *,
-    family: str,
-    preferred_size: int,
-    minimum_size: int,
-    max_width: int,
-    weight: str | None = None,
-) -> "tkfont.Font":
-    """Create the largest font that keeps every segment inside max_width."""
+def popup_icon_path(
+    config: AppConfig,
+    detection: Detection | None = None,
+) -> Path:
+    """Use the matching Gonk rarity for normal priority-spawn popups."""
 
-    preferred_size = max(1, int(preferred_size))
-    minimum_size = max(1, min(preferred_size, int(minimum_size)))
-    font_options: dict[str, object] = {
-        "root": window,
-        "family": family,
-        "size": preferred_size,
-    }
-    if weight is not None:
-        font_options["weight"] = weight
-    font_obj = tkfont.Font(**font_options)
-
-    def measured_width() -> int:
-        return sum(font_obj.measure(text) for text, _color in segments)
-
-    width = measured_width()
-    if width <= max_width or width <= 0:
-        return font_obj
-    size = max(minimum_size, int(preferred_size * max_width / width))
-    font_obj.configure(size=size)
-    while size > minimum_size and measured_width() > max_width:
-        size -= 1
-        font_obj.configure(size=size)
-    return font_obj
-
-
-def _draw_segments(
-    canvas: "tk.Canvas",
-    segments: list[tuple[str, str]],
-    center_x: int,
-    y: int,
-    font_obj: "tkfont.Font",
-) -> None:
-    total = sum(font_obj.measure(text) for text, _color in segments)
-    x = center_x - total // 2
-    for text, color in segments:
-        # Cheap outline for readability over the transparent desktop edge.
-        canvas.create_text(x + 2, y + 2, text=text, fill="#05060a", font=font_obj, anchor="w")
-        canvas.create_text(x, y, text=text, fill=color, font=font_obj, anchor="w")
-        x += font_obj.measure(text)
-
-
-def popup_icon_path(config: AppConfig) -> Path:
+    if detection is not None and detection.is_priority:
+        gonk_file = PRIORITY_GONK_ICONS.get(detection.droid)
+        if gonk_file:
+            gonk_path = assets_dir() / gonk_file
+            if gonk_path.is_file():
+                return gonk_path
     return assets_dir() / config.popup_icon_file
 
 
-def bring_popup_to_front(root: "tk.Tk", x: int, y: int, width: int, height: int) -> None:
-    root.lift()
-    root.attributes("-topmost", True)
-    if sys.platform != "win32":
-        return
-    try:
-        hwnd = root.winfo_id()
-        hwnd_topmost = -1
-        swp_showwindow = 0x0040
-        swp_noactivate = 0x0010
-        ctypes.windll.user32.SetWindowPos(
-            hwnd, hwnd_topmost, x, y, width, height, swp_showwindow | swp_noactivate
+def _centered_text_bounds(
+    body_left: int,
+    body_right: int,
+    *,
+    icon_right: int | None,
+    scale: float,
+) -> tuple[int, int]:
+    """Reserve equal visual space around popup text so it stays card-centered."""
+
+    padding = round(16 * scale)
+    left = body_left + padding
+    right = body_right - padding
+    if icon_right is None:
+        return left, right
+
+    left = max(left, icon_right + round(14 * scale))
+    center = (body_left + body_right) // 2
+    half_width = min(center - left, right - center)
+    if half_width >= 60:
+        return center - half_width, center + half_width
+    return left, right
+
+
+def _accent(detection: Detection) -> tuple[str, str]:
+    if _is_scrap_alert_detection(detection):
+        return "#e7a72f", "#6f4b12"
+    if _is_rebirth_ready_detection(detection):
+        return "#20f070", "#126b3c"
+    if _is_timer_reminder_detection(detection):
+        return {
+            "Beskar Timer": DROID_ACCENTS["Beskar"],
+            "Mythic Timer": ("#ff3fa8", "#6b1645"),
+            "Galactic Timer": DROID_ACCENTS["Galactic"],
+        }.get(detection.droid, ("#39c6d8", "#17323a"))
+    key = (
+        "Rebirth"
+        if _is_rebirth_available_detection(detection)
+        else (
+            detection.rarity.split(" ", 1)[0]
+            if _uses_attribute_rarity(detection)
+            else detection.droid
         )
-    except Exception:
-        pass
+    )
+    return DROID_ACCENTS.get(key, ("#ff0055", "#5a0f2c"))
+
+
+class _PopupWidget(QWidget):
+    def __init__(
+        self,
+        detection: Detection,
+        popup_seconds: float,
+        *,
+        icon_path: Path | None,
+        monitor: MonitorInfo | None,
+        position: str,
+        center_x_ratio: float | None = None,
+        top_y_ratio: float | None = None,
+        scale: float,
+        opacity: float,
+        standalone: bool = False,
+        edit_mode: bool = False,
+        on_layout_change: (
+            Callable[[str, float, float, float, bool], None] | None
+        ) = None,
+    ) -> None:
+        super().__init__(None)
+        self.detection = detection
+        self.popup_seconds = max(0.5, float(popup_seconds))
+        self._started = time.monotonic()
+        self._standalone = standalone
+        self.edit_mode = bool(edit_mode)
+        self._on_layout_change = on_layout_change
+        self._legacy_position = str(position or "top_center")
+        self._custom_position = (
+            center_x_ratio is not None and top_y_ratio is not None
+        )
+        self.center_x_ratio = (
+            min(1.0, max(0.0, float(center_x_ratio)))
+            if center_x_ratio is not None
+            else None
+        )
+        self.top_y_ratio = (
+            min(1.0, max(0.0, float(top_y_ratio)))
+            if top_y_ratio is not None
+            else None
+        )
+        self._drag_offset: QPoint | None = None
+        self._accent, self._accent_dim = _accent(detection)
+        self._icon = (
+            QPixmap(str(icon_path))
+            if icon_path is not None and icon_path.is_file()
+            else QPixmap()
+        )
+        self._scale = min(POPUP_MAX_SCALE, max(POPUP_MIN_SCALE, float(scale)))
+        self._apply_window_mode()
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setWindowOpacity(min(1.0, max(0.55, float(opacity))))
+        if icon_path is not None and icon_path.is_file():
+            self.setWindowIcon(QIcon(str(icon_path)))
+
+        screen = QApplication.primaryScreen()
+        if monitor is not None:
+            self._screen = QRect(
+                monitor.left,
+                monitor.top,
+                monitor.width,
+                monitor.height,
+            )
+        elif screen is not None:
+            self._screen = screen.geometry()
+        else:
+            self._screen = QRect(0, 0, 1920, 1080)
+
+        self._apply_geometry(animate=not self.edit_mode)
+        if self.edit_mode:
+            self._store_position()
+
+        self._tick = QTimer(self)
+        self._tick.setInterval(30)
+        self._tick.timeout.connect(self._advance)
+        self._tick.start()
+        if not self.edit_mode:
+            QTimer.singleShot(round(self.popup_seconds * 1000), self.close)
+
+        self._entry = QPropertyAnimation(self, b"geometry", self)
+        self._entry.setDuration(300)
+        self._entry.setStartValue(self.geometry())
+        self._entry.setEndValue(self._final_geometry)
+        self._entry.setEasingCurve(QEasingCurve.Type.OutBack)
+
+    def _apply_window_mode(self) -> None:
+        flags = (
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        if not self.edit_mode:
+            flags |= (
+                Qt.WindowType.WindowTransparentForInput
+                | Qt.WindowType.WindowDoesNotAcceptFocus
+            )
+        self.setWindowFlags(flags)
+
+    def _card_size(self) -> tuple[int, int]:
+        width = min(
+            max(1, self._screen.width() - 32),
+            max(360, round(POPUP_BASE_WIDTH * self._scale)),
+        )
+        height = min(
+            max(1, self._screen.height() - 32),
+            max(118, round(POPUP_BASE_HEIGHT * self._scale)),
+        )
+        return width, height
+
+    def _window_size(self) -> tuple[int, int]:
+        width, height = self._card_size()
+        if self.edit_mode:
+            height += round(POPUP_EDIT_BAR_HEIGHT * self._scale)
+        return width, min(max(1, self._screen.height() - 2), height)
+
+    def _legacy_origin(self, width: int, card_height: int) -> tuple[int, int]:
+        left, top = self._screen.left(), self._screen.top()
+        screen_width, screen_height = self._screen.width(), self._screen.height()
+        margin = max(16, round(24 * self._scale))
+        if self._legacy_position.endswith("left"):
+            x = left + margin
+        elif self._legacy_position.endswith("right"):
+            x = left + screen_width - width - margin
+        else:
+            x = left + (screen_width - width) // 2
+        if self._legacy_position.startswith("bottom"):
+            y = top + screen_height - card_height - margin
+        else:
+            y = top + min(
+                max(92, margin),
+                max(margin, screen_height - card_height - margin),
+            )
+        return x, y
+
+    def _apply_geometry(self, *, animate: bool = False) -> None:
+        width, card_height = self._card_size()
+        _window_width, window_height = self._window_size()
+        if self.center_x_ratio is not None and self.top_y_ratio is not None:
+            x = round(
+                self._screen.left()
+                + self.center_x_ratio * self._screen.width()
+                - width / 2
+            )
+            y = round(
+                self._screen.top() + self.top_y_ratio * self._screen.height()
+            )
+        else:
+            x, y = self._legacy_origin(width, card_height)
+        x = max(
+            self._screen.left(),
+            min(self._screen.right() - width + 1, x),
+        )
+        y = max(
+            self._screen.top(),
+            min(self._screen.bottom() - window_height + 1, y),
+        )
+        self._card_width = width
+        self._card_height = card_height
+        self._final_geometry = QRect(x, y, width, window_height)
+        start_y = y
+        if animate:
+            start_y += 14 if self._legacy_position.startswith("bottom") else -14
+        self.setGeometry(x, start_y, width, window_height)
+
+    def _store_position(self) -> None:
+        self.center_x_ratio = min(
+            1.0,
+            max(
+                0.0,
+                (self.x() - self._screen.left() + self._card_width / 2)
+                / max(1, self._screen.width()),
+            ),
+        )
+        self.top_y_ratio = min(
+            1.0,
+            max(
+                0.0,
+                (self.y() - self._screen.top()) / max(1, self._screen.height()),
+            ),
+        )
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.raise_()
+        if not self.edit_mode:
+            self._entry.start()
+        else:
+            self.activateWindow()
+
+    def _advance(self) -> None:
+        if not self.edit_mode and time.monotonic() - self._started >= self.popup_seconds:
+            self.close()
+            return
+        self.update()
+
+    def _button_rects(self) -> dict[str, QRect]:
+        scale = self._scale
+        first_top = self._card_height + round(24 * scale)
+        first_height = max(24, round(30 * scale))
+        center = self._card_width // 2
+        return {
+            "smaller": QRect(
+                center - round(168 * scale),
+                first_top,
+                round(48 * scale),
+                first_height,
+            ),
+            "larger": QRect(
+                center - round(112 * scale),
+                first_top,
+                round(48 * scale),
+                first_height,
+            ),
+            "done": QRect(
+                center - round(54 * scale),
+                first_top,
+                round(102 * scale),
+                first_height,
+            ),
+            "cancel": QRect(
+                center + round(58 * scale),
+                first_top,
+                round(102 * scale),
+                first_height,
+            ),
+            "reset": QRect(
+                center - round(86 * scale),
+                first_top + first_height + round(7 * scale),
+                round(172 * scale),
+                max(22, round(27 * scale)),
+            ),
+        }
+
+    def _font(self, pixel_size: int, *, bold: bool = False) -> QFont:
+        family = "Segoe UI" if sys.platform == "win32" else "Avenir Next"
+        font = QFont(family)
+        font.setPixelSize(max(8, round(pixel_size * self._scale)))
+        font.setWeight(QFont.Weight.Bold if bold else QFont.Weight.Medium)
+        return font
+
+    @staticmethod
+    def _fit_font(
+        painter: QPainter,
+        segments: list[tuple[str, str]],
+        font: QFont,
+        max_width: int,
+        minimum: int,
+    ) -> QFont:
+        fitted = QFont(font)
+        while (
+            fitted.pixelSize() > minimum
+            and sum(
+                painter.fontMetrics().horizontalAdvance(text)
+                for text, _color in segments
+            )
+            > max_width
+        ):
+            fitted.setPixelSize(fitted.pixelSize() - 1)
+            painter.setFont(fitted)
+        return fitted
+
+    def _draw_segments(
+        self,
+        painter: QPainter,
+        segments: list[tuple[str, str]],
+        y: int,
+        font: QFont,
+        center_x: int,
+    ) -> None:
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        total = sum(metrics.horizontalAdvance(text) for text, _color in segments)
+        x = center_x - total // 2
+        baseline = y + (metrics.ascent() - metrics.descent()) // 2
+        for text, color in segments:
+            painter.setPen(QColor("#05060a"))
+            painter.drawText(x + 2, baseline + 2, text)
+            painter.setPen(QColor(color))
+            painter.drawText(x, baseline, text)
+            x += metrics.horizontalAdvance(text)
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        body = QRect(0, 0, self._card_width, self._card_height).adjusted(
+            4, 4, -4, -4
+        )
+        painter.setPen(QPen(QColor(self._accent_dim), 6))
+        painter.setBrush(QColor(CARD_BG))
+        painter.drawRoundedRect(body, 16, 16)
+        painter.setPen(QPen(QColor(self._accent), 1))
+        painter.drawRoundedRect(body.adjusted(2, 2, -2, -2), 14, 14)
+
+        header_height = max(36, round(44 * self._scale))
+        header = QRect(
+            body.left() + 3,
+            body.top() + 3,
+            body.width() - 6,
+            header_height,
+        )
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(CARD_BG_SOFT))
+        painter.drawRoundedRect(header, 12, 12)
+        painter.drawRect(
+            header.left(),
+            header.bottom() - 12,
+            header.width(),
+            13,
+        )
+        painter.setPen(QColor(self._accent))
+        caption_font = self._font(11, bold=True)
+        caption_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 3)
+        painter.setFont(caption_font)
+        painter.drawText(
+            header,
+            Qt.AlignmentFlag.AlignCenter,
+            _caption_text(self.detection),
+        )
+
+        lines = _title_lines(self.detection)
+        center_y = header.bottom() + (body.bottom() - header.bottom()) // 2 + 3
+        icon_right: int | None = None
+        if not self._icon.isNull():
+            icon_size = min(
+                round(72 * self._scale),
+                body.bottom() - header.bottom() - round(12 * self._scale),
+            )
+            icon_rect = QRect(
+                body.left() + round(16 * self._scale),
+                header.bottom()
+                + (body.bottom() - header.bottom() - icon_size) // 2,
+                icon_size,
+                icon_size,
+            )
+            painter.drawPixmap(
+                icon_rect,
+                self._icon,
+                self._icon.rect(),
+            )
+            icon_right = icon_rect.right()
+        content_left, content_right = _centered_text_bounds(
+            body.left(),
+            body.right(),
+            icon_right=icon_right,
+            scale=self._scale,
+        )
+        content_center = (body.left() + body.right()) // 2
+        max_width = max(120, content_right - content_left)
+        if len(lines) == 1:
+            font = self._font(31, bold=True)
+            painter.setFont(font)
+            font = self._fit_font(painter, lines[0], font, max_width, 14)
+            self._draw_segments(
+                painter,
+                lines[0],
+                center_y,
+                font,
+                content_center,
+            )
+        else:
+            attribute_font = self._font(14, bold=True)
+            painter.setFont(attribute_font)
+            attribute_font = self._fit_font(
+                painter,
+                lines[0],
+                attribute_font,
+                max_width,
+                10,
+            )
+            name_font = self._font(29, bold=True)
+            painter.setFont(name_font)
+            name_font = self._fit_font(
+                painter,
+                lines[1],
+                name_font,
+                max_width,
+                14,
+            )
+            self._draw_segments(
+                painter,
+                lines[0],
+                center_y - round(17 * self._scale),
+                attribute_font,
+                content_center,
+            )
+            self._draw_segments(
+                painter,
+                lines[1],
+                center_y + round(14 * self._scale),
+                name_font,
+                content_center,
+            )
+
+        elapsed = time.monotonic() - self._started
+        remaining = (
+            1.0
+            if self.edit_mode
+            else max(0.0, 1.0 - elapsed / self.popup_seconds)
+        )
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(self._accent))
+        painter.drawRoundedRect(
+            body.left(),
+            body.bottom() - 2,
+            round(body.width() * remaining),
+            3,
+            2,
+            2,
+        )
+
+        if self.edit_mode:
+            painter.setFont(self._font(10, bold=True))
+            painter.setPen(QColor("#8ba0ae"))
+            painter.drawText(
+                QRect(
+                    0,
+                    self._card_height + round(2 * self._scale),
+                    self._card_width,
+                    round(20 * self._scale),
+                ),
+                Qt.AlignmentFlag.AlignCenter,
+                "DRAG THE POPUP TO MOVE IT",
+            )
+            for key, rect in self._button_rects().items():
+                painter.setBrush(QColor("#17323a" if key == "done" else "#182330"))
+                painter.setPen(QPen(QColor("#39c6d8"), 1))
+                painter.drawRoundedRect(rect, rect.height() // 2, rect.height() // 2)
+                painter.setPen(QColor("#e9f1f7"))
+                painter.drawText(
+                    rect,
+                    Qt.AlignmentFlag.AlignCenter,
+                    {
+                        "smaller": "−",
+                        "larger": "+",
+                        "done": "Done",
+                        "cancel": "Cancel",
+                        "reset": "Reset to default",
+                    }[key],
+                )
+
+    def _resize_step(self, delta: float) -> None:
+        self._store_position()
+        self._custom_position = True
+        self._scale = min(
+            POPUP_MAX_SCALE,
+            max(POPUP_MIN_SCALE, round(self._scale + delta, 2)),
+        )
+        self._apply_geometry()
+        self.update()
+
+    def _reset_layout(self) -> None:
+        self._legacy_position = "top_center"
+        self._custom_position = False
+        self.center_x_ratio = None
+        self.top_y_ratio = None
+        self._scale = 1.0
+        self._apply_geometry()
+        self._store_position()
+        self.update()
+
+    def _finish_editing(self, save: bool) -> None:
+        if save:
+            self._store_position()
+            if self._on_layout_change is not None:
+                self._on_layout_change(
+                    self._legacy_position,
+                    float(self.center_x_ratio or 0.5),
+                    float(self.top_y_ratio or 0.0),
+                    self._scale,
+                    self._custom_position,
+                )
+        self.close()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if not self.edit_mode or event.button() != Qt.MouseButton.LeftButton:
+            return
+        point = event.position().toPoint()
+        for key, rect in self._button_rects().items():
+            if not rect.contains(point):
+                continue
+            if key == "smaller":
+                self._resize_step(-0.1)
+            elif key == "larger":
+                self._resize_step(0.1)
+            elif key == "reset":
+                self._reset_layout()
+            else:
+                self._finish_editing(key == "done")
+            return
+        self._drag_offset = event.globalPosition().toPoint() - self.pos()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if not self.edit_mode or self._drag_offset is None:
+            return
+        candidate = event.globalPosition().toPoint() - self._drag_offset
+        x = max(
+            self._screen.left(),
+            min(self._screen.right() - self.width() + 1, candidate.x()),
+        )
+        y = max(
+            self._screen.top(),
+            min(self._screen.bottom() - self.height() + 1, candidate.y()),
+        )
+        self._custom_position = True
+        self.move(x, y)
+
+    def mouseReleaseEvent(self, _event: QMouseEvent) -> None:
+        if self._drag_offset is not None:
+            self._store_position()
+        self._drag_offset = None
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if self.edit_mode and event.key() == Qt.Key.Key_Escape:
+            self._finish_editing(False)
+            return
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event) -> None:
+        global _ACTIVE_POPUP_EDITOR
+        self._tick.stop()
+        try:
+            _ACTIVE_POPUPS.remove(self)
+        except ValueError:
+            pass
+        if _ACTIVE_POPUP_EDITOR is self:
+            _ACTIVE_POPUP_EDITOR = None
+        super().closeEvent(event)
+        if self._standalone:
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+
+
+_ACTIVE_POPUPS: list[_PopupWidget] = []
+_ACTIVE_POPUP_EDITOR: _PopupWidget | None = None
+
+
+def bring_popup_to_front(
+    root: QWidget,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+) -> None:
+    root.setGeometry(x, y, width, height)
+    root.show()
+    root.raise_()
+
+
+def _run_popup_process(
+    detection: Detection,
+    popup_seconds: float,
+    icon_path: Path | None,
+    monitor: MonitorInfo | None,
+    position: str,
+    center_x_ratio: float | None,
+    top_y_ratio: float | None,
+    scale: float,
+    opacity: float,
+) -> None:
+    app = QApplication([])
+    popup = _PopupWidget(
+        detection,
+        popup_seconds,
+        icon_path=icon_path,
+        monitor=monitor,
+        position=position,
+        center_x_ratio=center_x_ratio,
+        top_y_ratio=top_y_ratio,
+        scale=scale,
+        opacity=opacity,
+        standalone=True,
+    )
+    popup.show()
+    app.exec()
 
 
 def show_popup(
@@ -354,218 +916,104 @@ def show_popup(
     popup_seconds: float,
     *,
     icon_path: Path | None = None,
-    parent: "tk.Misc | None" = None,
+    parent=None,
     monitor: MonitorInfo | None = None,
     position: str = "top_center",
+    center_x_ratio: float | None = None,
+    top_y_ratio: float | None = None,
     scale: float = 1.0,
     opacity: float = 1.0,
 ) -> None:
-    if tk is None:
+    app = QApplication.instance()
+    if app is not None and QThread.currentThread() is app.thread():
+        popup = _PopupWidget(
+            detection,
+            popup_seconds,
+            icon_path=icon_path,
+            monitor=monitor,
+            position=position,
+            center_x_ratio=center_x_ratio,
+            top_y_ratio=top_y_ratio,
+            scale=scale,
+            opacity=opacity,
+        )
+        _ACTIVE_POPUPS.append(popup)
+        popup.show()
         return
-
-    def create_popup(window, *, owns_mainloop: bool) -> None:
-        window.overrideredirect(True)
-        window.attributes("-topmost", True)
-        try:
-            window.attributes("-alpha", min(1.0, max(0.55, float(opacity))))
-        except Exception:
-            pass
-        transparent = "#010203"
-        window.configure(bg=transparent)
-        tk_transparency = False
-        try:
-            window.attributes("-transparentcolor", transparent)
-            tk_transparency = True
-        except Exception:
-            pass
-        if tk_transparency or sys.platform == "win32":
-            # Win32 color key applied after mapping (below) backs up Tk's
-            # attribute, which can silently fail on some Toplevel paths.
-            canvas_bg = transparent
-        else:
-            window.configure(bg=CARD_BG)
-            canvas_bg = CARD_BG
-
-        screen_w = monitor.width if monitor is not None else window.winfo_screenwidth()
-        screen_h = monitor.height if monitor is not None else window.winfo_screenheight()
-        screen_left = monitor.left if monitor is not None else 0
-        screen_top = monitor.top if monitor is not None else 0
-        icon = None
-        if icon_path and icon_path.exists():
-            try:
-                # master= binds the image to THIS window's interpreter; the
-                # process default root may belong to another overlay's Tk
-                # (e.g. Droid Timers), which breaks with "pyimageN doesn't
-                # exist".
-                icon = tk.PhotoImage(master=window, file=str(icon_path))
-            except Exception as exc:
-                print(f"[POPUP] Failed to load icon: {exc}")
-                icon = None
-
-        layout = _calculate_popup_layout(
-            screen_w,
-            screen_h,
-            scale,
-            icon_width=icon.width() if icon is not None else 0,
-            icon_height=icon.height() if icon is not None else 0,
+    try:
+        process = multiprocessing.get_context("spawn").Process(
+            target=_run_popup_process,
+            args=(
+                detection,
+                popup_seconds,
+                icon_path,
+                monitor,
+                position,
+                center_x_ratio,
+                top_y_ratio,
+                scale,
+                opacity,
+            ),
+            name="DroidAlertsPopup",
+            daemon=True,
         )
-        if not layout.show_icon:
-            icon = None
-        width = layout.width
-        height = layout.height
-        panel_width = layout.panel_width
-        panel_height = layout.panel_height
-        margin = layout.margin
-        ui_scale = layout.ui_scale
-        if position.endswith("left"):
-            x = screen_left + margin
-        elif position.endswith("right"):
-            x = screen_left + max(margin, screen_w - width - margin)
-        else:
-            x = screen_left + max(0, (screen_w - width) // 2)
-        if position.startswith("bottom"):
-            y = screen_top + max(margin, screen_h - height - margin)
-        else:
-            # Keep top alerts below the default timer-strip position.
-            available_y = max(margin, screen_h - height - margin)
-            y = screen_top + min(max(92, margin), available_y)
-        window.geometry(format_tk_geometry(width=width, height=height, x=x, y=y))
+        process.start()
+    except Exception as exc:
+        print(f"[POPUP] Failed to show alert: {exc}")
 
-        canvas = tk.Canvas(window, width=width, height=height, bg=canvas_bg, highlightthickness=0)
-        canvas.pack(fill="both", expand=True)
-        # Themed parents (ttkbootstrap GUI) override the constructor bg with
-        # the theme color, which breaks the transparency color key; an
-        # explicit post-creation configure always wins.
-        canvas.configure(bg=canvas_bg, highlightthickness=0)
 
-        if _is_scrap_alert_detection(detection):
-            accent, accent_dim = "#e7a72f", "#6f4b12"
-        elif _is_rebirth_ready_detection(detection):
-            accent, accent_dim = "#20f070", "#126b3c"
-        else:
-            accent_key = (
-                "Rebirth"
-                if _is_rebirth_available_detection(detection)
-                else (
-                    detection.rarity.split(" ", 1)[0]
-                    if _uses_attribute_rarity(detection)
-                    else detection.droid
-                )
-            )
-            accent, accent_dim = DROID_ACCENTS.get(accent_key, ("#ff0055", "#5a0f2c"))
+def adjust_priority_popup(
+    config: AppConfig,
+    *,
+    monitor: MonitorInfo | None = None,
+    on_layout_change: (
+        Callable[[str, float, float, float, bool], None] | None
+    ) = None,
+) -> _PopupWidget | None:
+    """Show a draggable priority-alert preview with resize controls."""
 
-        # Card: soft outer ring + accent border + dark rounded body.
-        _rounded_rect(canvas, 0, 0, panel_width - 1, panel_height - 1, 20, fill=accent_dim, outline="")
-        _rounded_rect(canvas, 3, 3, panel_width - 4, panel_height - 4, 18, fill=accent, outline="")
-        _rounded_rect(canvas, 6, 6, panel_width - 7, panel_height - 7, 16, fill=CARD_BG, outline="")
-        # Subtle inner header band.
-        header_height = min(
-            max(40, int(56 * ui_scale)),
-            max(40, panel_height - 44),
-        )
-        _rounded_rect(
-            canvas,
-            6,
-            6,
-            panel_width - 7,
-            header_height,
-            16,
-            fill=CARD_BG_SOFT,
-            outline="",
-        )
-        canvas.create_rectangle(
-            6,
-            max(6, header_height - 16),
-            panel_width - 7,
-            header_height,
-            fill=CARD_BG_SOFT,
-            outline="",
-        )
+    global _ACTIVE_POPUP_EDITOR
+    app = QApplication.instance()
+    if app is None or QThread.currentThread() is not app.thread():
+        return None
+    if _ACTIVE_POPUP_EDITOR is not None and _ACTIVE_POPUP_EDITOR.isVisible():
+        _ACTIVE_POPUP_EDITOR.raise_()
+        _ACTIVE_POPUP_EDITOR.activateWindow()
+        return _ACTIVE_POPUP_EDITOR
+    detection = Detection(
+        droid="Rebirth",
+        rarity="Ready",
+        row_box=(0, 0, 0, 0),
+        droid_score=1.0,
+        rarity_score=1.0,
+        rarity_margin=1.0,
+        score=1.0,
+        source="rebirth-ready",
+    )
+    editor = _PopupWidget(
+        detection,
+        config.popup_seconds,
+        icon_path=popup_icon_path(config, detection),
+        monitor=monitor,
+        position=config.popup_position,
+        center_x_ratio=(
+            config.popup_center_x if config.popup_custom_position else None
+        ),
+        top_y_ratio=config.popup_top_y if config.popup_custom_position else None,
+        scale=config.popup_scale,
+        opacity=config.popup_opacity,
+        edit_mode=True,
+        on_layout_change=on_layout_change,
+    )
+    _ACTIVE_POPUP_EDITOR = editor
+    editor.show()
+    return editor
 
-        center_x = panel_width // 2
-        caption_font = tkfont.Font(
-            root=window, family="Segoe UI", size=max(9, int(13 * ui_scale)), weight="bold"
-        )
 
-        caption = _caption_text(detection)
-        canvas.create_text(
-            center_x,
-            header_height // 2 + 3,
-            text=" ".join(caption),
-            fill=accent,
-            font=caption_font,
-            anchor="center",
-        )
-
-        title_lines = _title_lines(detection)
-        title_width = max(40, panel_width - max(28, int(40 * ui_scale)))
-        body_top = header_height + max(4, int(6 * ui_scale))
-        body_bottom = panel_height - max(6, int(10 * ui_scale))
-        body_center = (body_top + body_bottom) // 2
-        if len(title_lines) == 1:
-            title_font = _fitted_font(
-                window,
-                title_lines[0],
-                family="Segoe UI Black",
-                preferred_size=max(20, int(32 * ui_scale)),
-                minimum_size=max(11, int(14 * ui_scale)),
-                max_width=title_width,
-            )
-            _draw_segments(canvas, title_lines[0], center_x, body_center, title_font)
-        else:
-            attribute_font = _fitted_font(
-                window,
-                title_lines[0],
-                family="Segoe UI",
-                preferred_size=max(12, int(18 * ui_scale)),
-                minimum_size=max(9, int(11 * ui_scale)),
-                max_width=title_width,
-                weight="bold",
-            )
-            name_font = _fitted_font(
-                window,
-                title_lines[1],
-                family="Segoe UI Black",
-                preferred_size=max(19, int(31 * ui_scale)),
-                minimum_size=max(11, int(14 * ui_scale)),
-                max_width=title_width,
-            )
-            attribute_height = int(attribute_font.metrics("linespace"))
-            name_height = int(name_font.metrics("linespace"))
-            line_gap = max(2, int(4 * ui_scale))
-            total_height = attribute_height + line_gap + name_height
-            attribute_y = body_center - total_height // 2 + attribute_height // 2
-            name_y = attribute_y + attribute_height // 2 + line_gap + name_height // 2
-            _draw_segments(canvas, title_lines[0], center_x, attribute_y, attribute_font)
-            _draw_segments(canvas, title_lines[1], center_x, name_y, name_font)
-
-        if icon is not None:
-            window._droid_alerts_popup_icon = icon  # type: ignore[attr-defined]
-            icon_left = panel_width - ICON_HAND_X + 3
-            icon_top = panel_height - ICON_HAND_Y + ICON_HAND_DROP
-            canvas.create_image(icon_left, icon_top, image=icon, anchor="nw")
-
-        window.update_idletasks()
-        if canvas_bg == transparent:
-            _apply_win32_color_key(window, transparent)
-        bring_popup_to_front(window, x, y, width, height)
-        window.after(int(max(0.5, popup_seconds) * 1000), window.destroy)
-        if owns_mainloop:
-            window.mainloop()
-
-    def popup_thread() -> None:
-        try:
-            root = tk.Tk()
-            create_popup(root, owns_mainloop=True)
-        except Exception as exc:
-            print(f"[POPUP] Failed to show alert: {exc}")
-
-    if parent is not None:
-        try:
-            create_popup(tk.Toplevel(parent), owns_mainloop=False)
-            return
-        except Exception as exc:
-            print(f"[POPUP] Failed to show GUI popup: {exc}")
-            return
-
-    threading.Thread(target=popup_thread, daemon=True).start()
+def hide_popup_editor() -> None:
+    global _ACTIVE_POPUP_EDITOR
+    editor = _ACTIVE_POPUP_EDITOR
+    if editor is not None:
+        _ACTIVE_POPUP_EDITOR = None
+        editor.close()
+        editor.deleteLater()
