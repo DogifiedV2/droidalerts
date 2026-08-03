@@ -424,6 +424,13 @@ ApplicationWindow {
                         Item { Layout.fillWidth: true }
 
                         SignalButton {
+                            visible: diagnosticsController.state.updateAvailable
+                            text: "Update ready!"
+                            tone: "primary"
+                            onClicked: diagnosticsController.showAvailableUpdate()
+                        }
+
+                        SignalButton {
                             text: appController.state.watchButton
                             tone: appController.state.watching ? "danger" : "primary"
                             onClicked: appController.toggleWatching()

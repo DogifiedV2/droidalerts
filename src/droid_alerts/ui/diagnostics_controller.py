@@ -52,6 +52,7 @@ class DiagnosticsController(StateObject):
         self._region_key: str | None = None
         self._preview: ImagePreviewDialog | None = None
         self._update_running = False
+        self._available_update: dict[str, str] | None = None
         self._last_cleanup = 0.0
         super().__init__(
             {
@@ -59,6 +60,8 @@ class DiagnosticsController(StateObject):
                 "regionStatus": "Chat region is hidden",
                 "storage": "Calculating storage…",
                 "updateStatus": "",
+                "updateAvailable": False,
+                "updateName": "",
                 "busy": False,
             },
             parent=parent,
@@ -368,9 +371,19 @@ class DiagnosticsController(StateObject):
                     )
                 return
             if result is None:
-                self.update_state(updateStatus="Droid Alerts is up to date")
+                self._available_update = None
+                self.update_state(
+                    updateStatus="Droid Alerts is up to date",
+                    updateAvailable=False,
+                    updateName="",
+                )
                 return
-            self.update_state(updateStatus=f"{result['name']} is available")
+            self._available_update = result
+            self.update_state(
+                updateStatus=f"{result['name']} is available",
+                updateAvailable=True,
+                updateName=result["name"],
+            )
             if manual:
                 self._offer_update(result)
 
@@ -379,6 +392,13 @@ class DiagnosticsController(StateObject):
             done,
             name="DroidAlertsUpdateCheck",
         )
+
+    @Slot()
+    def showAvailableUpdate(self) -> None:
+        if self._available_update is None:
+            self.checkUpdates(True)
+            return
+        self._offer_update(self._available_update)
 
     def _offer_update(self, release: dict[str, str]) -> None:
         self.runtime.dialogs.confirm(
