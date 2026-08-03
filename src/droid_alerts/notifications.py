@@ -869,12 +869,11 @@ def latest_release_info(repo: str) -> dict[str, str] | None:
     repo = repo.strip().strip("/")
     if not repo or "/" not in repo:
         return None
+    latest_url = f"https://github.com/{repo}/releases/latest"
     request = urllib.request.Request(
-        f"https://api.github.com/repos/{repo}/releases/latest",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": USER_AGENT,
-        },
+        latest_url,
+        headers={"User-Agent": USER_AGENT},
+        method="HEAD",
     )
     try:
         with urllib.request.urlopen(
@@ -882,35 +881,33 @@ def latest_release_info(repo: str) -> dict[str, str] | None:
             timeout=6,
             context=certifi_ssl_context(),
         ) as response:
-            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+            release_url = response.geturl()
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
-        raise
-    if not isinstance(payload, dict):
+        if exc.code in {403, 429}:
+            raise RuntimeError(
+                "GitHub temporarily limited update checks. Droid Alerts will try again later."
+            ) from exc
+        raise RuntimeError(f"GitHub update check failed (HTTP {exc.code}).") from exc
+
+    marker = f"https://github.com/{repo}/releases/tag/"
+    if not release_url.startswith(marker):
         return None
-    tag = str(payload.get("tag_name", "")).strip()
+    tag = urllib.parse.unquote(release_url[len(marker) :]).strip().strip("/")
     if not tag:
         return None
-    package_zip_url = ""
-    # Accept both the published asset name and Build EXE.bat's raw output
-    # name, so a forgotten rename doesn't silently break packaged updates.
-    package_asset_names = {"droidalerts.zip", "droidalerts-windows.zip"}
-    for asset in payload.get("assets") or []:
-        if not isinstance(asset, dict):
-            continue
-        if str(asset.get("name", "")).lower() in package_asset_names:
-            package_zip_url = str(asset.get("browser_download_url", "") or "")
-            break
-    source_zip_url = str(
-        payload.get("zipball_url", "")
-        or f"https://github.com/{repo}/archive/refs/tags/{tag}.zip"
+    encoded_tag = urllib.parse.quote(tag, safe="")
+    package_zip_url = (
+        f"https://github.com/{repo}/releases/download/{encoded_tag}/"
+        "DroidAlerts-Windows.zip"
     )
+    source_zip_url = f"https://github.com/{repo}/archive/refs/tags/{encoded_tag}.zip"
     return {
         "tag": tag,
-        "name": str(payload.get("name", "") or tag),
-        "url": str(payload.get("html_url", "") or f"https://github.com/{repo}/releases/latest"),
-        "zip_url": package_zip_url or source_zip_url,
+        "name": f"Droid Alerts {tag}",
+        "url": release_url,
+        "zip_url": package_zip_url,
         "package_zip_url": package_zip_url,
         "source_zip_url": source_zip_url,
     }

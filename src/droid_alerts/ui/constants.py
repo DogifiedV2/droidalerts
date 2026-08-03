@@ -30,4 +30,5 @@ WHATS_NEW_ITEMS = (
     "Fixed the timers not showing in fullscreen mode",
     "Fixed app opening multiple times",
     "Restored the update popup and Update ready button for automatic update checks",
+    "Stopped GitHub API rate limits from breaking update checks",
 )

@@ -31,15 +31,9 @@ class BundledCertificateTests(unittest.TestCase):
         response = Mock()
         response.__enter__ = Mock(return_value=response)
         response.__exit__ = Mock(return_value=False)
-        response.read.return_value = json.dumps(
-            {
-                "tag_name": "1.3.7",
-                "name": "1.3.7",
-                "html_url": "https://github.com/DogifiedV2/droidalerts/releases/tag/1.3.7",
-                "zipball_url": "https://api.github.com/repos/DogifiedV2/droidalerts/zipball/1.3.7",
-                "assets": [],
-            }
-        ).encode("utf-8")
+        response.geturl.return_value = (
+            "https://github.com/DogifiedV2/droidalerts/releases/tag/1.3.7"
+        )
         expected_context = object()
 
         with (
@@ -57,7 +51,29 @@ class BundledCertificateTests(unittest.TestCase):
             release = notifications.latest_release_info("DogifiedV2/droidalerts")
 
         self.assertEqual("1.3.7", release["tag"])
+        self.assertEqual(
+            "https://github.com/DogifiedV2/droidalerts/releases/download/1.3.7/"
+            "DroidAlerts-Windows.zip",
+            release["package_zip_url"],
+        )
+        self.assertEqual("HEAD", urlopen.call_args.args[0].method)
         self.assertIs(expected_context, urlopen.call_args.kwargs["context"])
+
+    def test_update_check_explains_github_rate_limits(self):
+        error = notifications.urllib.error.HTTPError(
+            "https://github.com/DogifiedV2/droidalerts/releases/latest",
+            403,
+            "rate limit exceeded",
+            {},
+            None,
+        )
+        with patch.object(
+            notifications.urllib.request,
+            "urlopen",
+            side_effect=error,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "temporarily limited"):
+                notifications.latest_release_info("DogifiedV2/droidalerts")
 
     def test_update_download_uses_the_bundled_ca_context(self):
         expected_context = object()
