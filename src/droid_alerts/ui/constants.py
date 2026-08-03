@@ -29,5 +29,5 @@ WHATS_NEW_ITEMS = (
     "Added credits income per minute overlay",
     "Fixed the timers not showing in fullscreen mode",
     "Fixed app opening multiple times",
-    "Restored the Update ready notification for automatic update checks",
+    "Restored the update popup and Update ready button for automatic update checks",
 )

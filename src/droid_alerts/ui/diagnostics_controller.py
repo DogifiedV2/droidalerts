@@ -384,8 +384,7 @@ class DiagnosticsController(StateObject):
                 updateAvailable=True,
                 updateName=result["name"],
             )
-            if manual:
-                self._offer_update(result)
+            self._offer_update(result)
 
         self.runtime.run_background(
             lambda: check_for_update(config),

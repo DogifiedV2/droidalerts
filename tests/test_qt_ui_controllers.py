@@ -272,7 +272,7 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertFalse(runtime.dialogs.state_snapshot()["visible"])
         controller.shutdown()
 
-    def test_automatic_update_check_exposes_update_ready_action(self):
+    def test_automatic_update_check_prompts_and_exposes_update_ready_action(self):
         runtime = RuntimeStub(AppConfig(update_check_enabled=True))
         capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
         controller = DiagnosticsController(runtime, capture)
@@ -295,10 +295,10 @@ class QtUiControllerTests(unittest.TestCase):
             state = controller.state_snapshot()
             self.assertTrue(state["updateAvailable"])
             self.assertEqual("Droid Alerts 9.9.9", state["updateName"])
-            offer.assert_not_called()
+            offer.assert_called_once_with(release)
 
             controller.showAvailableUpdate()
-            offer.assert_called_once_with(release)
+            self.assertEqual(2, offer.call_count)
         controller.shutdown()
 
     def test_popup_queue_serializes_alerts_and_chat_droids_preempt(self):
@@ -794,7 +794,7 @@ class QtUiControllerTests(unittest.TestCase):
                     "• Added credits income per minute overlay",
                     "• Fixed the timers not showing in fullscreen mode",
                     "• Fixed app opening multiple times",
-                    "• Restored the Update ready notification for automatic update checks",
+                    "• Restored the update popup and Update ready button for automatic update checks",
                 )
             ),
             message,
