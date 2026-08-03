@@ -23,6 +23,7 @@ from .history_controller import HistoryController
 from .overlays import close_all_overlays
 from .runtime import ApplicationRuntime
 from .settings_controller import SettingsController
+from .single_instance import SingleInstanceGuard
 
 
 DEFAULT_WINDOW_WIDTH = 1470
@@ -72,6 +73,15 @@ def run_gui(*, startup_splash=None) -> None:
     app.setFont(
         QFont("Segoe UI" if sys.platform == "win32" else "Avenir Next", 10)
     )
+
+    instance_guard = SingleInstanceGuard()
+    if not instance_guard.acquire():
+        if startup_splash is not None:
+            try:
+                startup_splash.close()
+            except Exception:
+                startup_splash.destroy()
+        return
 
     brand_icon_path = assets_dir() / "signals_icon.png"
     windows_icon_path = assets_dir() / "signals_icon.ico"
@@ -142,6 +152,14 @@ def run_gui(*, startup_splash=None) -> None:
 
     window = engine.rootObjects()[0]
     runtime.main_window = window
+
+    def activate_window() -> None:
+        window.show()
+        window.raise_()
+        window.requestActivate()
+
+    instance_guard.connect_window_activation(activate_window)
+    runtime.register_shutdown(instance_guard.close)
     screen = window.screen() or QGuiApplication.primaryScreen()
     if screen is not None:
         window.setGeometry(initial_window_geometry(screen.availableGeometry()))
@@ -165,6 +183,14 @@ def run_gui(*, startup_splash=None) -> None:
             runtime.config,
             monitor=capture.current_monitor(),
             on_reminder=dashboard.handleTimerReminder,
+        )
+    if runtime.config.scrap_income_overlay_enabled:
+        from ..scrap_overlay import update_scrap_income_overlay
+
+        update_scrap_income_overlay(
+            runtime.config,
+            None,
+            monitor=capture.current_monitor(),
         )
     if runtime.config.start_watcher_on_launch:
         QTimer.singleShot(800, dashboard.startWatcher)

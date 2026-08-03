@@ -185,6 +185,10 @@ class AppConfig:
     capture_interval_seconds: float = 0.25
     rebirth_ready_alert_enabled: bool = False
     scrap_alert_enabled: bool = False
+    scrap_income_overlay_enabled: bool = False
+    scrap_income_overlay_scale: float = 1.0
+    scrap_income_overlay_center_x: float = 0.10
+    scrap_income_overlay_top_y: float = 0.78
     rebirth_scan_interval_seconds: float = 5.0
     cb23_mission_alert_enabled: bool = False
     dedupe_seconds: float = 12.0
@@ -372,6 +376,24 @@ class AppConfig:
                 data.get("rebirth_ready_alert_enabled", False)
             ),
             scrap_alert_enabled=bool(data.get("scrap_alert_enabled", False)),
+            scrap_income_overlay_enabled=bool(
+                data.get("scrap_income_overlay_enabled", False)
+            ),
+            scrap_income_overlay_scale=normalize_finite_float(
+                data.get("scrap_income_overlay_scale", 1.0),
+                minimum=0.6,
+                maximum=2.0,
+            ),
+            scrap_income_overlay_center_x=normalize_finite_float(
+                data.get("scrap_income_overlay_center_x", 0.10),
+                minimum=0.0,
+                maximum=1.0,
+            ),
+            scrap_income_overlay_top_y=normalize_finite_float(
+                data.get("scrap_income_overlay_top_y", 0.78),
+                minimum=0.0,
+                maximum=1.0,
+            ),
             cb23_mission_alert_enabled=bool(
                 data.get("cb23_mission_alert_enabled", False)
             ),
@@ -631,6 +653,10 @@ class AppConfig:
             "capture_interval_seconds": self.capture_interval_seconds,
             "rebirth_ready_alert_enabled": self.rebirth_ready_alert_enabled,
             "scrap_alert_enabled": self.scrap_alert_enabled,
+            "scrap_income_overlay_enabled": self.scrap_income_overlay_enabled,
+            "scrap_income_overlay_scale": self.scrap_income_overlay_scale,
+            "scrap_income_overlay_center_x": self.scrap_income_overlay_center_x,
+            "scrap_income_overlay_top_y": self.scrap_income_overlay_top_y,
             "cb23_mission_alert_enabled": self.cb23_mission_alert_enabled,
             "rebirth_scan_interval_seconds": self.rebirth_scan_interval_seconds,
             "dedupe_seconds": self.dedupe_seconds,

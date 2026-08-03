@@ -21,6 +21,7 @@ FILTERS = (
     ("deals", "Limited Deals"),
     ("failures", "Failures"),
     ("detections", "Detections"),
+    ("scrap_income", "Scrap Income"),
     ("debug", "Debug"),
 )
 
@@ -91,6 +92,11 @@ class HistoryController(StateObject):
 
     @staticmethod
     def _info(row: dict[str, object]) -> str:
+        if str(row.get("event_type") or "") == "scrap_income_sample":
+            amount = str(row.get("amount_text") or "unreadable")
+            rate = str(row.get("displayed_rate_text") or "--")
+            status = str(row.get("read_status") or "unknown")
+            return f"Read {amount} · showing {rate}/min · {status.replace('_', ' ')}"
         reason = str(row.get("reason") or "")
         detail = str(row.get("detail") or "")
         channel = str(row.get("channel") or "")
@@ -137,6 +143,8 @@ class HistoryController(StateObject):
                 "belt_entered",
                 "limited_deal",
             }
+        if selected == "scrap_income":
+            return event_type in {"scrap_income_sample", "scrap_income_state"}
         return selected == "debug" and self._is_debug(row)
 
     @Slot()
@@ -178,6 +186,10 @@ class HistoryController(StateObject):
             event_type = str(raw.get("event_type") or "")
             if event_type == "delivery":
                 status = "Delivered" if bool(raw.get("success")) else "Failed"
+            elif event_type == "scrap_income_sample":
+                status = "Sample"
+            elif event_type == "scrap_income_state":
+                status = "Paused" if str(raw.get("state") or "") == "paused" else "Resumed"
             elif raw.get("alerted"):
                 status = "Alerted"
                 priority_count += 1
@@ -202,7 +214,7 @@ class HistoryController(StateObject):
                         else "good"
                         if status == "Delivered"
                         else "accent"
-                        if status == "Alerted"
+                        if status in {"Alerted", "Resumed"}
                         else "muted"
                     ),
                 }

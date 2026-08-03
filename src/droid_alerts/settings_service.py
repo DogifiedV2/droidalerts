@@ -129,7 +129,7 @@ def build_settings_update(
     boolean_fields = (
         "sound_enabled", "wake_alarm_enabled", "wake_alarm_beskar_mythic",
         "wake_alarm_galactic_mythic", "popup_enabled", "rebirth_ready_alert_enabled",
-        "scrap_alert_enabled",
+        "scrap_alert_enabled", "scrap_income_overlay_enabled",
         "droid_timers_enabled", "save_alert_samples", "save_debug_screenshots",
         "ntfy_enabled", "discord_enabled", "phone_alerts_enabled",
         "ntfy_include_attachment", "phone_include_attachment", "update_check_enabled",

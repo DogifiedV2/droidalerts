@@ -759,9 +759,16 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual(__version__, runtime.config.last_seen_version)
         self.assertEqual("What's new", runtime.dialogs.state_snapshot()["title"])
         message = runtime.dialogs.state_snapshot()["message"]
-        self.assertIn("Full port of the app", message)
-        self.assertIn("full customisation for all alert types", message)
-        self.assertIn("Discord link in the bottom left corner", message)
+        self.assertEqual(
+            "\n".join(
+                (
+                    "• Added credits income per minute overlay",
+                    "• Fixed the timers not showing in fullscreen mode",
+                    "• Fixed app opening multiple times",
+                )
+            ),
+            message,
+        )
 
     def test_fresh_install_records_version_then_starts_intro(self):
         runtime = RuntimeStub(
@@ -994,6 +1001,44 @@ class QtUiControllerTests(unittest.TestCase):
         )
         controller.shutdown()
 
+    def test_hiding_timers_closes_every_stale_overlay(self):
+        import droid_alerts.timers as timers
+
+        first = DroidTimersOverlay(monitor=MonitorInfo(0, 0, 1920, 1080))
+        second = DroidTimersOverlay(monitor=MonitorInfo(0, 0, 1920, 1080))
+        first.show()
+        second.show()
+        timers._ACTIVE_TIMER_OVERLAY = second
+        try:
+            timers.hide_droid_timers()
+            self.app.processEvents()
+            self.assertFalse(first.isVisible())
+            self.assertFalse(second.isVisible())
+            self.assertIsNone(timers._ACTIVE_TIMER_OVERLAY)
+        finally:
+            first.close()
+            second.close()
+
+    def test_reopening_timer_position_uses_the_same_overlay(self):
+        import droid_alerts.timers as timers
+
+        config = AppConfig(droid_timers_enabled=True)
+        overlay = DroidTimersOverlay(monitor=MonitorInfo(0, 0, 1920, 1080))
+        overlay.show()
+        timers._ACTIVE_TIMER_OVERLAY = overlay
+        try:
+            self.assertIs(overlay, timers.adjust_droid_timers(config))
+            overlay.exit_edit_mode()
+            self.assertIs(overlay, timers.adjust_droid_timers(config))
+            visible = [
+                widget
+                for widget in self.app.topLevelWidgets()
+                if isinstance(widget, DroidTimersOverlay) and widget.isVisible()
+            ]
+            self.assertEqual([overlay], visible)
+        finally:
+            timers.hide_droid_timers()
+
     def test_dashboard_timer_reminder_requires_the_overlay(self):
         runtime = RuntimeStub(AppConfig())
         capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
@@ -1012,7 +1057,7 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertFalse(runtime.config.timer_reminders_enabled)
         controller.shutdown()
 
-    def test_timer_reminder_is_a_popup_and_channel_alert_without_sound(self):
+    def test_timer_reminder_is_a_popup_sound_and_channel_alert(self):
         runtime = RuntimeStub(AppConfig(droid_timers_enabled=True))
         capture = CaptureStub(MonitorInfo(0, 0, 1920, 1080))
         controller = DashboardController(runtime, capture)
@@ -1025,7 +1070,7 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual("timer-reminder", detection.source)
         self.assertEqual("TIMER REMINDER", _caption_text(detection))
         self.assertEqual([("MYTHIC TIMER", "#ff3fa8")], _title_segments(detection))
-        self.assertFalse(dispatch.call_args.kwargs["include_sound"])
+        self.assertTrue(dispatch.call_args.kwargs["include_sound"])
         controller.shutdown()
 
     def test_remote_channel_configs_include_timer_reminders(self):
@@ -1899,20 +1944,22 @@ class QtUiControllerTests(unittest.TestCase):
         settings.shutdown()
         dashboard.shutdown()
 
-    def test_timer_refresh_never_raises_or_reactivates_its_window(self):
+    def test_timer_refresh_reasserts_topmost_without_reactivating_its_window(self):
         class TimerOverlayProbe(DroidTimersOverlay):
             def __init__(self):
-                self.raise_count = 0
+                self.activate_count = 0
                 super().__init__(monitor=MonitorInfo(0, 0, 1920, 1080))
 
-            def raise_(self):
-                self.raise_count += 1
+            def activateWindow(self):
+                self.activate_count += 1
 
         overlay = TimerOverlayProbe()
         try:
-            self.assertEqual(0, overlay.raise_count)
-            overlay._tick()
-            self.assertEqual(0, overlay.raise_count)
+            overlay.show()
+            with patch.object(overlay._topmost_guard, "refresh") as refresh:
+                overlay._tick()
+            refresh.assert_called_once_with()
+            self.assertEqual(0, overlay.activate_count)
             self.assertTrue(overlay._timer.isActive())
         finally:
             overlay.close()
@@ -2330,6 +2377,28 @@ class QtUiControllerTests(unittest.TestCase):
                                 "detail": "offline",
                             }
                         ),
+                        json.dumps(
+                            {
+                                "event_type": "scrap_income_sample",
+                                "amount_text": "33.84B",
+                                "displayed_rate_text": "2.4B",
+                                "read_status": "rate_updated",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "event_type": "scrap_income_state",
+                                "state": "paused",
+                                "detail": "Income paused after 30s without an increase",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "event_type": "scrap_income_state",
+                                "state": "resumed",
+                                "detail": "Income increased again",
+                            }
+                        ),
                         "[]",
                     )
                 ),
@@ -2340,11 +2409,21 @@ class QtUiControllerTests(unittest.TestCase):
                 return_value=logs,
             ):
                 controller = HistoryController(runtime)
-                self.assertEqual(2, len(controller.state_snapshot()["rows"]))
+                all_rows = controller.state_snapshot()["rows"]
+                self.assertEqual(5, len(all_rows))
+                self.assertTrue(
+                    any(row["event"] == "Scrap Income Sample" for row in all_rows)
+                )
                 controller.setFilter("failures")
                 rows = controller.state_snapshot()["rows"]
                 self.assertEqual(1, len(rows))
                 self.assertEqual("Failed", rows[0]["status"])
+                controller.setFilter("scrap_income")
+                rows = controller.state_snapshot()["rows"]
+                self.assertEqual(3, len(rows))
+                self.assertEqual(["Resumed", "Paused", "Sample"], [row["status"] for row in rows])
+                self.assertIn("Read 33.84B", rows[2]["detail"])
+                self.assertIn("showing 2.4B/min", rows[2]["detail"])
                 controller.shutdown()
 
     def test_qml_shell_declares_every_page_and_no_theme_picker(self):
@@ -2374,6 +2453,11 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertIn('text: "Configure"', dashboard)
         self.assertIn('text: "Position & Size"', dashboard)
         self.assertIn("dashboardController.adjustPopup()", dashboard)
+        self.assertIn('title: "Special Alerts & Other"', dashboard)
+        self.assertGreater(
+            dashboard.index('text: "Credits / min overlay"'),
+            dashboard.index('text: "CB23 Mission"'),
+        )
         self.assertIn('text: "Discord Webhooks"', dashboard)
         self.assertNotIn("Discord Webhooks & Routing", dashboard)
         self.assertNotIn('text: "Configure…"', dashboard)

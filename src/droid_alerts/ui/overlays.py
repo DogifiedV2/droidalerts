@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from ..capture import MonitorInfo, PixelBox
+from ..overlay_window import OverlayTopmostGuard
 
 
 OVERLAY_FLAGS = (
@@ -26,6 +27,7 @@ class RegionOutline(QWidget):
         self.setWindowFlags(OVERLAY_FLAGS)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self._topmost_guard = OverlayTopmostGuard(self)
 
     def show_region(
         self,
@@ -39,7 +41,7 @@ class RegionOutline(QWidget):
         margin = 28
         self.setGeometry(left - 3, top - margin, width + 6, height + margin + 3)
         self.show()
-        self.raise_()
+        self._topmost_guard.refresh()
         self.update()
 
     def paintEvent(self, _event) -> None:
@@ -75,6 +77,7 @@ class BeltTrackOverlay(QWidget):
         self.setWindowFlags(OVERLAY_FLAGS)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self._topmost_guard = OverlayTopmostGuard(self)
 
     def show_tracks(
         self,
@@ -95,7 +98,7 @@ class BeltTrackOverlay(QWidget):
             region.height + label_height,
         )
         self.show()
-        self.raise_()
+        self._topmost_guard.refresh()
         self.update()
 
     def paintEvent(self, _event) -> None:

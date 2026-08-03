@@ -483,7 +483,7 @@ ScrollView {
                 }
 
                 SignalCard {
-                    title: "Special Alerts"
+                    title: "Special Alerts & Other"
                     Layout.fillWidth: true
 
                     SignalCheck {
@@ -508,6 +508,22 @@ ScrollView {
                         checked: settingsController.state.values.cb23_mission_alert_enabled
                         onToggled: settingsController.setValue(
                                        "cb23_mission_alert_enabled", checked)
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        SignalCheck {
+                            text: "Credits / min overlay"
+                            checked: dashboardController.state.scrapIncomeOverlayEnabled
+                            onToggled: dashboardController.setScrapIncomeOverlayEnabled(checked)
+                        }
+                        Item { Layout.fillWidth: true }
+                        SignalButton {
+                            text: "Position"
+                            tone: "ghost"
+                            compact: true
+                            enabled: dashboardController.state.scrapIncomeOverlayEnabled
+                            onClicked: dashboardController.adjustScrapIncomeOverlay()
+                        }
                     }
                 }
             }

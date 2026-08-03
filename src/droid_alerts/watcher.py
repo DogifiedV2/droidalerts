@@ -68,7 +68,9 @@ from .rebirth import (
 from .scrap_alert import (
     CreditHudDetector,
     ScrapIncomeTracker,
+    ScrapRateTracker,
     ScrapVisibilityTracker,
+    format_credit_rate,
     scrap_debug_detail,
 )
 from .telemetry import AnonymousTelemetryClient
@@ -279,6 +281,8 @@ def run_watch(
     rebirth_ready_tracker = RebirthAlertTracker()
     credit_hud_detector: CreditHudDetector | None = None
     scrap_income_tracker = ScrapIncomeTracker(stall_seconds=30.0)
+    scrap_rate_tracker = ScrapRateTracker(confirmation_seconds=10.0)
+    last_scrap_rate_text: str | None = None
     scrap_visibility_tracker = ScrapVisibilityTracker(inactive_seconds=300.0)
     cb23_mission_detector: CB23MissionDetector | None = None
     cb23_mission_detector_failed = False
@@ -409,21 +413,38 @@ def run_watch(
     # The GUI owns its overlay and supplies its reminder callback. The CLI
     # watcher uses a standalone Qt process and bridges reminders back here.
     gui_managed_timers = popup_callback is not None or popup_parent is not None
-    if config.droid_timers_enabled and not gui_managed_timers:
-        from .timers import start_droid_timers_thread
+    timer_handle = None
 
-        start_droid_timers_thread(
-            stop_event,
-            scale=config.droid_timers_scale,
-            center_x_ratio=config.droid_timers_center_x,
-            top_y_ratio=config.droid_timers_top_y,
-            monitor=getattr(capture, "monitor", None),
-            reminders_enabled=config.timer_reminders_enabled,
-            reminder_seconds=config.timer_reminder_seconds,
-            reminder_rules=config.timer_reminder_rules,
-            offset_seconds=config.timer_offset_seconds,
-            on_reminder=fire_timer_reminder,
-        )
+    def sync_standalone_timer(
+        target_config: AppConfig,
+        *,
+        restart: bool = False,
+    ) -> None:
+        nonlocal timer_handle
+        if gui_managed_timers:
+            return
+        if timer_handle is not None and (
+            restart or not target_config.droid_timers_enabled
+        ):
+            timer_handle.stop()
+            timer_handle = None
+        if target_config.droid_timers_enabled and timer_handle is None:
+            from .timers import start_droid_timers_thread
+
+            timer_handle = start_droid_timers_thread(
+                stop_event,
+                scale=target_config.droid_timers_scale,
+                center_x_ratio=target_config.droid_timers_center_x,
+                top_y_ratio=target_config.droid_timers_top_y,
+                monitor=getattr(capture, "monitor", None),
+                reminders_enabled=target_config.timer_reminders_enabled,
+                reminder_seconds=target_config.timer_reminder_seconds,
+                reminder_rules=target_config.timer_reminder_rules,
+                offset_seconds=target_config.timer_offset_seconds,
+                on_reminder=fire_timer_reminder,
+            )
+
+    if config.droid_timers_enabled and not gui_managed_timers:
         print("Droid Timers overlay: ENABLED")
     elif config.droid_timers_enabled:
         print("Droid Timers overlay: ENABLED (GUI-managed)")
@@ -695,6 +716,8 @@ def run_watch(
             pass
 
     try:
+        if config.droid_timers_enabled and not gui_managed_timers:
+            sync_standalone_timer(config)
         while not _stop_requested(stop_event):
             started = time.monotonic()
             frame_index += 1
@@ -724,6 +747,9 @@ def run_watch(
                     if not config.scrap_alert_enabled:
                         scrap_income_tracker.reset()
                         scrap_visibility_tracker.reset()
+                    if not config.scrap_income_overlay_enabled:
+                        scrap_rate_tracker.reset()
+                        last_scrap_rate_text = None
                     webhook_url = None
                     if config.discord_enabled:
                         try:
@@ -748,6 +774,7 @@ def run_watch(
                             pending_capture_config = None
                     else:
                         pending_capture_config = None
+                    sync_standalone_timer(config, restart=capture_changed)
                     resolver = RegionResolver(
                         screen_w,
                         screen_h,
@@ -929,7 +956,9 @@ def run_watch(
                 )
 
             hud_alert_enabled = (
-                config.rebirth_ready_alert_enabled or config.scrap_alert_enabled
+                config.rebirth_ready_alert_enabled
+                or config.scrap_alert_enabled
+                or config.scrap_income_overlay_enabled
             )
             if hud_alert_enabled and auxiliary_schedule.rebirth_ready_due(
                 status_now, config.rebirth_scan_interval_seconds
@@ -957,7 +986,7 @@ def run_watch(
                         )
                         if alert_level is not None:
                             fire_rebirth_ready_alert(alert_level, observation.ready_score)
-                    if config.scrap_alert_enabled:
+                    if config.scrap_alert_enabled or config.scrap_income_overlay_enabled:
                         if credit_hud_detector is None:
                             credit_hud_detector = CreditHudDetector()
                         credit_observation = credit_hud_detector.detect(
@@ -966,23 +995,86 @@ def run_watch(
                             screen_width=screen_w,
                         )
                         previous_fingerprint = scrap_income_tracker.fingerprint
-                        should_alert_scrap = scrap_income_tracker.observe(
-                            credit_observation,
-                            now=status_now,
+                        should_alert_scrap = False
+                        should_alert_scrap_inactive = False
+                        if config.scrap_alert_enabled:
+                            should_alert_scrap = scrap_income_tracker.observe(
+                                credit_observation,
+                                now=status_now,
+                            )
+                            should_alert_scrap_inactive = scrap_visibility_tracker.observe(
+                                icon_visible=credit_observation.icon_visible,
+                                now=status_now,
+                            )
+                        rate = (
+                            scrap_rate_tracker.observe(
+                                credit_observation.amount_value,
+                                now=status_now,
+                                amount_text=credit_observation.amount_text,
+                            )
+                            if config.scrap_income_overlay_enabled
+                            else None
                         )
-                        should_alert_scrap_inactive = scrap_visibility_tracker.observe(
-                            icon_visible=credit_observation.icon_visible,
-                            now=status_now,
+                        rate_text = format_credit_rate(rate) if rate is not None else None
+                        if rate_text is not None:
+                            last_scrap_rate_text = rate_text
+                        emit(
+                            "scrap_income",
+                            active=rate_text is not None,
+                            rate_text=rate_text,
+                            amount_text=credit_observation.amount_text,
                         )
                         display_changed = (
                             credit_observation.visible
                             and credit_observation.fingerprint != previous_fingerprint
                         )
+                        if config.scrap_income_overlay_enabled:
+                            if scrap_rate_tracker.last_status in {
+                                "income_paused",
+                                "income_resumed",
+                            }:
+                                paused = scrap_rate_tracker.last_status == "income_paused"
+                                log_event(
+                                    {
+                                        "ts": timestamp(),
+                                        "event_type": "scrap_income_state",
+                                        "source": "scrap_income_overlay",
+                                        "state": "paused" if paused else "resumed",
+                                        "amount_text": credit_observation.amount_text,
+                                        "rate_per_minute": rate,
+                                        "displayed_rate_text": last_scrap_rate_text,
+                                        "detail": (
+                                            f"Income paused after {scrap_rate_tracker.idle_seconds:.0f}s "
+                                            "without an increase; showing 0/min"
+                                            if paused
+                                            else "Income increased again; started a fresh rate window"
+                                        ),
+                                    }
+                                )
+                            log_event(
+                                {
+                                    "ts": timestamp(),
+                                    "event_type": "scrap_income_sample",
+                                    "source": "scrap_income_overlay",
+                                    "hud_visible": credit_observation.visible,
+                                    "icon_visible": credit_observation.icon_visible,
+                                    "icon_score": round(credit_observation.icon_score, 4),
+                                    "display_changed": display_changed,
+                                    "amount_text": credit_observation.amount_text,
+                                    "amount_value": credit_observation.amount_value,
+                                    "read_status": scrap_rate_tracker.last_status,
+                                    "rate_per_minute": rate,
+                                    "new_rate_text": rate_text,
+                                    "displayed_rate_text": last_scrap_rate_text,
+                                }
+                            )
                         unchanged_seconds = scrap_income_tracker.unchanged_seconds(status_now)
                         emit(
                             "scrap_scan",
                             visible=credit_observation.visible,
                             changed=display_changed,
+                            amount_text=credit_observation.amount_text,
+                            rate_text=rate_text,
                             unchanged_seconds=round(unchanged_seconds, 1),
                             icon_missing_seconds=round(
                                 scrap_visibility_tracker.missing_seconds(status_now),
@@ -1006,6 +1098,8 @@ def run_watch(
                                     "debug": True,
                                     "visible": credit_observation.visible,
                                     "changed": display_changed,
+                                    "amount_text": credit_observation.amount_text,
+                                    "rate_text": rate_text,
                                     "unchanged_seconds": round(unchanged_seconds, 1),
                                     "icon_missing_seconds": round(
                                         scrap_visibility_tracker.missing_seconds(status_now),
@@ -1218,6 +1312,8 @@ def run_watch(
     except KeyboardInterrupt:
         print("\nstopped")
     finally:
+        if timer_handle is not None:
+            timer_handle.stop()
         telemetry.stop()
         capture.close()
         emit("watcher_stopped")

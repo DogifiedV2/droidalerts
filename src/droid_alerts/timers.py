@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from .capture import MonitorInfo
 from .classifier import Detection
 from .config import AppConfig, save_config
+from .overlay_window import OverlayTopmostGuard
 from .popup import RARITY_COLORS
 from .timer_sync import TIMER_SCHEDULE_CLOCK
 
@@ -160,6 +161,7 @@ class DroidTimersOverlay(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._apply_window_mode()
         self._apply_geometry()
+        self._topmost_guard = OverlayTopmostGuard(self)
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -396,6 +398,8 @@ class DroidTimersOverlay(QWidget):
             self._remaining[kind] = remaining
             self._maybe_remind(kind, remaining)
         self.update()
+        if not self.edit_mode:
+            self._topmost_guard.refresh()
         self._timer.start(next_timer_refresh_delay_ms(self._offset_seconds))
 
     def enter_edit_mode(self) -> None:
@@ -406,7 +410,7 @@ class DroidTimersOverlay(QWidget):
         self._apply_window_mode()
         self._apply_geometry()
         self.show()
-        self.raise_()
+        self._topmost_guard.refresh()
         self.activateWindow()
         self.update()
 
@@ -418,7 +422,7 @@ class DroidTimersOverlay(QWidget):
         self._apply_window_mode()
         self._apply_geometry()
         self.show()
-        self.raise_()
+        self._topmost_guard.refresh()
         if self._on_layout_change is not None:
             self._on_layout_change(
                 self.center_x_ratio,
@@ -477,10 +481,35 @@ class DroidTimersOverlay(QWidget):
 
     def close(self) -> bool:
         self._timer.stop()
+        self._topmost_guard.stop()
         return super().close()
 
 
 _ACTIVE_TIMER_OVERLAY: DroidTimersOverlay | None = None
+
+
+def _timer_overlays() -> list[DroidTimersOverlay]:
+    app = QApplication.instance()
+    overlays = (
+        [
+            widget
+            for widget in app.topLevelWidgets()
+            if isinstance(widget, DroidTimersOverlay)
+        ]
+        if app is not None
+        else []
+    )
+    if _ACTIVE_TIMER_OVERLAY is not None and _ACTIVE_TIMER_OVERLAY not in overlays:
+        overlays.append(_ACTIVE_TIMER_OVERLAY)
+    return overlays
+
+
+def _close_timer_overlays() -> None:
+    global _ACTIVE_TIMER_OVERLAY
+    for overlay in _timer_overlays():
+        overlay.close()
+        overlay.deleteLater()
+    _ACTIVE_TIMER_OVERLAY = None
 
 
 def _layout_saver(config: AppConfig) -> Callable[[float, float, float], None]:
@@ -504,8 +533,7 @@ def show_droid_timers(
     app = QApplication.instance()
     if app is None or QThread.currentThread() is not app.thread():
         return None
-    if _ACTIVE_TIMER_OVERLAY is not None:
-        _ACTIVE_TIMER_OVERLAY.close()
+    _close_timer_overlays()
     overlay = DroidTimersOverlay(
         scale=config.droid_timers_scale,
         center_x_ratio=config.droid_timers_center_x,
@@ -520,15 +548,12 @@ def show_droid_timers(
     )
     _ACTIVE_TIMER_OVERLAY = overlay
     overlay.show()
+    overlay._topmost_guard.refresh()
     return overlay
 
 
 def hide_droid_timers() -> None:
-    global _ACTIVE_TIMER_OVERLAY
-    if _ACTIVE_TIMER_OVERLAY is not None:
-        _ACTIVE_TIMER_OVERLAY.close()
-        _ACTIVE_TIMER_OVERLAY.deleteLater()
-        _ACTIVE_TIMER_OVERLAY = None
+    _close_timer_overlays()
 
 
 def adjust_droid_timers(
@@ -555,6 +580,7 @@ def _run_standalone_timer_overlay(
     reminder_rules: Mapping[str, Sequence[int]] | None,
     offset_seconds: int,
     reminder_queue,
+    parent_connection,
 ) -> None:
     app = QApplication([])
     overlay = DroidTimersOverlay(
@@ -574,19 +600,65 @@ def _run_standalone_timer_overlay(
         ),
     )
     overlay.show()
-    app.exec()
+    overlay._topmost_guard.refresh()
+    parent_timer = QTimer()
+
+    def check_parent() -> None:
+        try:
+            if not parent_connection.poll():
+                return
+            parent_connection.recv_bytes()
+        except (EOFError, OSError):
+            overlay.close()
+            app.quit()
+
+    parent_timer.timeout.connect(check_parent)
+    parent_timer.start(500)
+    try:
+        app.exec()
+    finally:
+        parent_timer.stop()
+        parent_connection.close()
 
 
 class _StandaloneTimerHandle:
-    def __init__(self, process, bridge: threading.Thread | None) -> None:
+    def __init__(
+        self,
+        process,
+        bridge: threading.Thread | None,
+        process_stop,
+        reminder_queue,
+        parent_connection,
+    ) -> None:
         self.process = process
         self.bridge = bridge
+        self.process_stop = process_stop
+        self.reminder_queue = reminder_queue
+        self.parent_connection = parent_connection
+        self._stopped = False
 
     def is_alive(self) -> bool:
         return self.process.is_alive()
 
     def join(self, timeout: float | None = None) -> None:
         self.process.join(timeout)
+
+    def stop(self, timeout: float = 1.5) -> None:
+        if self._stopped:
+            return
+        self._stopped = True
+        self.process_stop.set()
+        try:
+            self.parent_connection.close()
+        except (OSError, ValueError):
+            pass
+        self.process.join(max(0.0, float(timeout)))
+        if self.process.is_alive():
+            self.process.terminate()
+            self.process.join(1.0)
+        if self.reminder_queue is not None:
+            self.reminder_queue.close()
+            self.reminder_queue.join_thread()
 
 
 def start_droid_timers_thread(
@@ -606,6 +678,7 @@ def start_droid_timers_thread(
     context = multiprocessing.get_context("spawn")
     process_stop = context.Event()
     reminder_queue = context.Queue() if on_reminder is not None else None
+    child_connection, parent_connection = context.Pipe(duplex=False)
     process = context.Process(
         target=_run_standalone_timer_overlay,
         args=(
@@ -619,11 +692,13 @@ def start_droid_timers_thread(
             reminder_rules,
             offset_seconds,
             reminder_queue,
+            child_connection,
         ),
         name="DroidAlertsTimers",
         daemon=True,
     )
     process.start()
+    child_connection.close()
     bridge = None
     if stop_event is not None or reminder_queue is not None:
         def relay_events() -> None:
@@ -636,7 +711,9 @@ def start_droid_timers_thread(
                     continue
                 try:
                     kind, remaining = reminder_queue.get(timeout=0.1)
-                except queue.Empty:
+                except (queue.Empty, EOFError, OSError, ValueError):
+                    if not process.is_alive():
+                        return
                     continue
                 if on_reminder is not None:
                     try:
@@ -650,7 +727,13 @@ def start_droid_timers_thread(
             daemon=True,
         )
         bridge.start()
-    return _StandaloneTimerHandle(process, bridge)
+    return _StandaloneTimerHandle(
+        process,
+        bridge,
+        process_stop,
+        reminder_queue,
+        parent_connection,
+    )
 
 
 __all__ = [

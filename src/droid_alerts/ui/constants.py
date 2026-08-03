@@ -26,8 +26,7 @@ PAGES = (
 )
 
 WHATS_NEW_ITEMS = (
-    "Full port of the app to improve its speed, make it look and feel smoother, "
-    "and add a bunch of features, such as full customisation for all alert types "
-    "for ntfy, Discord, etc. For a full changelog, please join our Discord and "
-    "check there. You can find the Discord link in the bottom left corner of the app.",
+    "Added credits income per minute overlay",
+    "Fixed the timers not showing in fullscreen mode",
+    "Fixed app opening multiple times",
 )

@@ -44,6 +44,11 @@ from ..popup import (
     popup_icon_path,
     show_popup,
 )
+from ..scrap_overlay import (
+    adjust_scrap_income_overlay,
+    hide_scrap_income_overlay,
+    update_scrap_income_overlay,
+)
 from ..timers import (
     DISPLAY_TIMER_ORDER,
     TIMER_COLORS,
@@ -227,6 +232,7 @@ class DashboardController(StateObject):
                 "timers": self._timer_rows(config),
                 "timersEnabled": config.droid_timers_enabled,
                 "timerReminders": config.timer_reminders_enabled,
+                "scrapIncomeOverlayEnabled": config.scrap_income_overlay_enabled,
                 "scans": self._scans,
                 "alerts": self._alerts,
                 "uptime": (
@@ -363,6 +369,12 @@ class DashboardController(StateObject):
                         "Delivered just now" if success else f"Failed · {detail[:70]}"
                     )
             self.historyChanged.emit()
+        elif kind == "scrap_income":
+            update_scrap_income_overlay(
+                self.runtime.config,
+                str(event.get("rate_text")) if event.get("active") else None,
+                monitor=self.capture.current_monitor(),
+            )
         elif kind in {"capture_error", "rebirth_error", "hud_error", "log_error"}:
             message = str(event.get("message") or "Unknown watcher error")
             self._set_status("Warning")
@@ -393,6 +405,7 @@ class DashboardController(StateObject):
         self._watch_started = None
         self.watch_thread = None
         self.stop_event = None
+        hide_scrap_income_overlay()
         if error is None:
             self._set_status("Stopped")
             self.update_state(
@@ -430,6 +443,7 @@ class DashboardController(StateObject):
 
     @Slot(bool)
     def refreshForDisplayGeometry(self, automatic: bool) -> None:
+        hide_scrap_income_overlay()
         if self.runtime.config.droid_timers_enabled:
             hide_droid_timers()
             show_droid_timers(
@@ -1110,6 +1124,26 @@ class DashboardController(StateObject):
         self.refresh()
 
     @Slot(bool)
+    def setScrapIncomeOverlayEnabled(self, enabled: bool) -> None:
+        self.runtime.update_config(scrap_income_overlay_enabled=enabled)
+        if enabled:
+            update_scrap_income_overlay(
+                self.runtime.config,
+                None,
+                monitor=self.capture.current_monitor(),
+            )
+        else:
+            hide_scrap_income_overlay()
+        self.refresh()
+
+    @Slot()
+    def adjustScrapIncomeOverlay(self) -> None:
+        adjust_scrap_income_overlay(
+            self.runtime.config,
+            monitor=self.capture.current_monitor(),
+        )
+
+    @Slot(bool)
     def setTimerRemindersEnabled(self, enabled: bool) -> None:
         self.runtime.update_config(
             timer_reminders_enabled=(
@@ -1213,7 +1247,7 @@ class DashboardController(StateObject):
                 "timer_kind": str(kind).lower(),
                 "timer_remaining_seconds": max(0, int(remaining)),
             },
-            include_sound=False,
+            include_sound=True,
         )
 
     @Slot()
@@ -1294,4 +1328,5 @@ class DashboardController(StateObject):
             self.stop_event.set()
         self.wake_alarm.stop()
         hide_popup_editor()
+        hide_scrap_income_overlay()
         self._timer.stop()

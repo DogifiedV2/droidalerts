@@ -72,6 +72,7 @@ BOOLEAN_FIELDS = {
     "belt_template_collection_enabled",
     "rebirth_ready_alert_enabled",
     "scrap_alert_enabled",
+    "scrap_income_overlay_enabled",
     "cb23_mission_alert_enabled",
     "rebirth_alert_enabled",
     "timer_reminders_enabled",
