@@ -16,7 +16,7 @@ import numpy as np
 from .chat_alerts import PRIORITY_ALERTS, REMOVED_CHAT_DETECTIONS
 
 
-DROID_TYPES = ("Diamond", "Rainbow", "Beskar", "Galactic")
+DROID_TYPES = ("Diamond", "Rainbow", "Beskar", "Galactic", "Stellar")
 RARITIES = ("Common", "Rare", "Epic", "Legendary", "Mythic")
 
 RARITY_COLOR_THRESHOLDS = {
@@ -32,6 +32,7 @@ RARITY_COLOR_X_START = {
     "Diamond": 230,
     "Rainbow": 230,
     "Galactic": 230,
+    "Stellar": 230,
 }
 
 
@@ -298,7 +299,8 @@ class _DroidWordEvidence:
 def _compute_droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
     """Dark-outlined, glyph-sized text components in the droid-word columns.
 
-    The droid NAME ('Diamond'/'Rainbow'/'Beskar'/'Galactic' + 'Droid') is rendered in the
+    The droid NAME ('Diamond'/'Rainbow'/'Beskar'/'Galactic'/'Stellar' +
+    'Droid') is rendered in the
     droid's colors, sits on the backdrop, and is far larger than the icon -
     scenery blobs can't imitate letter-shaped outlined text (same filtering
     that made rarity classification background-proof). Columns 30-240 stop
@@ -310,6 +312,7 @@ def _compute_droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
         return {
             "cyan": 0,
             "purple": 0,
+            "yellow": 0,
             "gray": 0,
             "colored_total": 0,
             "strong_families": 0,
@@ -344,6 +347,7 @@ def _compute_droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
     return {
         "cyan": counts["cyan"],
         "purple": counts["purple"],
+        "yellow": counts["yellow"],
         "gray": text_shaped_count((sat < 55) & (val > 150) & gate),
         "colored_total": sum(counts.values()),
         "strong_families": sum(1 for v in counts.values() if v >= 60),
@@ -370,9 +374,8 @@ def droid_word_color_mask(row: np.ndarray, droid: str) -> np.ndarray:
     valid rows in the 2026-07-10 1.1.5 debug batch.
     """
     # The newer Galactic HUD style is substantially wider than the original
-    # Diamond/Rainbow/Beskar words (the supplied Epic capture reaches x=327).
-    # Keep the proven legacy window for every other family, but leave enough
-    # room to match the complete literal "Galactic Droid" word.
+    # Diamond/Rainbow/Beskar/Stellar words (the supplied Epic capture reaches
+    # x=327). Keep the proven legacy window for every other family.
     x_end = 360 if droid == "Galactic" else 270
     win = row[:, 20 : min(row.shape[1], x_end)]
     if win.size == 0:
@@ -393,6 +396,10 @@ def droid_word_color_mask(row: np.ndarray, droid: str) -> np.ndarray:
         # captures; the literal word-shape template below prevents other
         # purple HUD text from becoming a Galactic verdict.
         raw = (hue >= 125) & (hue <= 155) & (sat >= 110) & (val >= 120) & gate
+    elif droid == "Stellar":
+        # Stellar uses a yellow family name. The literal word template keeps
+        # gold scenery and Legendary rarity text from becoming Stellar.
+        raw = (hue >= 20) & (hue <= 40) & (sat >= 100) & (val >= 120) & gate
     else:
         raw = (sat < 60) & (val > 140) & gate
 
@@ -405,11 +412,12 @@ def droid_word_color_mask(row: np.ndarray, droid: str) -> np.ndarray:
         # before literal template matching. Galactic still requires both its
         # narrow purple range and a word-shape match, so retaining the joined
         # component does not weaken the other droid classifiers.
-        maximum_width = 240 if droid == "Galactic" else 40
-        maximum_area = 8000 if droid == "Galactic" else 2600
+        joined_word = droid in {"Galactic", "Stellar"}
+        maximum_width = 240 if joined_word else 40
+        maximum_area = 8000 if joined_word else 2600
         inside_row = (
             y >= 0 and y + component_h <= raw.shape[0]
-            if droid == "Galactic"
+            if joined_word
             else y > 1 and y + component_h < raw.shape[0] - 1
         )
         if (
@@ -453,7 +461,9 @@ def droid_word_shape_score(
                     interpolation=cv2.INTER_NEAREST,
                 )
                 for scale_factor in (
-                    DROID_WORD_SCALE_FACTORS if droid == "Galactic" else (1.0,)
+                    DROID_WORD_SCALE_FACTORS
+                    if droid in {"Galactic", "Stellar"}
+                    else (1.0,)
                 )
             ),
         )
@@ -481,7 +491,7 @@ def build_scaled_droid_word_templates(
     for droid, templates in templates_by_droid.items():
         factors = (
             DROID_WORD_SCALE_FACTORS
-            if droid in {"Beskar", "Galactic"}
+            if droid in {"Beskar", "Galactic", "Stellar"}
             else (1.0,)
         )
         bank[droid] = [
@@ -586,6 +596,37 @@ def classify_galactic_droid_word(
         if purple < 1000 or shape < 0.38:
             return None
     return "Galactic", min(0.99, max(shape, purple / 900.0))
+
+
+def classify_stellar_droid_word(
+    row: np.ndarray,
+    templates_by_droid: dict[str, list[DroidWordTemplate]],
+    *,
+    shape_threshold: float = 0.48,
+    minimum_yellow_pixels: int = 220,
+    scaled_templates: ScaledDroidWordTemplateBank | None = None,
+    evidence: _DroidWordEvidence | None = None,
+) -> tuple[str, float] | None:
+    """Return Stellar only when its yellow text and word shape agree."""
+
+    if not templates_by_droid.get("Stellar"):
+        return None
+    yellow = droid_word_text_profile(row, evidence=evidence)["yellow"]
+    if yellow < minimum_yellow_pixels:
+        return None
+    shape = droid_word_shape_score(
+        row,
+        "Stellar",
+        templates_by_droid,
+        scaled_templates=scaled_templates,
+        evidence=evidence,
+    )
+    if shape < shape_threshold:
+        # Two cropped high-resolution rows have a different horizontal text
+        # scale. Their strong yellow word stays safe at the lower shape floor.
+        if yellow < 800 or shape < 0.40:
+            return None
+    return "Stellar", min(0.99, max(shape, yellow / 900.0))
 
 
 def classify_beskar_droid_word(
@@ -1360,14 +1401,14 @@ def classify_rarity_roi(
     correlation_bank: RarityCorrelationBank | None = None,
 ) -> tuple[str, float, float, str]:
     templates = templates_by_droid.get(droid, [])
-    # Galactic's reviewed ROI prototypes are a fallback, not a replacement
-    # for its battle-tested color/text rules. Other families keep the existing
-    # ROI-first classifier unchanged.
+    # Galactic and Stellar use the color/text path. Galactic also has reviewed
+    # ROI prototypes as a fallback. Other families keep the ROI-first path.
+    color_text_family = droid in {"Galactic", "Stellar"}
     if not templates or droid == "Galactic":
         verdict = classify_rarity_color(
             image, y, droid, row_height=row_height, evidence=evidence
         )
-        if droid == "Galactic" and verdict[0] != "Unknown":
+        if color_text_family and verdict[0] != "Unknown":
             text_verdict = classify_rarity_text_color(
                 image,
                 y,
@@ -1391,7 +1432,7 @@ def classify_rarity_roi(
             if override is not None:
                 return override
 
-        if droid == "Galactic" and verdict[0] not in {"Unknown", "Common"}:
+        if color_text_family and verdict[0] not in {"Unknown", "Common"}:
             # Reviewed Galactic ROI prototypes are fallback evidence rather
             # than the primary verdict. A large cyan/blue prop behind a real
             # white "(Common)" word can still clear the raw Rare color floor
@@ -1416,7 +1457,7 @@ def classify_rarity_roi(
                     f"galactic-text-over-background:{text_source}",
                 )
         if (
-            droid == "Galactic"
+            color_text_family
             and verdict[0] == "Common"
             and text_counts["Rare"] >= 250
         ):
@@ -1436,7 +1477,7 @@ def classify_rarity_roi(
                 ),
                 f"galactic-partial-rare-over-common:{rare_count}",
             )
-        if verdict[0] != "Unknown" or droid != "Galactic":
+        if verdict[0] != "Unknown" or not color_text_family:
             return verdict
 
         # The compact Galactic Rare capture retains a clear cyan rarity word
@@ -1468,6 +1509,29 @@ def classify_rarity_roi(
             score = min(0.99, rare_count / RARITY_COLOR_THRESHOLDS["Rare"])
             margin = min(0.99, (rare_count - other_colored) / RARITY_COLOR_THRESHOLDS["Rare"])
             return "Rare", float(score), float(margin), f"galactic-weak-color:Rare:{rare_count}"
+
+        # Compact Stellar rows can split the cyan word and the white phrase
+        # into nearly equal counts. Accept Rare when its color and word shape
+        # agree and no other colored rarity is close.
+        if (
+            droid == "Stellar"
+            and rare_count >= 500
+            and rare_count >= other_colored * 1.5
+            and text_counts["Rare"] >= 500
+            and rare_shape >= 0.35
+        ):
+            score = min(0.99, rare_count / RARITY_COLOR_THRESHOLDS["Rare"])
+            margin = min(
+                0.99,
+                max(0, rare_count - max(other_colored, counts["Common"]))
+                / RARITY_COLOR_THRESHOLDS["Rare"],
+            )
+            return (
+                "Rare",
+                float(score),
+                float(margin),
+                f"stellar-compact-rare:{rare_count}",
+            )
 
         if droid == "Galactic" and templates:
             roi_fallback = galactic_rarity_roi_fallback(
@@ -1923,7 +1987,7 @@ def rescue_compact_priority_rarity(
 
     if (
         source_scale >= 0.80
-        or droid not in {"Beskar", "Galactic"}
+        or droid not in {"Beskar", "Galactic", "Stellar"}
         or current_rarity != "Unknown"
     ):
         return None
@@ -2062,20 +2126,28 @@ class DroidVisualDetector:
             if has_crafted_phrase(row, self.crafted_phrase_templates):
                 reject(y, "crafted-phrase")
                 continue
-            galactic_word_verdict = None
+            literal_word_verdict = None
             if not has_spawn_phrase_structure(row):
                 # Resampling around 0.75x can move a real spawn line just
                 # below the generic 700-pixel phrase floor. Only relax that
                 # floor when the independent colour + literal Galactic word
                 # recognizer agrees, so other chat/HUD text keeps the stricter
                 # false-positive protection.
-                galactic_word_verdict = classify_galactic_droid_word(
-                    row,
-                    self.droid_word_templates,
-                    scaled_templates=self.scaled_droid_word_templates,
-                    evidence=word_evidence,
+                literal_word_verdict = (
+                    classify_galactic_droid_word(
+                        row,
+                        self.droid_word_templates,
+                        scaled_templates=self.scaled_droid_word_templates,
+                        evidence=word_evidence,
+                    )
+                    or classify_stellar_droid_word(
+                        row,
+                        self.droid_word_templates,
+                        scaled_templates=self.scaled_droid_word_templates,
+                        evidence=word_evidence,
+                    )
                 )
-                if galactic_word_verdict is None or not has_spawn_phrase_structure(
+                if literal_word_verdict is None or not has_spawn_phrase_structure(
                     row, min_white_edge_pixels=600
                 ):
                     continue
@@ -2084,8 +2156,14 @@ class DroidVisualDetector:
             # it fires. Legacy icon-window path (plus icon-structure gate)
             # only for rows without strong word evidence.
             word_verdict = (
-                galactic_word_verdict
+                literal_word_verdict
                 or classify_galactic_droid_word(
+                    row,
+                    self.droid_word_templates,
+                    scaled_templates=self.scaled_droid_word_templates,
+                    evidence=word_evidence,
+                )
+                or classify_stellar_droid_word(
                     row,
                     self.droid_word_templates,
                     scaled_templates=self.scaled_droid_word_templates,
@@ -2224,7 +2302,7 @@ class DroidVisualDetector:
             # 13px of its phrase seed; use a small safety margin for rounding.
             if (droid, rarity) in PRIORITY_ALERTS and (
                 not extra_row_ys or min(abs(y - phrase_y) for phrase_y in extra_row_ys) > 16
-            ):
+            ) and droid != "Stellar":
                 reject(y, "no-aligned-spawn-phrase", droid, rarity)
                 continue
 

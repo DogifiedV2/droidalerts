@@ -114,6 +114,42 @@ def main() -> int:
     )
     if not default_galactic.issubset(migrated_defaults.targets):
         failures.append("legacy default selections should enable the new Galactic defaults")
+    removed_stellar = {
+        ("Stellar", "Common"),
+        ("Stellar", "Rare"),
+    }
+    stellar_combos = {
+        ("Stellar", "Epic"),
+        ("Stellar", "Legendary"),
+        ("Stellar", "Mythic"),
+    }
+    if removed_stellar & set(ALERT_COMBOS):
+        failures.append("Stellar Common/Rare toggles should not be available")
+    if not stellar_combos.issubset(set(ALERT_COMBOS)):
+        failures.append("Stellar Epic, Legendary, and Mythic toggles should be available")
+    if (stellar_combos & default_config.targets) != stellar_combos:
+        failures.append("Stellar Epic, Legendary, and Mythic should be on by default")
+    previous_defaults = AppConfig.from_dict(
+        {
+            "alert_targets": [
+                ["Beskar", "Epic"],
+                ["Beskar", "Legendary"],
+                ["Diamond", "Mythic"],
+                ["Rainbow", "Mythic"],
+                ["Beskar", "Mythic"],
+                ["Galactic", "Epic"],
+                ["Galactic", "Legendary"],
+                ["Galactic", "Mythic"],
+            ]
+        }
+    )
+    if not stellar_combos.issubset(previous_defaults.targets):
+        failures.append("previous default selections should enable Stellar alerts")
+    if not stellar_combos.issubset(migrated_defaults.targets):
+        failures.append("legacy default selections should enable Stellar alerts")
+    for droid, rarity in removed_stellar:
+        if _detection(droid, rarity).should_alert:
+            failures.append(f"{droid} {rarity} should not be alertable")
     retired_targets = AppConfig.from_dict(
         {
             "alert_targets": [
@@ -144,6 +180,18 @@ def main() -> int:
             failures.append(f"enabled {droid} {rarity} target should fire")
         if discord_color(detection) != 0x9200E0:
             failures.append(f"{droid} {rarity} should use the Galactic alert color")
+
+    for droid, rarity in stellar_combos:
+        detection = _detection(droid, rarity)
+        if not detection.should_alert:
+            failures.append(f"{droid} {rarity} should be an alertable priority combo")
+        stellar_config = AppConfig(alert_targets=[[droid, rarity]])
+        if not AlertPolicy(stellar_config).should_alert(
+            detection, f"{droid.lower()}-{rarity.lower()}-row"
+        ):
+            failures.append(f"enabled {droid} {rarity} target should fire")
+        if discord_color(detection) != 0xFFE14D:
+            failures.append(f"{droid} {rarity} should use the Stellar alert color")
 
     non_priority = _detection("Diamond", "Legendary")
     if non_priority.should_alert:

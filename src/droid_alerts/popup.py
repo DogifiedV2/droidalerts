@@ -38,6 +38,7 @@ DROID_TEXT_COLORS = {
     "Diamond": "#3fd9ff",
     "Beskar": "#e8eaf0",
     "Galactic": "#b44df0",
+    "Stellar": "#ffe14d",
     "Rebirth": "#ffb11b",
 }
 RAINBOW_LETTERS = ["#ff5252", "#ff9f2e", "#ffe14d", "#5ce06b", "#42c9ff", "#b06bff", "#ff6bd6"]
@@ -48,6 +49,7 @@ DROID_ACCENTS = {
     "Rainbow": ("#c05cff", "#4d2470"),
     "Beskar": ("#c9cdd9", "#4d5160"),
     "Galactic": ("#b44df0", "#3d005e"),
+    "Stellar": ("#ffe14d", "#6b5700"),
     "Rebirth": ("#ffb11b", "#6b4210"),
 }
 RARITY_COLORS = {
@@ -57,6 +59,7 @@ RARITY_COLORS = {
     "Beskar": "#e8eaf0",
     "Rainbow": "#ff65d8",
     "Galactic": "#b44df0",
+    "Stellar": "#ffe14d",
     "Belt": "#65f3ff",
     "Common": "#e8e8e8",
     "Rare": "#3fd9ff",

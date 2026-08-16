@@ -791,6 +791,7 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual(
             "\n".join(
                 (
+                    "• Added Stellar Droid spawn alerts",
                     "• Added credits income per minute overlay",
                     "• Fixed the timers not showing in fullscreen mode",
                     "• Fixed app opening multiple times",

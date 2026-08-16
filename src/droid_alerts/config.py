@@ -130,7 +130,17 @@ GALACTIC_DEFAULT_ALERT_TARGETS = (
     ("Galactic", "Legendary"),
     ("Galactic", "Mythic"),
 )
-DEFAULT_ALERT_TARGETS = LEGACY_DEFAULT_ALERT_TARGETS + GALACTIC_DEFAULT_ALERT_TARGETS
+PRE_STELLAR_DEFAULT_ALERT_TARGETS = (
+    LEGACY_DEFAULT_ALERT_TARGETS + GALACTIC_DEFAULT_ALERT_TARGETS
+)
+STELLAR_DEFAULT_ALERT_TARGETS = (
+    ("Stellar", "Epic"),
+    ("Stellar", "Legendary"),
+    ("Stellar", "Mythic"),
+)
+DEFAULT_ALERT_TARGETS = (
+    PRE_STELLAR_DEFAULT_ALERT_TARGETS + STELLAR_DEFAULT_ALERT_TARGETS
+)
 CAPTURE_METADATA_MAX_LENGTH = 512
 
 
@@ -630,6 +640,8 @@ class AppConfig:
             ]
             if {tuple(pair) for pair in pairs} == set(LEGACY_DEFAULT_ALERT_TARGETS):
                 pairs.extend([list(combo) for combo in GALACTIC_DEFAULT_ALERT_TARGETS])
+            if {tuple(pair) for pair in pairs} == set(PRE_STELLAR_DEFAULT_ALERT_TARGETS):
+                pairs.extend([list(combo) for combo in STELLAR_DEFAULT_ALERT_TARGETS])
             if pairs or not raw_targets or contained_removed_target:
                 config.alert_targets = pairs
         if config.active_notification_profile not in config.notification_profiles:

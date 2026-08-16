@@ -12,6 +12,9 @@ CHAT_ALERT_COMBOS: tuple[tuple[str, str], ...] = (
     ("Galactic", "Epic"),
     ("Galactic", "Legendary"),
     ("Galactic", "Mythic"),
+    ("Stellar", "Epic"),
+    ("Stellar", "Legendary"),
+    ("Stellar", "Mythic"),
     ("Diamond", "Mythic"),
 )
 

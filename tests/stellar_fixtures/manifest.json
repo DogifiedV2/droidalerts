@@ -1,0 +1,535 @@
+{
+  "source": "User Stellar chat captures supplied 2026-08-16",
+  "cases": [
+    {
+      "file": "image_01_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2561,
+        1441
+      ],
+      "crop": [
+        0,
+        677,
+        845,
+        231
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Rare"
+        ],
+        [
+          "Stellar",
+          "Common"
+        ]
+      ]
+    },
+    {
+      "file": "image_02_word_crop.png",
+      "mode": "word_crop",
+      "source_screen": null,
+      "known_scale": 1.0,
+      "stellar_word_rows": [
+        37,
+        62
+      ],
+      "note": "Tight crop supplies Mythic and Legendary word samples. It does not keep the screen-relative rarity columns."
+    },
+    {
+      "file": "image_03_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2561,
+        1441
+      ],
+      "crop": [
+        0,
+        677,
+        845,
+        231
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Common"
+        ],
+        [
+          "Stellar",
+          "Rare"
+        ]
+      ]
+    },
+    {
+      "file": "image_04_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        1024,
+        576
+      ],
+      "crop": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Rare"
+        ],
+        [
+          "Stellar",
+          "Legendary"
+        ]
+      ]
+    },
+    {
+      "file": "image_05_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2561,
+        1441
+      ],
+      "crop": [
+        0,
+        677,
+        845,
+        231
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Common"
+        ],
+        [
+          "Stellar",
+          "Mythic"
+        ]
+      ]
+    },
+    {
+      "file": "image_06_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        1024,
+        576
+      ],
+      "crop": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Common"
+        ],
+        [
+          "Stellar",
+          "Common"
+        ]
+      ]
+    },
+    {
+      "file": "image_07_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2558,
+        1438
+      ],
+      "crop": [
+        0,
+        676,
+        844,
+        230
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Rare"
+        ]
+      ]
+    },
+    {
+      "file": "image_08_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        1024,
+        576
+      ],
+      "crop": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Rare"
+        ]
+      ]
+    },
+    {
+      "file": "image_09_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        1024,
+        576
+      ],
+      "crop": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Common"
+        ]
+      ]
+    },
+    {
+      "file": "image_10_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        1024,
+        576
+      ],
+      "crop": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Rare"
+        ],
+        [
+          "Stellar",
+          "Common"
+        ]
+      ]
+    },
+    {
+      "file": "image_11_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2559,
+        1438
+      ],
+      "crop": [
+        0,
+        676,
+        844,
+        230
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Common"
+        ]
+      ]
+    },
+    {
+      "file": "image_12_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        1024,
+        576
+      ],
+      "crop": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Rare"
+        ]
+      ]
+    },
+    {
+      "file": "image_13_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        1024,
+        576
+      ],
+      "crop": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Common"
+        ],
+        [
+          "Stellar",
+          "Common"
+        ]
+      ]
+    },
+    {
+      "file": "image_14_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        1024,
+        576
+      ],
+      "crop": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Rare"
+        ]
+      ]
+    },
+    {
+      "file": "image_15_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        1024,
+        576
+      ],
+      "crop": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Rare"
+        ]
+      ]
+    },
+    {
+      "file": "image_16_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        1024,
+        576
+      ],
+      "crop": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Common"
+        ]
+      ]
+    },
+    {
+      "file": "image_17_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        1024,
+        576
+      ],
+      "crop": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Common"
+        ],
+        [
+          "Stellar",
+          "Epic"
+        ]
+      ]
+    },
+    {
+      "file": "image_18_manual_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        1919,
+        1079
+      ],
+      "crop": [
+        0,
+        400,
+        650,
+        250
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Epic"
+        ],
+        [
+          "Stellar",
+          "Common"
+        ],
+        [
+          "Stellar",
+          "Rare"
+        ]
+      ],
+      "note": "This HUD places chat above the wide auto region. The saved band matches a manual calibration."
+    },
+    {
+      "file": "image_19_common_crop.png",
+      "mode": "band",
+      "source_screen": null,
+      "crop": [
+        0,
+        0,
+        848,
+        333
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Common"
+        ]
+      ],
+      "known_scale": 1.0
+    },
+    {
+      "file": "image_20_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2559,
+        1438
+      ],
+      "crop": [
+        0,
+        676,
+        844,
+        230
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Rare"
+        ]
+      ]
+    },
+    {
+      "file": "image_21_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        1024,
+        576
+      ],
+      "crop": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Rare"
+        ]
+      ]
+    },
+    {
+      "file": "image_22_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2559,
+        1439
+      ],
+      "crop": [
+        0,
+        676,
+        844,
+        230
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Rare"
+        ]
+      ]
+    },
+    {
+      "file": "image_23_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2560,
+        1440
+      ],
+      "crop": [
+        0,
+        677,
+        845,
+        230
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Rare"
+        ]
+      ]
+    },
+    {
+      "file": "image_24_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2560,
+        1440
+      ],
+      "crop": [
+        0,
+        677,
+        845,
+        230
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Rare"
+        ]
+      ]
+    },
+    {
+      "file": "image_25_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2561,
+        1441
+      ],
+      "crop": [
+        0,
+        677,
+        845,
+        231
+      ],
+      "expected_stellar": [
+        [
+          "Stellar",
+          "Legendary"
+        ]
+      ]
+    }
+  ]
+}

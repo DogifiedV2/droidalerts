@@ -232,10 +232,236 @@
         50
       ],
       "normalized_row_height": 44
+    },
+    {
+      "droid": "Stellar",
+      "file": "Stellar__chat_01_8c88409f.png",
+      "source": "user Stellar chat capture 2026-08-16 image 3",
+      "rarity": "Common",
+      "source_size": [
+        2561,
+        1441
+      ],
+      "source_chat_box": [
+        0,
+        677,
+        845,
+        231
+      ],
+      "source_scale": 1.000390625,
+      "normalized_row_y": 42,
+      "word_window": [
+        70,
+        42,
+        245,
+        86
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Stellar",
+      "file": "Stellar__chat_02_2c0d10ed.png",
+      "source": "user Stellar chat capture 2026-08-16 image 4",
+      "rarity": "Legendary",
+      "source_size": [
+        1024,
+        576
+      ],
+      "source_chat_box": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "source_scale": 0.4,
+      "normalized_row_y": 83,
+      "word_window": [
+        70,
+        83,
+        245,
+        127
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Stellar",
+      "file": "Stellar__chat_03_94be8ebd.png",
+      "source": "user Stellar chat capture 2026-08-16 image 5",
+      "rarity": "Mythic",
+      "source_size": [
+        2561,
+        1441
+      ],
+      "source_chat_box": [
+        0,
+        677,
+        845,
+        231
+      ],
+      "source_scale": 1.000390625,
+      "normalized_row_y": 81,
+      "word_window": [
+        70,
+        81,
+        245,
+        125
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Stellar",
+      "file": "Stellar__chat_04_7aa21359.png",
+      "source": "user Stellar chat capture 2026-08-16 image 7",
+      "rarity": "Rare",
+      "source_size": [
+        2558,
+        1438
+      ],
+      "source_chat_box": [
+        0,
+        676,
+        844,
+        230
+      ],
+      "source_scale": 0.9986111111111111,
+      "normalized_row_y": 51,
+      "word_window": [
+        70,
+        51,
+        245,
+        95
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Stellar",
+      "file": "Stellar__chat_05_cf6e90e4.png",
+      "source": "user Stellar chat capture 2026-08-16 image 9",
+      "rarity": "Common",
+      "source_size": [
+        1024,
+        576
+      ],
+      "source_chat_box": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "source_scale": 0.4,
+      "normalized_row_y": 50,
+      "word_window": [
+        70,
+        50,
+        245,
+        94
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Stellar",
+      "file": "Stellar__chat_06_a1501528.png",
+      "source": "user Stellar chat capture 2026-08-16 image 10",
+      "rarity": "Rare",
+      "source_size": [
+        1024,
+        576
+      ],
+      "source_chat_box": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "source_scale": 0.4,
+      "normalized_row_y": 40,
+      "word_window": [
+        70,
+        40,
+        245,
+        84
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Stellar",
+      "file": "Stellar__chat_09_b0a8e759.png",
+      "source": "user Stellar chat capture 2026-08-16 image 21",
+      "rarity": "Rare",
+      "source_size": [
+        1024,
+        576
+      ],
+      "source_chat_box": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "source_scale": 0.4,
+      "normalized_row_y": 49,
+      "word_window": [
+        70,
+        49,
+        245,
+        93
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Stellar",
+      "file": "Stellar__chat_10_1a205867.png",
+      "source": "user Stellar chat capture 2026-08-16 image 22",
+      "rarity": "Rare",
+      "source_size": [
+        2559,
+        1439
+      ],
+      "source_chat_box": [
+        0,
+        676,
+        844,
+        230
+      ],
+      "source_scale": 0.9993055555555556,
+      "normalized_row_y": 42,
+      "word_window": [
+        70,
+        42,
+        245,
+        86
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Stellar",
+      "file": "Stellar__chat_11_823c3691.png",
+      "source": "user Stellar chat capture 2026-08-16 image 6",
+      "rarity": "Common",
+      "source_size": [
+        1024,
+        576
+      ],
+      "source_chat_box": [
+        0,
+        271,
+        338,
+        92
+      ],
+      "source_scale": 0.4,
+      "normalized_row_y": 50,
+      "word_window": [
+        70,
+        50,
+        245,
+        94
+      ],
+      "normalized_row_height": 44
     }
   ],
   "droids": [
     "Beskar",
-    "Galactic"
+    "Galactic",
+    "Stellar"
   ]
 }
