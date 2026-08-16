@@ -789,16 +789,7 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual("What's new", runtime.dialogs.state_snapshot()["title"])
         message = runtime.dialogs.state_snapshot()["message"]
         self.assertEqual(
-            "\n".join(
-                (
-                    "• Added Stellar Droid spawn alerts",
-                    "• Added credits income per minute overlay",
-                    "• Fixed the timers not showing in fullscreen mode",
-                    "• Fixed app opening multiple times",
-                    "• Restored the update popup and Update ready button for automatic update checks",
-                    "• Stopped GitHub API rate limits from breaking update checks",
-                )
-            ),
+            "• Beta; added stellar detection (experimental)",
             message,
         )
 

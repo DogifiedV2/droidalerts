@@ -26,10 +26,5 @@ PAGES = (
 )
 
 WHATS_NEW_ITEMS = (
-    "Added Stellar Droid spawn alerts",
-    "Added credits income per minute overlay",
-    "Fixed the timers not showing in fullscreen mode",
-    "Fixed app opening multiple times",
-    "Restored the update popup and Update ready button for automatic update checks",
-    "Stopped GitHub API rate limits from breaking update checks",
+    "Beta; added stellar detection (experimental)",
 )
