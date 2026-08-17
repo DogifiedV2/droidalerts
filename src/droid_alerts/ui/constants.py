@@ -26,7 +26,5 @@ PAGES = (
 )
 
 WHATS_NEW_ITEMS = (
-    "Beta; added stellar detection (experimental)",
-    "RB 31-35 for all cycles now live on the tracker",
-    "We have added 24/7 Limited Deal alerts to the Discord as well as fast update alerts",
+    "Updated the timer overlays",
 )

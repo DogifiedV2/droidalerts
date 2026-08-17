@@ -789,13 +789,7 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual("What's new", runtime.dialogs.state_snapshot()["title"])
         message = runtime.dialogs.state_snapshot()["message"]
         self.assertEqual(
-            "\n".join(
-                (
-                    "• Beta; added stellar detection (experimental)",
-                    "• RB 31-35 for all cycles now live on the tracker",
-                    "• We have added 24/7 Limited Deal alerts to the Discord as well as fast update alerts",
-                )
-            ),
+            "• Updated the timer overlays",
             message,
         )
 
