@@ -9,11 +9,15 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from droid_alerts.timer_sync import DEFAULT_TIMER_SCHEDULES, SyncedTimerSchedule
+from droid_alerts.alert_customization import normalize_timer_reminder_rules
 from droid_alerts.timers import (
     BASE_HEIGHT,
+    DISPLAY_TIMER_ORDER,
     EDIT_BAR_HEIGHT,
     MAX_SCALE,
     MIN_SCALE,
+    TIMER_COLORS,
+    TIMER_PERIOD_SECONDS,
     _edit_bar_row_bounds,
     next_timer_refresh_delay_ms,
 )
@@ -33,6 +37,29 @@ def payload(server_time_ms: int) -> dict[str, object]:
 
 
 class SyncedTimerScheduleTests(unittest.TestCase):
+    def test_current_spawn_timer_lineup_and_fallback_schedule(self):
+        self.assertEqual(("galactic", "stellar", "mythic"), DISPLAY_TIMER_ORDER)
+        self.assertEqual((30 * 60, 15 * 60), DEFAULT_TIMER_SCHEDULES["galactic"])
+        self.assertEqual((60 * 60, 0), DEFAULT_TIMER_SCHEDULES["stellar"])
+        self.assertEqual(30 * 60, TIMER_PERIOD_SECONDS["galactic"])
+        self.assertEqual(60 * 60, TIMER_PERIOD_SECONDS["stellar"])
+        self.assertEqual("#ffe14d", TIMER_COLORS["stellar"])
+
+        schedule = SyncedTimerSchedule(wall_clock=lambda: 10.0)
+        self.assertEqual(890, schedule.seconds_until_next("galactic"))
+        self.assertEqual(3590, schedule.seconds_until_next("stellar"))
+        self.assertEqual(3290, schedule.seconds_until_next("mythic"))
+
+    def test_legacy_beskar_reminder_rules_move_to_stellar(self):
+        rules = normalize_timer_reminder_rules(
+            {"beskar": [300, 60], "galactic": [120], "mythic": []}
+        )
+
+        self.assertEqual(
+            {"galactic": [120], "stellar": [300, 60], "mythic": []},
+            rules,
+        )
+
     def test_timer_controls_fit_and_refresh_just_after_each_second(self):
         for scale in (MIN_SCALE, 1.0, MAX_SCALE):
             card_top = int(BASE_HEIGHT * scale)

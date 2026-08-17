@@ -1147,7 +1147,7 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertNotIn("timer_reminder", disabled)
         self.assertEqual(["timer:mythic"], disabled)
         self.assertTrue(
-            runtime.config.channel_allows_alert("discord", "timer:beskar")
+            runtime.config.channel_allows_alert("discord", "timer:stellar")
         )
         self.assertFalse(
             runtime.config.channel_allows_alert("discord", "timer:mythic")
@@ -1442,9 +1442,9 @@ class QtUiControllerTests(unittest.TestCase):
             monitor=MonitorInfo(0, 0, 1920, 1080),
             reminders_enabled=False,
             reminder_rules={
-                "beskar": [300, 60],
-                "mythic": [120],
                 "galactic": [],
+                "stellar": [300, 60],
+                "mythic": [120],
             },
             on_reminder=lambda kind, remaining: reminders.append((kind, remaining)),
         )
@@ -1454,11 +1454,11 @@ class QtUiControllerTests(unittest.TestCase):
                 "droid_alerts.timers.TIMER_SCHEDULE_CLOCK.current_time_seconds",
                 return_value=1_000_000,
             ):
-                overlay._maybe_remind("beskar", 250)
-                overlay._maybe_remind("beskar", 200)
-                overlay._maybe_remind("beskar", 50)
+                overlay._maybe_remind("stellar", 250)
+                overlay._maybe_remind("stellar", 200)
+                overlay._maybe_remind("stellar", 50)
                 overlay._maybe_remind("galactic", 10)
-            self.assertEqual([("beskar", 250), ("beskar", 50)], reminders)
+            self.assertEqual([("stellar", 250), ("stellar", 50)], reminders)
         finally:
             overlay.close()
 
@@ -1467,7 +1467,7 @@ class QtUiControllerTests(unittest.TestCase):
         overlay = DroidTimersOverlay(
             monitor=MonitorInfo(0, 0, 1920, 1080),
             reminders_enabled=False,
-            reminder_rules={"beskar": [300, 60], "mythic": [], "galactic": []},
+            reminder_rules={"galactic": [], "stellar": [300, 60], "mythic": []},
             on_reminder=lambda kind, remaining: reminders.append((kind, remaining)),
         )
         try:
@@ -1476,9 +1476,9 @@ class QtUiControllerTests(unittest.TestCase):
                 "droid_alerts.timers.TIMER_SCHEDULE_CLOCK.current_time_seconds",
                 return_value=1_000_000,
             ):
-                overlay._maybe_remind("beskar", 30)
-                overlay._maybe_remind("beskar", 29)
-            self.assertEqual([("beskar", 30)], reminders)
+                overlay._maybe_remind("stellar", 30)
+                overlay._maybe_remind("stellar", 29)
+            self.assertEqual([("stellar", 30)], reminders)
         finally:
             overlay.close()
 
@@ -1800,12 +1800,12 @@ class QtUiControllerTests(unittest.TestCase):
         dashboard = DashboardController(runtime, capture)
 
         dashboard._save_timer_reminder_rules(
-            {"beskar": "5m, 1m, 30s", "mythic": "1h", "galactic": ""}
+            {"galactic": "", "stellar": "5m, 1m, 30s", "mythic": "1h"}
         )
 
-        self.assertEqual([300, 60, 30], runtime.config.timer_reminder_rules["beskar"])
-        self.assertEqual([3600], runtime.config.timer_reminder_rules["mythic"])
         self.assertEqual([], runtime.config.timer_reminder_rules["galactic"])
+        self.assertEqual([300, 60, 30], runtime.config.timer_reminder_rules["stellar"])
+        self.assertEqual([3600], runtime.config.timer_reminder_rules["mythic"])
         dashboard.shutdown()
 
     def test_quiet_hours_discord_routes_and_messages_are_editable(self):
@@ -1871,11 +1871,11 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertTrue(all(option["selected"] for option in timer_options))
 
         settings._save_quiet_bypass(
-            {"selected": ["timer:beskar", "timer:galactic"]}
+            {"selected": ["timer:galactic", "timer:stellar"]}
         )
 
         self.assertEqual(
-            [hidden_id, "timer:beskar", "timer:galactic"],
+            [hidden_id, "timer:galactic", "timer:stellar"],
             runtime.config.quiet_hours_bypass_alerts,
         )
         settings.shutdown()

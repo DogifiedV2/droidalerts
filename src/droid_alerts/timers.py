@@ -19,24 +19,22 @@ from .popup import RARITY_COLORS
 from .timer_sync import TIMER_SCHEDULE_CLOCK
 
 
-TIMER_ORDER = ("beskar", "mythic", "rainbow", "galactic")
-DISPLAY_TIMER_ORDER = ("beskar", "mythic", "galactic")
+TIMER_ORDER = ("galactic", "stellar", "mythic")
+DISPLAY_TIMER_ORDER = TIMER_ORDER
 TIMER_LABELS = {
-    "beskar": "BESKAR",
-    "mythic": "MYTHIC",
-    "rainbow": "RAINBOW",
     "galactic": "GALACTIC",
+    "stellar": "STELLAR",
+    "mythic": "MYTHIC",
 }
 TIMER_COLORS = {
-    "beskar": "#c9cdd9",
-    "mythic": RARITY_COLORS["Mythic"],
     "galactic": RARITY_COLORS["Galactic"],
+    "stellar": RARITY_COLORS["Stellar"],
+    "mythic": RARITY_COLORS["Mythic"],
 }
 TIMER_PERIOD_SECONDS = {
-    "beskar": 900,
-    "rainbow": 600,
+    "galactic": 1800,
+    "stellar": 3600,
     "mythic": 3600,
-    "galactic": 3600,
 }
 
 BASE_WIDTH = 420

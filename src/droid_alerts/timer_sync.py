@@ -17,7 +17,8 @@ DEFAULT_TIMER_SCHEDULES: dict[str, tuple[int, int]] = {
     "beskar": (15 * 60, 0),
     "mythic": (60 * 60, 55 * 60),
     "rainbow": (10 * 60, 0),
-    "galactic": (60 * 60, 45 * 60),
+    "galactic": (30 * 60, 15 * 60),
+    "stellar": (60 * 60, 0),
 }
 SYNC_SAMPLE_COUNT = 3
 SYNC_TIMEOUT_SECONDS = 3.0

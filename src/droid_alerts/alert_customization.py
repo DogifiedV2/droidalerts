@@ -6,7 +6,7 @@ from typing import Any
 
 
 ALERT_CHANNELS = ("popup", "sound", "discord", "ntfy", "pushover")
-TIMER_REMINDER_KINDS = ("beskar", "mythic", "galactic")
+TIMER_REMINDER_KINDS = ("galactic", "stellar", "mythic")
 
 
 def alert_type_id(detection: object) -> str:
@@ -84,7 +84,10 @@ def normalize_timer_reminder_rules(
         return {kind: [fallback] for kind in TIMER_REMINDER_KINDS}
     normalized: dict[str, list[int]] = {}
     for kind in TIMER_REMINDER_KINDS:
-        values = raw.get(kind, [])
+        values = raw.get(
+            kind,
+            raw.get("beskar", []) if kind == "stellar" else [],
+        )
         if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
             values = []
         leads: set[int] = set()
