@@ -26,6 +26,5 @@ PAGES = (
 )
 
 WHATS_NEW_ITEMS = (
-    "Added Kyber Droid spawn alerts",
-    "Added Stellar and Kyber Mythic to the wake-up alarm",
+    "Timer overlay now shows Kyber, Stellar and Mythic",
 )

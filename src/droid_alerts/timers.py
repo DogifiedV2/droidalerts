@@ -19,20 +19,20 @@ from .popup import RARITY_COLORS
 from .timer_sync import TIMER_SCHEDULE_CLOCK
 
 
-TIMER_ORDER = ("galactic", "stellar", "mythic")
+TIMER_ORDER = ("kyber", "stellar", "mythic")
 DISPLAY_TIMER_ORDER = TIMER_ORDER
 TIMER_LABELS = {
-    "galactic": "GALACTIC",
+    "kyber": "KYBER",
     "stellar": "STELLAR",
     "mythic": "MYTHIC",
 }
 TIMER_COLORS = {
-    "galactic": RARITY_COLORS["Galactic"],
+    "kyber": RARITY_COLORS["Kyber"],
     "stellar": RARITY_COLORS["Stellar"],
     "mythic": RARITY_COLORS["Mythic"],
 }
 TIMER_PERIOD_SECONDS = {
-    "galactic": 1800,
+    "kyber": 3600,
     "stellar": 3600,
     "mythic": 3600,
 }

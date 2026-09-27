@@ -789,12 +789,7 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual("What's new", runtime.dialogs.state_snapshot()["title"])
         message = runtime.dialogs.state_snapshot()["message"]
         self.assertEqual(
-            "\n".join(
-                (
-                    "• Added Kyber Droid spawn alerts",
-                    "• Added Stellar and Kyber Mythic to the wake-up alarm",
-                )
-            ),
+            "• Timer overlay now shows Kyber, Stellar and Mythic",
             message,
         )
 
@@ -1429,9 +1424,9 @@ class QtUiControllerTests(unittest.TestCase):
         controller.shutdown()
 
     def test_timer_reminder_detection_uses_readable_timer_name(self):
-        detection = timer_reminder_detection("galactic", 45)
+        detection = timer_reminder_detection("kyber", 45)
 
-        self.assertEqual("Galactic Timer", detection.droid)
+        self.assertEqual("Kyber Timer", detection.droid)
         self.assertEqual("45", detection.rarity)
         self.assertEqual("timer-reminder", detection.source)
 
@@ -1441,7 +1436,7 @@ class QtUiControllerTests(unittest.TestCase):
             monitor=MonitorInfo(0, 0, 1920, 1080),
             reminders_enabled=False,
             reminder_rules={
-                "galactic": [],
+                "kyber": [],
                 "stellar": [300, 60],
                 "mythic": [120],
             },
@@ -1456,7 +1451,7 @@ class QtUiControllerTests(unittest.TestCase):
                 overlay._maybe_remind("stellar", 250)
                 overlay._maybe_remind("stellar", 200)
                 overlay._maybe_remind("stellar", 50)
-                overlay._maybe_remind("galactic", 10)
+                overlay._maybe_remind("kyber", 10)
             self.assertEqual([("stellar", 250), ("stellar", 50)], reminders)
         finally:
             overlay.close()
@@ -1466,7 +1461,7 @@ class QtUiControllerTests(unittest.TestCase):
         overlay = DroidTimersOverlay(
             monitor=MonitorInfo(0, 0, 1920, 1080),
             reminders_enabled=False,
-            reminder_rules={"galactic": [], "stellar": [300, 60], "mythic": []},
+            reminder_rules={"kyber": [], "stellar": [300, 60], "mythic": []},
             on_reminder=lambda kind, remaining: reminders.append((kind, remaining)),
         )
         try:
@@ -1799,10 +1794,10 @@ class QtUiControllerTests(unittest.TestCase):
         dashboard = DashboardController(runtime, capture)
 
         dashboard._save_timer_reminder_rules(
-            {"galactic": "", "stellar": "5m, 1m, 30s", "mythic": "1h"}
+            {"kyber": "", "stellar": "5m, 1m, 30s", "mythic": "1h"}
         )
 
-        self.assertEqual([], runtime.config.timer_reminder_rules["galactic"])
+        self.assertEqual([], runtime.config.timer_reminder_rules["kyber"])
         self.assertEqual([300, 60, 30], runtime.config.timer_reminder_rules["stellar"])
         self.assertEqual([3600], runtime.config.timer_reminder_rules["mythic"])
         dashboard.shutdown()
@@ -1815,7 +1810,7 @@ class QtUiControllerTests(unittest.TestCase):
 
         settings.setQuietChannel("sound", False)
         settings.snoozeNotifications(30)
-        settings._save_quiet_bypass({"selected": ["timer:galactic"]})
+        settings._save_quiet_bypass({"selected": ["timer:kyber"]})
         settings._save_discord_routes(
             {"values": {"belt_tracker": "Belt Room", "limited_deals": "Main"}}
         )
@@ -1830,7 +1825,7 @@ class QtUiControllerTests(unittest.TestCase):
 
         self.assertNotIn("sound", runtime.config.quiet_hours_muted_channels)
         self.assertTrue(runtime.config.snoozed_until)
-        self.assertEqual(["timer:galactic"], runtime.config.quiet_hours_bypass_alerts)
+        self.assertEqual(["timer:kyber"], runtime.config.quiet_hours_bypass_alerts)
         self.assertEqual("Belt Room", runtime.config.discord_alert_destinations["belt_tracker"])
         self.assertEqual(
             "Main", runtime.config.discord_alert_destinations["limited_deals"]
@@ -1870,11 +1865,11 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertTrue(all(option["selected"] for option in timer_options))
 
         settings._save_quiet_bypass(
-            {"selected": ["timer:galactic", "timer:stellar"]}
+            {"selected": ["timer:kyber", "timer:stellar"]}
         )
 
         self.assertEqual(
-            [hidden_id, "timer:galactic", "timer:stellar"],
+            [hidden_id, "timer:kyber", "timer:stellar"],
             runtime.config.quiet_hours_bypass_alerts,
         )
         settings.shutdown()

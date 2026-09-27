@@ -38,16 +38,17 @@ def payload(server_time_ms: int) -> dict[str, object]:
 
 class SyncedTimerScheduleTests(unittest.TestCase):
     def test_current_spawn_timer_lineup_and_fallback_schedule(self):
-        self.assertEqual(("galactic", "stellar", "mythic"), DISPLAY_TIMER_ORDER)
-        self.assertEqual((30 * 60, 15 * 60), DEFAULT_TIMER_SCHEDULES["galactic"])
-        self.assertEqual((60 * 60, 0), DEFAULT_TIMER_SCHEDULES["stellar"])
-        self.assertEqual(30 * 60, TIMER_PERIOD_SECONDS["galactic"])
+        self.assertEqual(("kyber", "stellar", "mythic"), DISPLAY_TIMER_ORDER)
+        self.assertEqual((60 * 60, 15 * 60), DEFAULT_TIMER_SCHEDULES["kyber"])
+        self.assertEqual((60 * 60, 5 * 60), DEFAULT_TIMER_SCHEDULES["stellar"])
+        self.assertEqual(60 * 60, TIMER_PERIOD_SECONDS["kyber"])
         self.assertEqual(60 * 60, TIMER_PERIOD_SECONDS["stellar"])
         self.assertEqual("#ffe14d", TIMER_COLORS["stellar"])
+        self.assertEqual("#4df2b0", TIMER_COLORS["kyber"])
 
         schedule = SyncedTimerSchedule(wall_clock=lambda: 10.0)
-        self.assertEqual(890, schedule.seconds_until_next("galactic"))
-        self.assertEqual(3590, schedule.seconds_until_next("stellar"))
+        self.assertEqual(890, schedule.seconds_until_next("kyber"))
+        self.assertEqual(290, schedule.seconds_until_next("stellar"))
         self.assertEqual(3290, schedule.seconds_until_next("mythic"))
 
     def test_legacy_beskar_reminder_rules_move_to_stellar(self):
@@ -56,7 +57,7 @@ class SyncedTimerScheduleTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            {"galactic": [120], "stellar": [300, 60], "mythic": []},
+            {"kyber": [], "stellar": [300, 60], "mythic": []},
             rules,
         )
 
@@ -124,6 +125,20 @@ class SyncedTimerScheduleTests(unittest.TestCase):
             received_monotonic=10.0,
         )
         self.assertEqual(1800, schedule.seconds_until_next("galactic"))
+
+    def test_server_without_kyber_keeps_builtin_kyber_schedule(self):
+        legacy = payload(7_200_000)
+        del legacy["schedules"]["kyber"]
+        schedule = SyncedTimerSchedule(monotonic_clock=lambda: 10.0)
+        schedule.apply_server_payload(
+            legacy,
+            sent_wall=100.0,
+            received_wall=100.0,
+            received_monotonic=10.0,
+        )
+
+        self.assertTrue(schedule.synchronized)
+        self.assertEqual(900, schedule.seconds_until_next("kyber"))
 
     def test_invalid_schedule_is_rejected_without_replacing_the_fallback(self):
         invalid = payload(7_200_000)

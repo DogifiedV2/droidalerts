@@ -6,7 +6,7 @@ from typing import Any
 
 
 ALERT_CHANNELS = ("popup", "sound", "discord", "ntfy", "pushover")
-TIMER_REMINDER_KINDS = ("galactic", "stellar", "mythic")
+TIMER_REMINDER_KINDS = ("kyber", "stellar", "mythic")
 
 
 def alert_type_id(detection: object) -> str:

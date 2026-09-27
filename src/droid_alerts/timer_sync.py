@@ -18,7 +18,8 @@ DEFAULT_TIMER_SCHEDULES: dict[str, tuple[int, int]] = {
     "mythic": (60 * 60, 55 * 60),
     "rainbow": (10 * 60, 0),
     "galactic": (30 * 60, 15 * 60),
-    "stellar": (60 * 60, 0),
+    "stellar": (60 * 60, 5 * 60),
+    "kyber": (60 * 60, 15 * 60),
 }
 SYNC_SAMPLE_COUNT = 3
 SYNC_TIMEOUT_SECONDS = 3.0
@@ -66,10 +67,15 @@ class SyncedTimerSchedule:
             raise ValueError("Invalid timer schedule response")
 
         schedules: dict[str, tuple[int, int]] = {}
-        for kind in DEFAULT_TIMER_SCHEDULES:
+        for kind, default_schedule in DEFAULT_TIMER_SCHEDULES.items():
             raw = raw_schedules.get(kind)
+            if raw is None:
+                # Newer timer kinds ship before the schedule service lists
+                # them; keep the built-in schedule instead of rejecting sync.
+                schedules[kind] = default_schedule
+                continue
             if not isinstance(raw, Mapping):
-                raise ValueError(f"Missing {kind} timer schedule")
+                raise ValueError(f"Invalid {kind} timer schedule")
             interval = int(raw["intervalSeconds"])
             offset = int(raw["offsetSeconds"])
             if interval < 60 or interval > 24 * 60 * 60 or not 0 <= offset < interval:
