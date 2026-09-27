@@ -154,6 +154,8 @@ PROFILE_FIELDS = (
     "wake_alarm_enabled",
     "wake_alarm_beskar_mythic",
     "wake_alarm_galactic_mythic",
+    "wake_alarm_stellar_mythic",
+    "wake_alarm_kyber_mythic",
     "quiet_hours_enabled",
     "quiet_hours_start",
     "quiet_hours_end",

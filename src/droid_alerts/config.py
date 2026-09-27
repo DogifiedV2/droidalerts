@@ -138,9 +138,15 @@ STELLAR_DEFAULT_ALERT_TARGETS = (
     ("Stellar", "Legendary"),
     ("Stellar", "Mythic"),
 )
-DEFAULT_ALERT_TARGETS = (
+PRE_KYBER_DEFAULT_ALERT_TARGETS = (
     PRE_STELLAR_DEFAULT_ALERT_TARGETS + STELLAR_DEFAULT_ALERT_TARGETS
 )
+KYBER_DEFAULT_ALERT_TARGETS = (
+    ("Kyber", "Epic"),
+    ("Kyber", "Legendary"),
+    ("Kyber", "Mythic"),
+)
+DEFAULT_ALERT_TARGETS = PRE_KYBER_DEFAULT_ALERT_TARGETS + KYBER_DEFAULT_ALERT_TARGETS
 CAPTURE_METADATA_MAX_LENGTH = 512
 
 
@@ -207,6 +213,8 @@ class AppConfig:
     wake_alarm_enabled: bool = False
     wake_alarm_beskar_mythic: bool = True
     wake_alarm_galactic_mythic: bool = True
+    wake_alarm_stellar_mythic: bool = True
+    wake_alarm_kyber_mythic: bool = True
     popup_enabled: bool = True
     droid_timers_enabled: bool = False
     # Overlay layout, user-adjustable via "Adjust Timers": size factor plus
@@ -426,6 +434,12 @@ class AppConfig:
             wake_alarm_galactic_mythic=bool(
                 data.get("wake_alarm_galactic_mythic", True)
             ),
+            wake_alarm_stellar_mythic=bool(
+                data.get("wake_alarm_stellar_mythic", True)
+            ),
+            wake_alarm_kyber_mythic=bool(
+                data.get("wake_alarm_kyber_mythic", True)
+            ),
             popup_enabled=bool(data.get("popup_enabled", True)),
             droid_timers_enabled=bool(data.get("droid_timers_enabled", False)),
             droid_timers_scale=normalize_finite_float(
@@ -642,6 +656,8 @@ class AppConfig:
                 pairs.extend([list(combo) for combo in GALACTIC_DEFAULT_ALERT_TARGETS])
             if {tuple(pair) for pair in pairs} == set(PRE_STELLAR_DEFAULT_ALERT_TARGETS):
                 pairs.extend([list(combo) for combo in STELLAR_DEFAULT_ALERT_TARGETS])
+            if {tuple(pair) for pair in pairs} == set(PRE_KYBER_DEFAULT_ALERT_TARGETS):
+                pairs.extend([list(combo) for combo in KYBER_DEFAULT_ALERT_TARGETS])
             if pairs or not raw_targets or contained_removed_target:
                 config.alert_targets = pairs
         if config.active_notification_profile not in config.notification_profiles:
@@ -677,6 +693,8 @@ class AppConfig:
             "wake_alarm_enabled": self.wake_alarm_enabled,
             "wake_alarm_beskar_mythic": self.wake_alarm_beskar_mythic,
             "wake_alarm_galactic_mythic": self.wake_alarm_galactic_mythic,
+            "wake_alarm_stellar_mythic": self.wake_alarm_stellar_mythic,
+            "wake_alarm_kyber_mythic": self.wake_alarm_kyber_mythic,
             "popup_enabled": self.popup_enabled,
             "droid_timers_enabled": self.droid_timers_enabled,
             "droid_timers_scale": self.droid_timers_scale,
@@ -812,11 +830,13 @@ class AppConfig:
         """Return whether a priority chat alert should start the wake alarm."""
         if not self.wake_alarm_enabled or rarity != "Mythic":
             return False
-        return (
-            droid == "Beskar" and self.wake_alarm_beskar_mythic
-        ) or (
-            droid == "Galactic" and self.wake_alarm_galactic_mythic
-        )
+        enabled_by_droid = {
+            "Beskar": self.wake_alarm_beskar_mythic,
+            "Galactic": self.wake_alarm_galactic_mythic,
+            "Stellar": self.wake_alarm_stellar_mythic,
+            "Kyber": self.wake_alarm_kyber_mythic,
+        }
+        return enabled_by_droid.get(droid, False)
 
     def channel_allows_alert(self, channel: str, alert_id: str) -> bool:
         """Return whether a channel may receive this alert right now."""

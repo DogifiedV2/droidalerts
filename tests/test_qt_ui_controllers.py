@@ -789,7 +789,12 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual("What's new", runtime.dialogs.state_snapshot()["title"])
         message = runtime.dialogs.state_snapshot()["message"]
         self.assertEqual(
-            "• Updated the timer overlays",
+            "\n".join(
+                (
+                    "• Added Kyber Droid spawn alerts",
+                    "• Added Stellar and Kyber Mythic to the wake-up alarm",
+                )
+            ),
             message,
         )
 

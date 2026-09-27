@@ -457,11 +457,152 @@
         94
       ],
       "normalized_row_height": 44
+    },
+    {
+      "droid": "Kyber",
+      "file": "Kyber__chat_01_9d51df95.png",
+      "source": "user Kyber chat capture 2026-09-27 image_01_manual_chat_band.png",
+      "source_scale": 0.6268,
+      "normalized_row_y": 56,
+      "word_window": [
+        62,
+        56,
+        224,
+        100
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Kyber",
+      "file": "Kyber__chat_03_1d55eeb6.png",
+      "source": "user Kyber chat capture 2026-09-27 image_03_auto_chat_band.png",
+      "source_scale": 0.5861,
+      "normalized_row_y": 154,
+      "word_window": [
+        62,
+        154,
+        224,
+        198
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Kyber",
+      "file": "Kyber__chat_04_b339af34.png",
+      "source": "user Kyber chat capture 2026-09-27 image_04_auto_chat_band.png",
+      "source_scale": 0.7812,
+      "normalized_row_y": 53,
+      "word_window": [
+        62,
+        53,
+        224,
+        97
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Kyber",
+      "file": "Kyber__chat_05_3bfd1edb.png",
+      "source": "user Kyber chat capture 2026-09-27 image_05_auto_chat_band.png",
+      "source_scale": 0.7812,
+      "normalized_row_y": 53,
+      "word_window": [
+        62,
+        53,
+        224,
+        97
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Kyber",
+      "file": "Kyber__chat_07_80d1dd76.png",
+      "source": "user Kyber chat capture 2026-09-27 image_07_auto_chat_band.png",
+      "source_scale": 0.7812,
+      "normalized_row_y": 85,
+      "word_window": [
+        62,
+        85,
+        224,
+        129
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Kyber",
+      "file": "Kyber__chat_08_ca592fb6.png",
+      "source": "user Kyber chat capture 2026-09-27 image_08_chat_crop.png",
+      "source_scale": 0.68,
+      "normalized_row_y": 62,
+      "word_window": [
+        62,
+        62,
+        224,
+        106
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Kyber",
+      "file": "Kyber__chat_09_fad85073.png",
+      "source": "user Kyber chat capture 2026-09-27 image_09_chat_crop.png",
+      "source_scale": 0.68,
+      "normalized_row_y": 55,
+      "word_window": [
+        62,
+        55,
+        224,
+        99
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Kyber",
+      "file": "Kyber__chat_11_9652ce3c.png",
+      "source": "user Kyber chat capture 2026-09-27 image_11_chat_crop.png",
+      "source_scale": 0.68,
+      "normalized_row_y": 74,
+      "word_window": [
+        62,
+        74,
+        224,
+        118
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Kyber",
+      "file": "Kyber__chat_12_86091002.png",
+      "source": "user Kyber chat capture 2026-09-27 image_12_chat_crop.png",
+      "source_scale": 0.68,
+      "normalized_row_y": 80,
+      "word_window": [
+        62,
+        80,
+        224,
+        124
+      ],
+      "normalized_row_height": 44
+    },
+    {
+      "droid": "Kyber",
+      "file": "Kyber__chat_13_a992e7a5.png",
+      "source": "user Kyber chat capture 2026-09-27 image_13_chat_crop.png",
+      "source_scale": 0.68,
+      "normalized_row_y": 39,
+      "word_window": [
+        62,
+        39,
+        224,
+        83
+      ],
+      "normalized_row_height": 44
     }
   ],
   "droids": [
     "Beskar",
     "Galactic",
-    "Stellar"
+    "Stellar",
+    "Kyber"
   ]
 }

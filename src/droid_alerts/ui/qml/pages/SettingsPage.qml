@@ -360,6 +360,18 @@ ScrollView {
                         onToggled: settingsController.setValue(
                                        "wake_alarm_galactic_mythic", checked)
                     }
+                    SignalCheck {
+                        text: "Stellar Mythic"
+                        checked: settingsController.state.values.wake_alarm_stellar_mythic
+                        onToggled: settingsController.setValue(
+                                       "wake_alarm_stellar_mythic", checked)
+                    }
+                    SignalCheck {
+                        text: "Kyber Mythic"
+                        checked: settingsController.state.values.wake_alarm_kyber_mythic
+                        onToggled: settingsController.setValue(
+                                       "wake_alarm_kyber_mythic", checked)
+                    }
 
                     RowLayout {
                         Layout.fillWidth: true

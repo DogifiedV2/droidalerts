@@ -150,6 +150,47 @@ def main() -> int:
     for droid, rarity in removed_stellar:
         if _detection(droid, rarity).should_alert:
             failures.append(f"{droid} {rarity} should not be alertable")
+    kyber_combos = {
+        ("Kyber", "Epic"),
+        ("Kyber", "Legendary"),
+        ("Kyber", "Mythic"),
+    }
+    non_priority_kyber = {
+        ("Kyber", "Common"),
+        ("Kyber", "Rare"),
+    }
+    if non_priority_kyber & set(ALERT_COMBOS):
+        failures.append("Kyber Common/Rare toggles should not be available")
+    if not kyber_combos.issubset(set(ALERT_COMBOS)):
+        failures.append("Kyber Epic, Legendary, and Mythic toggles should be available")
+    if (kyber_combos & default_config.targets) != kyber_combos:
+        failures.append("Kyber Epic, Legendary, and Mythic should be on by default")
+    pre_kyber_defaults = AppConfig.from_dict(
+        {
+            "alert_targets": [
+                ["Beskar", "Epic"],
+                ["Beskar", "Legendary"],
+                ["Diamond", "Mythic"],
+                ["Rainbow", "Mythic"],
+                ["Beskar", "Mythic"],
+                ["Galactic", "Epic"],
+                ["Galactic", "Legendary"],
+                ["Galactic", "Mythic"],
+                ["Stellar", "Epic"],
+                ["Stellar", "Legendary"],
+                ["Stellar", "Mythic"],
+            ]
+        }
+    )
+    if not kyber_combos.issubset(pre_kyber_defaults.targets):
+        failures.append("pre-Kyber default selections should enable Kyber alerts")
+    if not kyber_combos.issubset(previous_defaults.targets):
+        failures.append("pre-Stellar default selections should enable Kyber alerts")
+    if not kyber_combos.issubset(migrated_defaults.targets):
+        failures.append("legacy default selections should enable Kyber alerts")
+    for droid, rarity in non_priority_kyber:
+        if _detection(droid, rarity).should_alert:
+            failures.append(f"{droid} {rarity} should not be alertable")
     retired_targets = AppConfig.from_dict(
         {
             "alert_targets": [
@@ -192,6 +233,18 @@ def main() -> int:
             failures.append(f"enabled {droid} {rarity} target should fire")
         if discord_color(detection) != 0xFFE14D:
             failures.append(f"{droid} {rarity} should use the Stellar alert color")
+
+    for droid, rarity in kyber_combos:
+        detection = _detection(droid, rarity)
+        if not detection.should_alert:
+            failures.append(f"{droid} {rarity} should be an alertable priority combo")
+        kyber_config = AppConfig(alert_targets=[[droid, rarity]])
+        if not AlertPolicy(kyber_config).should_alert(
+            detection, f"{droid.lower()}-{rarity.lower()}-row"
+        ):
+            failures.append(f"enabled {droid} {rarity} target should fire")
+        if discord_color(detection) != 0x4DF2B0:
+            failures.append(f"{droid} {rarity} should use the Kyber alert color")
 
     non_priority = _detection("Diamond", "Legendary")
     if non_priority.should_alert:

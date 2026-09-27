@@ -63,6 +63,8 @@ BOOLEAN_FIELDS = {
     "wake_alarm_enabled",
     "wake_alarm_beskar_mythic",
     "wake_alarm_galactic_mythic",
+    "wake_alarm_stellar_mythic",
+    "wake_alarm_kyber_mythic",
     "save_alert_samples",
     "save_debug_screenshots",
     "share_debug_detections",

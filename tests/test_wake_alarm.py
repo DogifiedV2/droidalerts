@@ -16,23 +16,30 @@ from droid_alerts.config import AppConfig
 
 
 class WakeAlarmConfigTests(unittest.TestCase):
-    def test_defaults_target_only_beskar_and_galactic_mythic(self) -> None:
+    def test_defaults_target_only_top_family_mythics(self) -> None:
         config = AppConfig(wake_alarm_enabled=True)
 
         self.assertTrue(config.wake_alarm_matches("Beskar", "Mythic"))
         self.assertTrue(config.wake_alarm_matches("Galactic", "Mythic"))
+        self.assertTrue(config.wake_alarm_matches("Stellar", "Mythic"))
+        self.assertTrue(config.wake_alarm_matches("Kyber", "Mythic"))
         self.assertFalse(config.wake_alarm_matches("Rainbow", "Mythic"))
         self.assertFalse(config.wake_alarm_matches("Beskar", "Legendary"))
+        self.assertFalse(config.wake_alarm_matches("Kyber", "Legendary"))
 
     def test_each_target_can_be_disabled_independently(self) -> None:
         config = AppConfig(
             wake_alarm_enabled=True,
             wake_alarm_beskar_mythic=False,
             wake_alarm_galactic_mythic=True,
+            wake_alarm_stellar_mythic=False,
+            wake_alarm_kyber_mythic=True,
         )
 
         self.assertFalse(config.wake_alarm_matches("Beskar", "Mythic"))
         self.assertTrue(config.wake_alarm_matches("Galactic", "Mythic"))
+        self.assertFalse(config.wake_alarm_matches("Stellar", "Mythic"))
+        self.assertTrue(config.wake_alarm_matches("Kyber", "Mythic"))
 
     def test_settings_round_trip(self) -> None:
         restored = AppConfig.from_dict(
@@ -40,12 +47,16 @@ class WakeAlarmConfigTests(unittest.TestCase):
                 wake_alarm_enabled=True,
                 wake_alarm_beskar_mythic=True,
                 wake_alarm_galactic_mythic=False,
+                wake_alarm_stellar_mythic=False,
+                wake_alarm_kyber_mythic=True,
             ).to_dict()
         )
 
         self.assertTrue(restored.wake_alarm_enabled)
         self.assertTrue(restored.wake_alarm_beskar_mythic)
         self.assertFalse(restored.wake_alarm_galactic_mythic)
+        self.assertFalse(restored.wake_alarm_stellar_mythic)
+        self.assertTrue(restored.wake_alarm_kyber_mythic)
 
 
 class WakeAlarmPlaybackTests(unittest.TestCase):

@@ -21,6 +21,7 @@ QtObject {
     readonly property color danger: "#ef6672"
     readonly property color galactic: "#b44df0"
     readonly property color stellar: "#ffe14d"
+    readonly property color kyber: "#4df2b0"
     readonly property color mythic: "#ff4fae"
     readonly property color diamond: "#61d6ff"
     readonly property color gold: "#ffd34d"
@@ -49,6 +50,7 @@ QtObject {
         if (tone === "accent" || tone === "info") return accent
         if (tone === "galactic") return galactic
         if (tone === "stellar") return stellar
+        if (tone === "kyber") return kyber
         if (tone === "mythic") return mythic
         if (tone === "diamond") return diamond
         if (tone === "gold") return gold

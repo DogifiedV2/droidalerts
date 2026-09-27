@@ -1,0 +1,267 @@
+{
+  "source": "User Kyber chat captures supplied 2026-09-27",
+  "cases": [
+    {
+      "file": "image_01_manual_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2000,
+        1107
+      ],
+      "crop": [
+        0,
+        440,
+        660,
+        177
+      ],
+      "expected_kyber": [
+        [
+          "Kyber",
+          "Common"
+        ],
+        [
+          "Kyber",
+          "Common"
+        ],
+        [
+          "Kyber",
+          "Common"
+        ]
+      ]
+    },
+    {
+      "file": "image_03_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2000,
+        844
+      ],
+      "crop": [
+        0,
+        338,
+        660,
+        135
+      ],
+      "expected_kyber": [
+        [
+          "Kyber",
+          "Epic"
+        ]
+      ]
+    },
+    {
+      "file": "image_04_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2000,
+        1125
+      ],
+      "crop": [
+        0,
+        529,
+        660,
+        180
+      ],
+      "expected_kyber": [
+        [
+          "Kyber",
+          "Epic"
+        ]
+      ],
+      "expected_other": [
+        [
+          "Diamond",
+          "Common"
+        ]
+      ]
+    },
+    {
+      "file": "image_05_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2000,
+        1125
+      ],
+      "crop": [
+        0,
+        529,
+        660,
+        180
+      ],
+      "expected_kyber": [
+        [
+          "Kyber",
+          "Epic"
+        ]
+      ]
+    },
+    {
+      "file": "image_06_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2000,
+        1125
+      ],
+      "crop": [
+        0,
+        529,
+        660,
+        180
+      ],
+      "expected_kyber": [
+        [
+          "Kyber",
+          "Epic"
+        ]
+      ]
+    },
+    {
+      "file": "image_07_auto_chat_band.png",
+      "mode": "band",
+      "source_screen": [
+        2000,
+        1125
+      ],
+      "crop": [
+        0,
+        529,
+        660,
+        180
+      ],
+      "expected_kyber": [
+        [
+          "Kyber",
+          "Mythic"
+        ]
+      ],
+      "expected_other": [
+        [
+          "Rainbow",
+          "Mythic"
+        ]
+      ]
+    },
+    {
+      "file": "image_08_chat_crop.png",
+      "mode": "band",
+      "source_screen": null,
+      "known_scale": 0.68,
+      "note": "Cropped chat screenshot; scale measured from 21px line pitch against 31px reference pitch.",
+      "expected_kyber": [
+        [
+          "Kyber",
+          "Common"
+        ],
+        [
+          "Kyber",
+          "Legendary"
+        ],
+        [
+          "Kyber",
+          "Rare"
+        ]
+      ]
+    },
+    {
+      "file": "image_09_chat_crop.png",
+      "mode": "band",
+      "source_screen": null,
+      "known_scale": 0.68,
+      "note": "Cropped chat screenshot; scale measured from 21px line pitch against 31px reference pitch.",
+      "expected_kyber": [
+        [
+          "Kyber",
+          "Rare"
+        ],
+        [
+          "Kyber",
+          "Epic"
+        ]
+      ]
+    },
+    {
+      "file": "image_10_chat_crop.png",
+      "mode": "band",
+      "source_screen": null,
+      "known_scale": 0.68,
+      "note": "Cropped chat screenshot; scale measured from 21px line pitch against 31px reference pitch.",
+      "expected_kyber": [
+        [
+          "Kyber",
+          "Common"
+        ],
+        [
+          "Kyber",
+          "Common"
+        ],
+        [
+          "Kyber",
+          "Common"
+        ]
+      ]
+    },
+    {
+      "file": "image_11_chat_crop.png",
+      "mode": "band",
+      "source_screen": null,
+      "known_scale": 0.68,
+      "note": "Cropped chat screenshot; scale measured from 21px line pitch against 31px reference pitch.",
+      "expected_kyber": [
+        [
+          "Kyber",
+          "Rare"
+        ],
+        [
+          "Kyber",
+          "Common"
+        ],
+        [
+          "Kyber",
+          "Epic"
+        ]
+      ]
+    },
+    {
+      "file": "image_12_chat_crop.png",
+      "mode": "band",
+      "source_screen": null,
+      "known_scale": 0.68,
+      "note": "Cropped chat screenshot; scale measured from 21px line pitch against 31px reference pitch.",
+      "expected_kyber": [
+        [
+          "Kyber",
+          "Common"
+        ],
+        [
+          "Kyber",
+          "Mythic"
+        ],
+        [
+          "Kyber",
+          "Legendary"
+        ]
+      ]
+    },
+    {
+      "file": "image_13_chat_crop.png",
+      "mode": "band",
+      "source_screen": null,
+      "known_scale": 0.68,
+      "note": "Cropped chat screenshot; scale measured from 21px line pitch against 31px reference pitch.",
+      "expected_kyber": [
+        [
+          "Kyber",
+          "Rare"
+        ],
+        [
+          "Kyber",
+          "Common"
+        ],
+        [
+          "Kyber",
+          "Common"
+        ]
+      ]
+    }
+  ]
+}

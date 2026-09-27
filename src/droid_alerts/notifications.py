@@ -343,6 +343,8 @@ def discord_color(detection: Detection) -> int:
         return 0x9200E0
     if detection.droid == "Stellar":
         return 0xFFE14D
+    if detection.droid == "Kyber":
+        return 0x4DF2B0
     if detection.rarity == "Mythic":
         return 0xFF3366
     if detection.rarity == "Legendary":

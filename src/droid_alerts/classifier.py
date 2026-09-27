@@ -16,7 +16,7 @@ import numpy as np
 from .chat_alerts import PRIORITY_ALERTS, REMOVED_CHAT_DETECTIONS
 
 
-DROID_TYPES = ("Diamond", "Rainbow", "Beskar", "Galactic", "Stellar")
+DROID_TYPES = ("Diamond", "Rainbow", "Beskar", "Galactic", "Stellar", "Kyber")
 RARITIES = ("Common", "Rare", "Epic", "Legendary", "Mythic")
 
 RARITY_COLOR_THRESHOLDS = {
@@ -33,6 +33,7 @@ RARITY_COLOR_X_START = {
     "Rainbow": 230,
     "Galactic": 230,
     "Stellar": 230,
+    "Kyber": 230,
 }
 
 
@@ -111,6 +112,8 @@ class DroidWordTemplate:
     image: np.ndarray
 
 
+KYBER_SHAPE_THRESHOLD = 0.60
+JOINED_WORD_DROIDS = frozenset({"Galactic", "Stellar", "Kyber"})
 DROID_WORD_SCALE_FACTORS = (0.70, 0.80, 0.90, 1.0, 1.10, 1.20, 1.35, 1.50, 1.70)
 COMPACT_TEMPLATE_SCALES = (0.50, 0.53, 0.56, 0.625, 0.675, 0.75)
 
@@ -313,6 +316,7 @@ def _compute_droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
             "cyan": 0,
             "purple": 0,
             "yellow": 0,
+            "kyber_tint": 0,
             "gray": 0,
             "colored_total": 0,
             "strong_families": 0,
@@ -348,10 +352,39 @@ def _compute_droid_word_text_profile(row: np.ndarray) -> dict[str, int]:
         "cyan": counts["cyan"],
         "purple": counts["purple"],
         "yellow": counts["yellow"],
+        "kyber_tint": text_shaped_count(
+            kyber_tint_mask(hue, sat, val) & kyber_outline_gate(gray_img, edge_near)
+        ),
         "gray": text_shaped_count((sat < 55) & (val > 150) & gate),
         "colored_total": sum(counts.values()),
         "strong_families": sum(1 for v in counts.values() if v >= 60),
     }
+
+
+def kyber_tint_mask(hue: np.ndarray, sat: np.ndarray, val: np.ndarray) -> np.ndarray:
+    """Cool lower-half tint of the Kyber name gradient.
+
+    The Kyber word fades from white at the top of each glyph into a tint that
+    cycles through green, cyan, blue, and lavender between spawn lines. Its
+    saturation stays well below Diamond's solid cyan in most frames.
+    """
+
+    return (hue >= 60) & (hue <= 160) & (sat >= 40) & (sat <= 235) & (val >= 150)
+
+
+def kyber_outline_gate(gray: np.ndarray, edge_near: np.ndarray) -> np.ndarray:
+    """Edge pixels beside the glyph outline, tolerant of a softened outline.
+
+    The pale Kyber gradient over bright sand lifts the resampled outline to
+    gray ~100-120, just above the shared <95 dark-outline floor.
+    """
+
+    dark_near = cv2.dilate((gray < 125).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    return edge_near & dark_near
+
+
+def kyber_text_color_mask(hue: np.ndarray, sat: np.ndarray, val: np.ndarray) -> np.ndarray:
+    return kyber_tint_mask(hue, sat, val) | ((sat < 60) & (val >= 150))
 
 
 def droid_word_text_profile(
@@ -400,6 +433,8 @@ def droid_word_color_mask(row: np.ndarray, droid: str) -> np.ndarray:
         # Stellar uses a yellow family name. The literal word template keeps
         # gold scenery and Legendary rarity text from becoming Stellar.
         raw = (hue >= 20) & (hue <= 40) & (sat >= 100) & (val >= 120) & gate
+    elif droid == "Kyber":
+        raw = kyber_text_color_mask(hue, sat, val) & kyber_outline_gate(gray, edge_near)
     else:
         raw = (sat < 60) & (val > 140) & gate
 
@@ -412,7 +447,7 @@ def droid_word_color_mask(row: np.ndarray, droid: str) -> np.ndarray:
         # before literal template matching. Galactic still requires both its
         # narrow purple range and a word-shape match, so retaining the joined
         # component does not weaken the other droid classifiers.
-        joined_word = droid in {"Galactic", "Stellar"}
+        joined_word = droid in JOINED_WORD_DROIDS
         maximum_width = 240 if joined_word else 40
         maximum_area = 8000 if joined_word else 2600
         inside_row = (
@@ -462,7 +497,7 @@ def droid_word_shape_score(
                 )
                 for scale_factor in (
                     DROID_WORD_SCALE_FACTORS
-                    if droid in {"Galactic", "Stellar"}
+                    if droid in JOINED_WORD_DROIDS
                     else (1.0,)
                 )
             ),
@@ -491,7 +526,7 @@ def build_scaled_droid_word_templates(
     for droid, templates in templates_by_droid.items():
         factors = (
             DROID_WORD_SCALE_FACTORS
-            if droid in {"Beskar", "Galactic", "Stellar"}
+            if droid in {"Beskar", *JOINED_WORD_DROIDS}
             else (1.0,)
         )
         bank[droid] = [
@@ -627,6 +662,57 @@ def classify_stellar_droid_word(
         if yellow < 800 or shape < 0.40:
             return None
     return "Stellar", min(0.99, max(shape, yellow / 900.0))
+
+
+def classify_kyber_droid_word(
+    row: np.ndarray,
+    templates_by_droid: dict[str, list[DroidWordTemplate]],
+    *,
+    shape_threshold: float = KYBER_SHAPE_THRESHOLD,
+    minimum_tint_pixels: int = 220,
+    minimum_white_pixels: int = 150,
+    scaled_templates: ScaledDroidWordTemplateBank | None = None,
+    evidence: _DroidWordEvidence | None = None,
+) -> tuple[str, float] | None:
+    """Return Kyber only when its gradient colours and literal word shape agree.
+
+    The tint alone overlaps Diamond cyan and Galactic purple. Kyber glyphs
+    also keep a white upper half: supplied Kyber rows measure >=218 gray
+    pixels while solid Diamond words measure <=40. Across the shared
+    resolution matrix Diamond words reach a Kyber shape of 0.51 and real
+    Kyber rows start at 0.65.
+    """
+
+    if not templates_by_droid.get("Kyber"):
+        return None
+    profile = droid_word_text_profile(row, evidence=evidence)
+    if (
+        profile["kyber_tint"] < minimum_tint_pixels
+        or profile["gray"] < minimum_white_pixels
+    ):
+        return None
+    shape = droid_word_shape_score(
+        row,
+        "Kyber",
+        templates_by_droid,
+        scaled_templates=scaled_templates,
+        evidence=evidence,
+    )
+    if shape < shape_threshold:
+        return None
+    for rival in ("Galactic", "Stellar"):
+        if not templates_by_droid.get(rival):
+            continue
+        rival_shape = droid_word_shape_score(
+            row,
+            rival,
+            templates_by_droid,
+            scaled_templates=scaled_templates,
+            evidence=evidence,
+        )
+        if rival_shape >= shape:
+            return None
+    return "Kyber", min(0.99, shape + 0.25)
 
 
 def classify_beskar_droid_word(
@@ -1403,7 +1489,7 @@ def classify_rarity_roi(
     templates = templates_by_droid.get(droid, [])
     # Galactic and Stellar use the color/text path. Galactic also has reviewed
     # ROI prototypes as a fallback. Other families keep the ROI-first path.
-    color_text_family = droid in {"Galactic", "Stellar"}
+    color_text_family = droid in {"Galactic", "Stellar", "Kyber"}
     if not templates or droid == "Galactic":
         verdict = classify_rarity_color(
             image, y, droid, row_height=row_height, evidence=evidence
@@ -1987,7 +2073,7 @@ def rescue_compact_priority_rarity(
 
     if (
         source_scale >= 0.80
-        or droid not in {"Beskar", "Galactic", "Stellar"}
+        or droid not in {"Beskar", "Galactic", "Stellar", "Kyber"}
         or current_rarity != "Unknown"
     ):
         return None
@@ -2146,6 +2232,12 @@ class DroidVisualDetector:
                         scaled_templates=self.scaled_droid_word_templates,
                         evidence=word_evidence,
                     )
+                    or classify_kyber_droid_word(
+                        row,
+                        self.droid_word_templates,
+                        scaled_templates=self.scaled_droid_word_templates,
+                        evidence=word_evidence,
+                    )
                 )
                 if literal_word_verdict is None or not has_spawn_phrase_structure(
                     row, min_white_edge_pixels=600
@@ -2164,6 +2256,12 @@ class DroidVisualDetector:
                     evidence=word_evidence,
                 )
                 or classify_stellar_droid_word(
+                    row,
+                    self.droid_word_templates,
+                    scaled_templates=self.scaled_droid_word_templates,
+                    evidence=word_evidence,
+                )
+                or classify_kyber_droid_word(
                     row,
                     self.droid_word_templates,
                     scaled_templates=self.scaled_droid_word_templates,
@@ -2302,7 +2400,7 @@ class DroidVisualDetector:
             # 13px of its phrase seed; use a small safety margin for rounding.
             if (droid, rarity) in PRIORITY_ALERTS and (
                 not extra_row_ys or min(abs(y - phrase_y) for phrase_y in extra_row_ys) > 16
-            ) and droid != "Stellar":
+            ) and droid not in {"Stellar", "Kyber"}:
                 reject(y, "no-aligned-spawn-phrase", droid, rarity)
                 continue
 
