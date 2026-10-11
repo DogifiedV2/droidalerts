@@ -26,5 +26,6 @@ PAGES = (
 )
 
 WHATS_NEW_ITEMS = (
-    "Timer overlay now shows Kyber, Stellar and Mythic",
+    "Limited Deals now support Stellar and Kyber deals",
+    "New Limited Deal droids: EGL, KT, MPH, JO9-4MN, PLNK and ECG",
 )

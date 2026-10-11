@@ -21,6 +21,8 @@ LIMITED_DEAL_RARITY_ORDER = (
     "Rainbow",
     "Beskar",
     "Galactic",
+    "Stellar",
+    "Kyber",
 )
 LIMITED_DEAL_ALERT_RARITY_ORDER = LIMITED_DEAL_RARITY_ORDER[2:]
 LIMITED_DEAL_RARITY_RANK = {
@@ -44,6 +46,12 @@ LIMITED_DEAL_PRIORITY_COMBOS = (
     ("Galactic", "Epic"),
     ("Galactic", "Legendary"),
     ("Galactic", "Mythic"),
+    ("Stellar", "Epic"),
+    ("Stellar", "Legendary"),
+    ("Stellar", "Mythic"),
+    ("Kyber", "Epic"),
+    ("Kyber", "Legendary"),
+    ("Kyber", "Mythic"),
     ("Diamond", "Mythic"),
 )
 FETCH_SECOND = 10
@@ -114,6 +122,12 @@ LIMITED_DEAL_DROIDS = (
     LimitedDealDroid(69, "RIC-1200", "Mythic", "Ric1200"),
     LimitedDealDroid(70, "MO-Trak", "Mythic", "Combo22"),
     LimitedDealDroid(71, "TRI-TEK", "Mythic", "Combo23"),
+    LimitedDealDroid(96, "EGL", "Epic", "EGL"),
+    LimitedDealDroid(97, "KT", "Epic", "KT"),
+    LimitedDealDroid(98, "MPH", "Epic", "MPH"),
+    LimitedDealDroid(99, "JO9-4MN", "Legendary", "JO94MN"),
+    LimitedDealDroid(100, "PLNK", "Legendary", "PLNK"),
+    LimitedDealDroid(101, "ECG", "Mythic", "ECG"),
 )
 LIMITED_DEAL_CUSTOM_ALERT_DROIDS = tuple(
     droid for droid in LIMITED_DEAL_DROIDS if droid.droid_class != "Rare"
@@ -332,9 +346,14 @@ def fetch_current_limited_deal(endpoint_url: str) -> LimitedDeal:
     return LimitedDeal.from_payload(payload["deal"])
 
 
-def limited_deal_portrait_url(endpoint_url: str, deal: LimitedDeal) -> str:
+def limited_deal_portrait_url(
+    endpoint_url: str,
+    deal: LimitedDeal,
+    *,
+    common: bool = False,
+) -> str:
     droid = LIMITED_DEAL_DROIDS_BY_ID[deal.droid_id]
-    if deal.rarity == "Default":
+    if common or deal.rarity == "Default":
         path = f"/droids/T_Portrait_{droid.portrait_key}_Common.png"
     else:
         path = (
@@ -352,17 +371,15 @@ def fetch_limited_deal_portrait(
     if _valid_png(cache_path):
         return cache_path
 
-    request = urllib.request.Request(
-        limited_deal_portrait_url(endpoint_url, deal),
-        headers={"Accept": "image/png", "User-Agent": USER_AGENT},
-        method="GET",
-    )
-    with urllib.request.urlopen(
-        request,
-        timeout=REQUEST_TIMEOUT_SECONDS,
-        context=certifi_ssl_context(),
-    ) as response:
-        image = response.read(2_000_001)
+    try:
+        image = _download_portrait(limited_deal_portrait_url(endpoint_url, deal))
+    except urllib.error.HTTPError as exc:
+        # Some Rarities (Kyber) have no recolored art on the website yet.
+        if exc.code != 404 or deal.rarity == "Default":
+            raise
+        image = _download_portrait(
+            limited_deal_portrait_url(endpoint_url, deal, common=True)
+        )
     if len(image) > 2_000_000 or not image.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ValueError("Limited Deal portrait response was not a valid PNG")
 
@@ -371,6 +388,20 @@ def fetch_limited_deal_portrait(
     temp.write_bytes(image)
     temp.replace(cache_path)
     return cache_path
+
+
+def _download_portrait(url: str) -> bytes:
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "image/png", "User-Agent": USER_AGENT},
+        method="GET",
+    )
+    with urllib.request.urlopen(
+        request,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        context=certifi_ssl_context(),
+    ) as response:
+        return response.read(2_000_001)
 
 
 class LimitedDealService:

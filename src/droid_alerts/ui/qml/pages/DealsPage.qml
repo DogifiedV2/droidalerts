@@ -100,7 +100,7 @@ ScrollView {
                     Layout.fillWidth: true
                     flow: GridLayout.TopToBottom
                     columns: width >= 420 ? 2 : 1
-                    rows: width >= 420 ? 5 : 10
+                    rows: Math.ceil(dealsController.state.priorityRows.length / columns)
                     columnSpacing: 8
                     rowSpacing: 3
 

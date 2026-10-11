@@ -789,7 +789,8 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual("What's new", runtime.dialogs.state_snapshot()["title"])
         message = runtime.dialogs.state_snapshot()["message"]
         self.assertEqual(
-            "• Timer overlay now shows Kyber, Stellar and Mythic",
+            "• Limited Deals now support Stellar and Kyber deals\n"
+            "• New Limited Deal droids: EGL, KT, MPH, JO9-4MN, PLNK and ECG",
             message,
         )
 
@@ -2253,6 +2254,12 @@ class QtUiControllerTests(unittest.TestCase):
                 "Galactic Epic",
                 "Galactic Legendary",
                 "Galactic Mythic",
+                "Stellar Epic",
+                "Stellar Legendary",
+                "Stellar Mythic",
+                "Kyber Epic",
+                "Kyber Legendary",
+                "Kyber Mythic",
                 "Diamond Mythic",
             ],
             [row["label"] for row in controller.state_snapshot()["priorityRows"]],
@@ -2356,7 +2363,7 @@ class QtUiControllerTests(unittest.TestCase):
         choices = runtime.dialogs.state_snapshot()["choices"]
         options = runtime.dialogs.state_snapshot()["options"]
         self.assertEqual(
-            ["", "Diamond", "Rainbow", "Beskar", "Galactic"],
+            ["", "Diamond", "Rainbow", "Beskar", "Galactic", "Stellar", "Kyber"],
             [choice["id"] for choice in choices],
         )
         self.assertNotIn("Rare", {option["detail"] for option in options})

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -138,6 +139,12 @@ class LimitedDealRuleTests(unittest.TestCase):
                 ("Galactic", "Epic"),
                 ("Galactic", "Legendary"),
                 ("Galactic", "Mythic"),
+                ("Stellar", "Epic"),
+                ("Stellar", "Legendary"),
+                ("Stellar", "Mythic"),
+                ("Kyber", "Epic"),
+                ("Kyber", "Legendary"),
+                ("Kyber", "Mythic"),
                 ("Diamond", "Mythic"),
             ),
             LIMITED_DEAL_PRIORITY_COMBOS,
@@ -163,7 +170,7 @@ class LimitedDealRuleTests(unittest.TestCase):
             if droid_class == "Mythic"
         }
         self.assertEqual(
-            {"Diamond", "Rainbow", "Beskar", "Galactic"},
+            {"Diamond", "Rainbow", "Beskar", "Galactic", "Stellar", "Kyber"},
             mythic_rarities,
         )
 
@@ -312,6 +319,70 @@ class LimitedDealSchedulingTests(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertEqual(1, urlopen.call_count)
             self.assertTrue(first.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_v134_droids_and_stellar_kyber_deals_are_accepted(self):
+        stellar = LimitedDeal.from_payload(
+            deal_payload(
+                deal_rarity="Stellar",
+                droid="JO9-4MN",
+                droid_id=99,
+                droid_class="Legendary",
+            )
+        )
+        kyber = LimitedDeal.from_payload(
+            deal_payload(
+                deal_rarity="Kyber",
+                droid="ECG",
+                droid_id=101,
+                droid_class="Mythic",
+            )
+        )
+        self.assertTrue(limited_deal_matches(stellar, [["Stellar", "Legendary"]], {}))
+        self.assertTrue(limited_deal_matches(kyber, [["Kyber", "Mythic"]], {}))
+        self.assertTrue(limited_deal_matches(kyber, [], {"101": "Galactic"}))
+        self.assertFalse(limited_deal_matches(stellar, [], {"99": "Kyber"}))
+        self.assertEqual(
+            "https://gonk.tools/droids/rarities/T_Portrait_JO94MN_Stellar.png",
+            limited_deal_portrait_url(
+                "https://gonk.tools/api/droid-alerts/limited-deal", stellar
+            ),
+        )
+
+    def test_missing_rarity_portrait_falls_back_to_the_common_portrait(self):
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = b"\x89PNG\r\n\x1a\ncommon-icon"
+        missing = urllib.error.HTTPError(
+            "https://gonk.tools/droids/rarities/T_Portrait_ECG_Kyber.png",
+            404,
+            "Not Found",
+            {},
+            None,
+        )
+        deal = LimitedDeal.from_payload(
+            deal_payload(
+                deal_rarity="Kyber",
+                droid="ECG",
+                droid_id=101,
+                droid_class="Mythic",
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "droid_alerts.limited_deals.urllib.request.urlopen",
+            side_effect=[missing, response],
+        ) as urlopen:
+            portrait = fetch_limited_deal_portrait(
+                "https://gonk.tools/api/droid-alerts/limited-deal",
+                deal,
+                Path(directory),
+            )
+            self.assertEqual(
+                "https://gonk.tools/droids/T_Portrait_ECG_Common.png",
+                urlopen.call_args_list[1].args[0].full_url,
+            )
+            self.assertTrue(portrait.read_bytes().endswith(b"common-icon"))
 
     def test_fetch_waits_until_ten_seconds_after_a_new_hour(self):
         before = datetime(2026, 7, 18, 14, 0, 5, tzinfo=timezone.utc)
