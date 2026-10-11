@@ -384,6 +384,40 @@ class LimitedDealSchedulingTests(unittest.TestCase):
             )
             self.assertTrue(portrait.read_bytes().endswith(b"common-icon"))
 
+    def test_html_fallback_page_for_a_rarity_portrait_uses_the_common_portrait(self):
+        def respond(body: bytes) -> Mock:
+            response = Mock()
+            response.__enter__ = Mock(return_value=response)
+            response.__exit__ = Mock(return_value=False)
+            response.read.return_value = body
+            return response
+
+        deal = LimitedDeal.from_payload(
+            deal_payload(
+                deal_rarity="Kyber",
+                droid="TRI-TEK",
+                droid_id=71,
+                droid_class="Mythic",
+            )
+        )
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "droid_alerts.limited_deals.urllib.request.urlopen",
+            side_effect=[
+                respond(b"<!doctype html><html></html>"),
+                respond(b"\x89PNG\r\n\x1a\ncommon-icon"),
+            ],
+        ) as urlopen:
+            portrait = fetch_limited_deal_portrait(
+                "https://gonk.tools/api/droid-alerts/limited-deal",
+                deal,
+                Path(directory),
+            )
+            self.assertEqual(
+                "https://gonk.tools/droids/T_Portrait_Combo23_Common.png",
+                urlopen.call_args_list[1].args[0].full_url,
+            )
+            self.assertTrue(portrait.read_bytes().endswith(b"common-icon"))
+
     def test_fetch_waits_until_ten_seconds_after_a_new_hour(self):
         before = datetime(2026, 7, 18, 14, 0, 5, tzinfo=timezone.utc)
         self.assertEqual(

@@ -374,13 +374,16 @@ def fetch_limited_deal_portrait(
     try:
         image = _download_portrait(limited_deal_portrait_url(endpoint_url, deal))
     except urllib.error.HTTPError as exc:
-        # Some Rarities (Kyber) have no recolored art on the website yet.
-        if exc.code != 404 or deal.rarity == "Default":
+        if exc.code != 404:
             raise
+        image = b""
+    # Some Rarities (Kyber) have no recolored art on the website yet. The site
+    # answers unknown paths with its HTML page, so a non-PNG body means missing.
+    if not _is_png(image) and deal.rarity != "Default":
         image = _download_portrait(
             limited_deal_portrait_url(endpoint_url, deal, common=True)
         )
-    if len(image) > 2_000_000 or not image.startswith(b"\x89PNG\r\n\x1a\n"):
+    if not _is_png(image):
         raise ValueError("Limited Deal portrait response was not a valid PNG")
 
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -388,6 +391,10 @@ def fetch_limited_deal_portrait(
     temp.write_bytes(image)
     temp.replace(cache_path)
     return cache_path
+
+
+def _is_png(image: bytes) -> bool:
+    return len(image) <= 2_000_000 and image.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def _download_portrait(url: str) -> bytes:
