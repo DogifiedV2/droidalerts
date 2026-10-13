@@ -33,7 +33,7 @@ TIMER_COLORS = {
 }
 TIMER_PERIOD_SECONDS = {
     "kyber": 3600,
-    "stellar": 3600,
+    "stellar": 1800,
     "mythic": 3600,
 }
 

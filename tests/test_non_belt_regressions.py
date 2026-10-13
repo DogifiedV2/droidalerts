@@ -130,7 +130,7 @@ class RuntimeResilienceTests(unittest.TestCase):
             with patch.object(config_module, "config_dir", return_value=root):
                 recovered = config_module.load_config()
 
-            self.assertEqual(2, recovered.config_version)
+            self.assertEqual(3, recovered.config_version)
             self.assertTrue((root / f"{config_module.CONFIG_FILE}.corrupt").exists())
 
     def test_config_recovers_from_non_object_thresholds_using_backup(self):

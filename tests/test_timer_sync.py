@@ -40,9 +40,9 @@ class SyncedTimerScheduleTests(unittest.TestCase):
     def test_current_spawn_timer_lineup_and_fallback_schedule(self):
         self.assertEqual(("kyber", "stellar", "mythic"), DISPLAY_TIMER_ORDER)
         self.assertEqual((60 * 60, 15 * 60), DEFAULT_TIMER_SCHEDULES["kyber"])
-        self.assertEqual((60 * 60, 5 * 60), DEFAULT_TIMER_SCHEDULES["stellar"])
+        self.assertEqual((30 * 60, 5 * 60), DEFAULT_TIMER_SCHEDULES["stellar"])
         self.assertEqual(60 * 60, TIMER_PERIOD_SECONDS["kyber"])
-        self.assertEqual(60 * 60, TIMER_PERIOD_SECONDS["stellar"])
+        self.assertEqual(30 * 60, TIMER_PERIOD_SECONDS["stellar"])
         self.assertEqual("#ffe14d", TIMER_COLORS["stellar"])
         self.assertEqual("#4df2b0", TIMER_COLORS["kyber"])
 

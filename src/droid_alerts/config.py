@@ -186,7 +186,7 @@ class Thresholds:
 
 @dataclass
 class AppConfig:
-    config_version: int = 2
+    config_version: int = 3
     ui_theme: str = DEFAULT_THEME_KEY
     monitor_index: int = 1
     capture_source: str = "monitor"
@@ -656,7 +656,12 @@ class AppConfig:
                 pairs.extend([list(combo) for combo in GALACTIC_DEFAULT_ALERT_TARGETS])
             if {tuple(pair) for pair in pairs} == set(PRE_STELLAR_DEFAULT_ALERT_TARGETS):
                 pairs.extend([list(combo) for combo in STELLAR_DEFAULT_ALERT_TARGETS])
-            if {tuple(pair) for pair in pairs} == set(PRE_KYBER_DEFAULT_ALERT_TARGETS):
+            # Configs saved before version 3 never offered Kyber; customized
+            # target lists missed the exact-default migration above, so Kyber
+            # spawns stayed silent. Add Kyber once for those configs.
+            if pairs and int(data.get("config_version", 1)) < 3 and not any(
+                pair[0] == "Kyber" for pair in pairs
+            ):
                 pairs.extend([list(combo) for combo in KYBER_DEFAULT_ALERT_TARGETS])
             if pairs or not raw_targets or contained_removed_target:
                 config.alert_targets = pairs
@@ -666,7 +671,7 @@ class AppConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "config_version": max(2, self.config_version),
+            "config_version": max(3, self.config_version),
             "ui_theme": normalize_theme_key(self.ui_theme),
             "monitor_index": self.monitor_index,
             "capture_source": normalize_capture_source(self.capture_source),

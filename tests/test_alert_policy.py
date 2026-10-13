@@ -193,6 +193,7 @@ def main() -> int:
             failures.append(f"{droid} {rarity} should not be alertable")
     retired_targets = AppConfig.from_dict(
         {
+            "config_version": 3,
             "alert_targets": [
                 ["Galactic", "Common"],
                 ["Galactic", "Rare"],
@@ -264,6 +265,23 @@ def main() -> int:
 class AlertPolicyGuardTests(unittest.TestCase):
     def test_alert_policy_guard(self):
         self.assertEqual(0, main())
+
+
+class KyberTargetMigrationTests(unittest.TestCase):
+    def test_customized_pre_kyber_targets_gain_kyber_once(self):
+        customized = [["Stellar", "Mythic"], ["Galactic", "Mythic"]]
+        migrated = AppConfig.from_dict({"config_version": 2, "alert_targets": customized})
+        self.assertTrue(
+            {("Kyber", "Epic"), ("Kyber", "Legendary"), ("Kyber", "Mythic")}
+            <= migrated.targets
+        )
+        self.assertEqual(3, migrated.to_dict()["config_version"])
+
+        kyber_removed = AppConfig.from_dict({"config_version": 3, "alert_targets": customized})
+        self.assertFalse(any(droid == "Kyber" for droid, _ in kyber_removed.targets))
+
+        all_off = AppConfig.from_dict({"config_version": 2, "alert_targets": []})
+        self.assertEqual(set(), all_off.targets)
 
 
 class ChannelAlertConfigTests(unittest.TestCase):
