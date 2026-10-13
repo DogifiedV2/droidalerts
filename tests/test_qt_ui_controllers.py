@@ -789,6 +789,8 @@ class QtUiControllerTests(unittest.TestCase):
         self.assertEqual("What's new", runtime.dialogs.state_snapshot()["title"])
         message = runtime.dialogs.state_snapshot()["message"]
         self.assertEqual(
+            "• Stellar timer now counts down every 30 minutes (xx:05 and xx:35)\n"
+            "• Kyber spawn alerts are now enabled for customized alert setups\n"
             "• Limited Deals now support Stellar and Kyber deals\n"
             "• New Limited Deal droids: EGL, KT, MPH, JO9-4MN, PLNK and ECG",
             message,

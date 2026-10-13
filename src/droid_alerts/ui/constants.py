@@ -28,4 +28,6 @@ PAGES = (
 WHATS_NEW_ITEMS = (
     "Stellar timer now counts down every 30 minutes (xx:05 and xx:35)",
     "Kyber spawn alerts are now enabled for customized alert setups",
+    "Limited Deals now support Stellar and Kyber deals",
+    "New Limited Deal droids: EGL, KT, MPH, JO9-4MN, PLNK and ECG",
 )
